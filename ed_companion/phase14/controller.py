@@ -326,6 +326,7 @@ class CockpitController(
         self.profile_context = resolve_profile_context()
         self._bind_profile_paths(self.profile_context)
         self._history_archive = HistoryArchive(self.history_archive_file)
+        self._history_archive.checkpoint()
         self._commander_credit_snapshots = self._history_archive.records(
             "commander_credit_snapshots"
         )
@@ -2224,6 +2225,7 @@ class CockpitController(
             if self._frontier_tokens else None
         )
         self._history_archive = HistoryArchive(self.history_archive_file)
+        self._history_archive.checkpoint()
         self._commander_credit_snapshots = self._history_archive.records(
             "commander_credit_snapshots"
         )

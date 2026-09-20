@@ -97,6 +97,26 @@ class HistoryArchive:
         self._counts_cache = None
         return len(rows)
 
+    def checkpoint(self) -> None:
+        """Merge any pending WAL content back into the main file and shrink
+        it to its actual size.
+
+        In WAL mode, SQLite normally reclaims this itself once the last
+        open connection on the database closes - but ``archive()`` runs
+        from several different threads (EDDN, mining sync, credit
+        snapshots, ...) opening and closing their own short-lived
+        connections, so there is rarely a moment with truly zero
+        connections open to trigger that. A non-graceful exit (a forced
+        process kill, a crash, a power loss) skips it entirely. Call this
+        once after construction - cheap when there is nothing pending,
+        and it is what actually reclaims the file's size when there is.
+        """
+        try:
+            with self._lock, closing(self._connect()) as connection:
+                connection.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+        except sqlite3.Error:
+            pass
+
     def count(self, category=None):
         with self._lock, closing(self._connect()) as connection:
             if category is None:

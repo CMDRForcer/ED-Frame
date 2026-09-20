@@ -1,5 +1,22 @@
 # Changelog
 
+## 1.5.10 — 2026-09-20
+
+### Fixed
+
+- The local history database (`data_history.sqlite3`, WAL-mode SQLite
+  used for EDDN/mining/HGE archival) could grow far beyond its actual
+  content — observed at over 1 GB on disk for barely 30 MB of real
+  data. SQLite normally reclaims this itself once the last open
+  connection closes, but several background threads (EDDN, mining
+  sync, credit snapshots) each open their own short-lived connections,
+  so there is rarely a moment with none open to trigger that - and a
+  non-graceful exit (a forced process kill, a crash, a power loss)
+  skips it entirely, leaving the bloat in place until something
+  explicitly reclaims it. ED-Frame now runs a checkpoint on startup,
+  so a bloated database from a previous bad exit is cleaned up
+  automatically every time - no manual intervention needed.
+
 ## 1.5.9 — 2026-09-20
 
 ### Fixed

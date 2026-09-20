@@ -1,4 +1,5 @@
 import json
+import sqlite3
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -37,6 +38,40 @@ class LosslessHistoryTests(unittest.TestCase):
             )
             self.assertTrue((root / "profile-a" / "data_history.sqlite3").exists())
             self.assertFalse((root / "profile-b" / "data_history.sqlite3").exists())
+
+    def test_checkpoint_reclaims_wal_content_left_by_a_non_graceful_exit(self):
+        # A forced process kill (or a crash) can leave WAL-mode SQLite with
+        # pending, un-merged content that never shrinks back down on its
+        # own - checkpoint() is what a fresh app start uses to recover it.
+        with TemporaryDirectory() as directory:
+            path = Path(directory) / "data_history.sqlite3"
+            archive = HistoryArchive(path)
+            wal_path = path.with_name(path.name + "-wal")
+
+            # A second, still-open connection is what actually prevents
+            # SQLite's own implicit checkpoint-on-last-close from firing -
+            # exactly the situation multiple app threads create in
+            # practice, and what a non-graceful exit freezes in place.
+            blocker = sqlite3.connect(path)
+            blocker.execute("BEGIN")
+            blocker.execute("SELECT COUNT(*) FROM history").fetchone()
+
+            archive.archive("eddn_sent", [
+                {"id": str(i), "sent_at": "2026-01-01T00:00:00Z"}
+                for i in range(500)
+            ], key_field="id")
+            self.assertGreater(wal_path.stat().st_size, 0)
+
+            blocker.close()
+            archive.checkpoint()
+
+            self.assertEqual(wal_path.stat().st_size if wal_path.exists() else 0, 0)
+            self.assertEqual(archive.count("eddn_sent"), 500)
+
+    def test_checkpoint_on_an_empty_archive_does_not_raise(self):
+        with TemporaryDirectory() as directory:
+            archive = HistoryArchive(Path(directory) / "data_history.sqlite3")
+            archive.checkpoint()
 
     def test_archive_preserves_identical_rows_within_one_source_batch(self):
         with TemporaryDirectory() as directory:
