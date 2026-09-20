@@ -1,5 +1,19 @@
 # Changelog
 
+## 1.5.11 — 2026-09-20
+
+### Fixed
+
+- **Build import**: applying an imported build to the Wishlist could
+  fail with "target ship no longer matches the preview" even when the
+  correct target ship was selected — affecting any ship whose Frontier
+  symbol differs from its display name (Python Mk II / `python_nx`,
+  Caspian Explorer / `Explorer_NX`). The preview step already resolved
+  this correctly via the ship catalog's alias table; the final "Apply
+  to Wishlist" step used a separate, naive text comparison that could
+  never match for these ships. Apply now reuses the same alias-aware
+  matching as the preview.
+
 ## 1.5.10 — 2026-09-20
 
 ### Fixed
