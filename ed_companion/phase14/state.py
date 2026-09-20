@@ -129,6 +129,8 @@ from .state_core import (
     journal_dir,
     journal_events,
     journal_paths_for_profile,
+    journal_projection_cache_key,
+    memoize_projection,
     journal_unlock_events,
     latest_profile_location,
     learn_blueprint_id_catalog,
@@ -488,6 +490,11 @@ def build_state(
     journal_path_valid = journal_dir().is_dir()
     metadata = material_metadata(reference_data_dir(package_root))
     profile_events = profiled_journal_events()
+    # Unchanged for as long as profiled_journal_events() itself would return
+    # an identical list - lets the handful of expensive, purely
+    # events-derived projections below skip recomputing their full
+    # career-wide history on refresh ticks that touched nothing they use.
+    _projection_key = journal_projection_cache_key()
     commander_name = next((
         str(event.get("Commander") or "")
         for event in reversed(profile_events)
@@ -496,7 +503,10 @@ def build_state(
     commander_overview = commander_journal_overview(
         profile_events, read_json(journal_dir() / "Status.json", {})
     )
-    powerplay_overview = powerplay_journal_overview(profile_events)
+    powerplay_overview = memoize_projection(
+        "powerplay_journal_overview", _projection_key,
+        lambda: powerplay_journal_overview(profile_events),
+    )
     vehicle_state = project_vehicle_state(profile_events)
     vehicle_state["latestMiningSession"] = project_latest_srv_mining_session(
         profile_events
@@ -623,7 +633,10 @@ def build_state(
     }
     wishlist_required = required_materials(tasks, metadata, consistency_issues)
     unlock_catalog = load_unlock_catalog(data_dir, package_root)
-    unlock_signals = engineer_unlock_signals(unlock_events, unlock_catalog)
+    unlock_signals = memoize_projection(
+        "engineer_unlock_signals", _projection_key,
+        lambda: engineer_unlock_signals(unlock_events, unlock_catalog),
+    )
     inventory = inventory_from_events(
         events, metadata, consistency_issues,
         canonical_cargo_materials(reference_data_dir(package_root)),
@@ -641,10 +654,17 @@ def build_state(
         if event.get("event") in tech_broker_event_names
         or event.get("StarSystem") or event.get("StationName")
     ]
-    tech_broker_guide = technology_broker_unlock_guide(
-        package_root, metadata, inventory, tech_broker_events,
+    tech_broker_stations = (
         tech_broker_catalog.get("stations", [])
-        if isinstance(tech_broker_catalog, dict) else [],
+        if isinstance(tech_broker_catalog, dict) else []
+    )
+    tech_broker_guide = memoize_projection(
+        "technology_broker_unlock_guide",
+        (_projection_key, len(tech_broker_stations)),
+        lambda: technology_broker_unlock_guide(
+            package_root, metadata, inventory, tech_broker_events,
+            tech_broker_stations,
+        ),
     )
     for guide_row in tech_broker_guide:
         for item in guide_row.get("materials", []) or []:
@@ -1079,18 +1099,31 @@ def build_state(
     )
     # Filled out with anything learned from the Commander's own sales for a
     # species the bundled catalog doesn't know - see augmented_species_catalog().
-    exobiology_species_catalog = augmented_species_catalog(
-        exobiology_bundled_catalog, profile_events
+    exobiology_species_catalog = memoize_projection(
+        "augmented_species_catalog", _projection_key,
+        lambda: augmented_species_catalog(exobiology_bundled_catalog, profile_events),
     )
-    exobiology_rows = exobiology_findings(profile_events, exobiology_species_catalog)
-    exobiology_targets = landing_targets(
-        profile_events, exobiology_species_catalog,
-        current_system_address=latest_location.get("SystemAddress"),
+    exobiology_rows = memoize_projection(
+        "exobiology_findings", _projection_key,
+        lambda: exobiology_findings(profile_events, exobiology_species_catalog),
+    )
+    exobiology_targets = memoize_projection(
+        "landing_targets", (_projection_key, latest_location.get("SystemAddress")),
+        lambda: landing_targets(
+            profile_events, exobiology_species_catalog,
+            current_system_address=latest_location.get("SystemAddress"),
+        ),
     )
     exobiology_status_snapshot = read_json(journal_dir() / "Status.json", {})
 
-    mission_rows = active_missions(profile_events)
-    community_goal_rows = community_goals_overview(profile_events)
+    mission_rows = memoize_projection(
+        "active_missions", _projection_key,
+        lambda: active_missions(profile_events),
+    )
+    community_goal_rows = memoize_projection(
+        "community_goals_overview", _projection_key,
+        lambda: community_goals_overview(profile_events),
+    )
 
     return {
         "_profileContext": profile_context,
@@ -1100,14 +1133,23 @@ def build_state(
         "communityGoals": community_goal_rows,
         "exobiologyFindings": exobiology_rows,
         "exobiologySummary": exobiology_summary(exobiology_rows),
-        "exobiologySessionSummary": exobiology_session_summary(
-            profile_events, exobiology_species_catalog
+        "exobiologySessionSummary": memoize_projection(
+            "exobiology_session_summary", _projection_key,
+            lambda: exobiology_session_summary(
+                profile_events, exobiology_species_catalog
+            ),
         ),
-        "exobiologyCarriedSummary": exobiology_carried_summary(
-            profile_events, exobiology_species_catalog
+        "exobiologyCarriedSummary": memoize_projection(
+            "exobiology_carried_summary", _projection_key,
+            lambda: exobiology_carried_summary(
+                profile_events, exobiology_species_catalog
+            ),
         ),
         "exobiologyLandingTargets": exobiology_targets,
-        "exobiologyLifetimeEarned": exobiology_lifetime_earned(profile_events),
+        "exobiologyLifetimeEarned": memoize_projection(
+            "exobiology_lifetime_earned", _projection_key,
+            lambda: exobiology_lifetime_earned(profile_events),
+        ),
         "exobiologyBestFind": best_find(exobiology_rows),
         "exobiologyRemainingOnBody": remaining_signals_at_body(
             profile_events, exobiology_species_catalog, exobiology_status_snapshot,

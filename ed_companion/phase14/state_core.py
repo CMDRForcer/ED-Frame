@@ -407,6 +407,47 @@ _JOURNAL_EVENT_CACHE: dict[str, Any] = {
 _JOURNAL_EVENT_CACHE_LOCK = threading.RLock()
 
 
+# A pure Journal-derived projection (missions, exobiology findings, unlock
+# signals, ...) recomputing its full result from career-wide event history
+# on every ~1.2s refresh tick is measurably expensive - profiling a real,
+# months-long Journal showed build_state() spending the better part of a
+# second in exactly this class of function, repeated on a background thread
+# every time anything at all changes in the Journal. Most of those ticks
+# change nothing a given projection actually depends on (a routine Music or
+# Fuel event, say), so caching each one against the Journal cache's own
+# revision counter - unchanged for as long as profiled_journal_events()
+# would return the identical list - turns most refreshes into a cache hit.
+_PROJECTION_CACHE: dict[str, tuple[Any, Any]] = {}
+_PROJECTION_CACHE_LOCK = threading.RLock()
+
+
+def journal_projection_cache_key() -> tuple[int, str]:
+    """A cheap, stable key: unchanged for as long as the selected profile's
+    event list (see ``profiled_journal_events``) would be unchanged too.
+    """
+    revision, _events = _journal_snapshot()
+    selected, _name = _journal_profile_identity()
+    return revision, selected
+
+
+def memoize_projection(name: str, key: object, compute):
+    """Cache a pure Journal-derived projection by name, keyed on ``key``.
+
+    Only ever use this for a function whose result depends *purely* on
+    its arguments (no other mutable app state read or written) - never
+    for something that persists to disk or reacts to non-Journal state,
+    since a cache hit skips calling ``compute`` entirely.
+    """
+    with _PROJECTION_CACHE_LOCK:
+        cached = _PROJECTION_CACHE.get(name)
+        if cached is not None and cached[0] == key:
+            return cached[1]
+    result = compute()
+    with _PROJECTION_CACHE_LOCK:
+        _PROJECTION_CACHE[name] = (key, result)
+    return result
+
+
 _CRAFT_BATCH_LOCK = threading.RLock()
 
 

@@ -1,5 +1,28 @@
 # Changelog
 
+## 1.5.9 — 2026-09-20
+
+### Fixed
+
+- **Journal refresh performance**: every refresh (roughly every 1.2–2
+  seconds while flying, whenever anything at all changed in the
+  Journal) was recomputing several projections — Missions, Exobiology,
+  Engineer unlock signals, the Tech Broker guide, Powerplay — from the
+  Commander's *entire* career Journal history every single time.
+  Profiled against a real, months-long Journal (158k+ events) this cost
+  roughly 900ms of CPU time per refresh; because Python holds the GIL
+  during that work, it could make the whole interface feel sluggish
+  regardless of what you were doing (dragging the sidebar, opening a
+  dropdown, switching tabs), not just on any one page. These
+  projections are now cached against the Journal's own change
+  revision and only recomputed when the underlying event stream
+  actually changed — cutting a typical refresh to roughly 300ms in the
+  same test. Functions with real side effects (Wishlist migration,
+  Engineer-craft reconciliation, blueprint-ID learning) or that also
+  depend on `Status.json` (which the game updates roughly once a
+  second on its own) were deliberately left uncached to avoid trading
+  smoothness for stale or skipped updates.
+
 ## 1.5.8 — 2026-09-19
 
 ### Added
