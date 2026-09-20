@@ -63,7 +63,7 @@ from ed_companion.integrations.frontier_credentials import (
 )
 from ed_companion.build_import import (
     BuildImportError, JOURNAL_BLUEPRINT_NAMES, empty_build_import_preview,
-    preview_build,
+    preview_build, ship_types_match,
 )
 from ed_companion.loadout_export import build_loadout_export, write_loadout_export
 from ed_companion.engineering import (
@@ -1993,7 +1993,9 @@ class CockpitController(
         if (
             not preview.get("compatible") or not target_ship
             or target_ship not in self._state.get("ships", [])
-            or normalize(target.get("type")) != normalize(preview.get("shipType"))
+            or not ship_types_match(
+                target.get("type"), preview.get("shipType"), self._ship_catalog,
+            )
         ):
             self._engineering_status = (
                 "Build import rejected: target ship no longer matches the preview."

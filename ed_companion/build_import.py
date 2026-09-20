@@ -506,6 +506,21 @@ def _ship_key(value, aliases=None):
     return table.get(key, key)
 
 
+def ship_types_match(a, b, ship_catalog=None):
+    """True when ``a`` and ``b`` name the same hull - one a display name
+    (``Python Mk II``), the other a raw Frontier/Coriolis symbol
+    (``Python_NX``), or any mix of the two. Callers re-validating a
+    preview's target ship at apply time must use this rather than a bare
+    string/normalize() compare: for any hull whose symbol and display
+    name do not happen to share the same words (every ``_NX``-suffixed
+    ship - Caspian Explorer/``Explorer_NX``, Python Mk II/``Python_NX``,
+    and any future one added the same way - is exactly this case), a
+    bare compare never matches even though both names are correct.
+    """
+    aliases = _ship_catalog_aliases(ship_catalog)
+    return _ship_key(a, aliases) == _ship_key(b, aliases)
+
+
 def _ship_catalog_aliases(ship_catalog):
     """Map every catalog ship's normalized internal symbol to its display name.
 
