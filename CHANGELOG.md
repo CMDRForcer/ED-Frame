@@ -1,5 +1,18 @@
 # Changelog
 
+## 1.5.14 — 2026-09-21
+
+### Fixed
+
+- **Empty Wishlist right after launch**: the very first Journal refresh
+  after starting ED-Frame could occasionally resolve the correct active
+  ship but publish an empty Wishlist, even though real plans existed for
+  it - only fixed by restarting the app. The fleet/CAPI snapshot behind
+  ship-to-label resolution isn't always fully settled on that first
+  pass. ED-Frame now retries once, automatically, only on that first
+  refresh after launch, if it sees a resolved ship with an unexpectedly
+  empty Wishlist.
+
 ## 1.5.13 — 2026-09-21
 
 ### Fixed

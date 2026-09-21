@@ -1602,6 +1602,7 @@ class CockpitController(
         eddn_config = dict(self._eddn_config)
         hge_revision = self._hge_revision
         eddn_revision = self._eddn_revision
+        is_first_refresh = not self._journal_state_ready
 
         # Threading contract: the worker runs off the Qt thread and must read
         # only the locals captured above, never live ``self._*`` mutable state.
@@ -1622,6 +1623,24 @@ class CockpitController(
                         trader_preference,
                     )
                     state["_craftBatch"] = craft_batch
+                if (
+                    is_first_refresh and state.get("ship")
+                    and not state.get("blueprints")
+                ):
+                    # The very first refresh after a cold start can land
+                    # before the fleet/CAPI snapshot behind ship <-> label
+                    # resolution has fully settled, occasionally resolving
+                    # the correct ship with an empty Wishlist even though
+                    # ship_blueprints.json has real plans for it. A second,
+                    # cheap pass a moment later has always been correct in
+                    # practice, and this only runs once per app launch.
+                    retried = build_state(
+                        package_root, str(state.get("ship") or ""),
+                        preferred_plan_id, trader_preference,
+                    )
+                    if retried.get("blueprints"):
+                        retried["_craftBatch"] = craft_batch
+                        state = retried
                 state["_logbookEntries"] = logbook_entries(package_root)
                 state_find_rows = self._build_state_find_rows(
                     state, hge_sightings, eddn_context,
