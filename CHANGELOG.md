@@ -1,5 +1,19 @@
 # Changelog
 
+## 1.5.13 — 2026-09-21
+
+### Fixed
+
+- **Crash on startup after database corruption**: if `data_history.sqlite3`
+  (the local cache for EDDN/mining/HGE history and credit snapshots) was
+  ever left with malformed pages - most likely from a hard process kill
+  or crash mid-write - ED-Frame would fail to start at all, every time,
+  with an unhandled database error. This cache is never the source of
+  truth (your Journal and Wishlist data live in separate files and were
+  never at risk), so ED-Frame now detects corruption automatically,
+  keeps the broken file as a timestamped backup next to it, and rebuilds
+  a fresh, working database instead of crashing.
+
 ## 1.5.12 — 2026-09-21
 
 ### Fixed

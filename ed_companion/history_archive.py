@@ -2,14 +2,57 @@
 
 from __future__ import annotations
 
+import functools
 import hashlib
 import json
+import logging
 import sqlite3
 import threading
 from contextlib import closing
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Iterable
+
+
+LOGGER = logging.getLogger(__name__)
+
+
+_CORRUPTION_MARKERS = (
+    "malformed", "not a database", "file is not a database",
+    "file is encrypted or is not a database",
+)
+
+
+def _is_corruption_error(exc: BaseException) -> bool:
+    return isinstance(exc, sqlite3.DatabaseError) and any(
+        marker in str(exc).lower() for marker in _CORRUPTION_MARKERS
+    )
+
+
+def _recoverable(method):
+    """Quarantine a corrupt database and retry once instead of crashing.
+
+    This is a cache of displaced runtime records (EDDN uploads, mining
+    sync, credit snapshots, ...), never the source of truth - Journal
+    files and the profile's JSON stores are. A repeated hard process
+    kill (or third-party file-lock interference from antivirus/OneDrive,
+    the same kind already seen corrupting other saves on Windows) can
+    still leave this file with genuinely malformed pages even under
+    WAL + synchronous=FULL. Losing the cached history to a fresh,
+    empty database is a minor inconvenience; crashing the whole app on
+    every future launch, as an unhandled ``sqlite3.DatabaseError`` from
+    inside ``__init__`` used to, is not.
+    """
+    @functools.wraps(method)
+    def wrapper(self, *args, **kwargs):
+        try:
+            return method(self, *args, **kwargs)
+        except sqlite3.DatabaseError as exc:
+            if not _is_corruption_error(exc):
+                raise
+            self._quarantine_and_reset()
+            return method(self, *args, **kwargs)
+    return wrapper
 
 
 class HistoryArchive:
@@ -19,13 +62,52 @@ class HistoryArchive:
         self.path = Path(path)
         self._lock = threading.RLock()
         self._counts_cache = None
-        self._ensure_schema()
+        try:
+            self._ensure_schema()
+        except sqlite3.DatabaseError as exc:
+            if not _is_corruption_error(exc):
+                raise
+            self._quarantine_and_reset()
 
     def _connect(self):
         connection = sqlite3.connect(self.path, timeout=10)
-        connection.execute("PRAGMA journal_mode=WAL")
-        connection.execute("PRAGMA synchronous=FULL")
+        try:
+            connection.execute("PRAGMA journal_mode=WAL")
+            connection.execute("PRAGMA synchronous=FULL")
+        except Exception:
+            # A failure here (e.g. corruption) must not leak the raw
+            # connection - on Windows an open sqlite3 handle blocks the
+            # rename _quarantine_and_reset() is about to perform on this
+            # very file.
+            connection.close()
+            raise
         return connection
+
+    def _quarantine_and_reset(self) -> None:
+        """Move a corrupt database aside (never delete) and start fresh.
+
+        Mirrors how persistence.py protects the JSON stores: keep the
+        broken file as a recovery copy under a timestamped name, then
+        rebuild an empty, working schema in its place.
+        """
+        with self._lock:
+            LOGGER.error(
+                "History database corrupt, quarantining and starting fresh: %s",
+                self.path,
+            )
+            stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
+            for suffix in ("", "-wal", "-shm"):
+                candidate = self.path.with_name(self.path.name + suffix)
+                if not candidate.exists():
+                    continue
+                try:
+                    candidate.replace(
+                        candidate.with_name(f"{candidate.name}.corrupt-{stamp}")
+                    )
+                except OSError:
+                    pass
+            self._counts_cache = None
+            self._ensure_schema()
 
     def _ensure_schema(self):
         self.path.parent.mkdir(parents=True, exist_ok=True)
@@ -57,6 +139,7 @@ class HistoryArchive:
         explicit = str(record.get(key_field) or "") if key_field else ""
         return explicit or hashlib.sha256(encoded.encode("utf-8")).hexdigest()
 
+    @_recoverable
     def archive(self, category, records: Iterable[dict], key_field=""):
         """Archive every valid record in one durable transaction."""
         now = datetime.now(timezone.utc).isoformat(timespec="seconds")
@@ -114,9 +197,13 @@ class HistoryArchive:
         try:
             with self._lock, closing(self._connect()) as connection:
                 connection.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+        except sqlite3.DatabaseError as exc:
+            if _is_corruption_error(exc):
+                self._quarantine_and_reset()
         except sqlite3.Error:
             pass
 
+    @_recoverable
     def count(self, category=None):
         with self._lock, closing(self._connect()) as connection:
             if category is None:
@@ -127,6 +214,7 @@ class HistoryArchive:
                 ).fetchone()
         return int(row[0] if row else 0)
 
+    @_recoverable
     def counts(self):
         with self._lock:
             if self._counts_cache is not None:
@@ -141,6 +229,7 @@ class HistoryArchive:
             }
             return dict(self._counts_cache)
 
+    @_recoverable
     def records(self, category, limit=0):
         """Return one category in chronological order, optionally tail-limited."""
         with self._lock, closing(self._connect()) as connection:
@@ -167,6 +256,7 @@ class HistoryArchive:
                 result.append(record)
         return result
 
+    @_recoverable
     def clear(self, category):
         with self._lock, closing(self._connect()) as connection:
             cursor = connection.execute(
@@ -176,6 +266,7 @@ class HistoryArchive:
         self._counts_cache = None
         return max(0, int(cursor.rowcount or 0))
 
+    @_recoverable
     def export_json(self, path, active=None):
         """Create a complete, portable JSON export without loading it all in RAM."""
         destination = Path(path)

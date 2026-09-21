@@ -73,6 +73,59 @@ class LosslessHistoryTests(unittest.TestCase):
             archive = HistoryArchive(Path(directory) / "data_history.sqlite3")
             archive.checkpoint()
 
+    def test_corrupt_database_recovers_on_construction_instead_of_crashing(self):
+        # Reproduces a real incident: repeated hard process kills left
+        # data_history.sqlite3 with malformed pages, and the app crashed
+        # on every future launch because HistoryArchive.__init__() ->
+        # records() raised an unhandled sqlite3.DatabaseError. The file
+        # is a displaced-records cache, never the source of truth, so
+        # losing it to a fresh database beats crashing the whole app.
+        with TemporaryDirectory() as directory:
+            path = Path(directory) / "data_history.sqlite3"
+            archive = HistoryArchive(path)
+            archive.archive("eddn_sent", [
+                {"id": "one", "sent_at": "2026-01-01T00:00:00Z"},
+            ], key_field="id")
+            archive.checkpoint()
+
+            with open(path, "r+b") as handle:
+                handle.seek(100)
+                handle.write(b"\xff" * 200)
+
+            recovered = HistoryArchive(path)
+
+            self.assertEqual(recovered.count("eddn_sent"), 0)
+            corrupt_copies = list(Path(directory).glob("data_history.sqlite3.corrupt-*"))
+            self.assertEqual(len(corrupt_copies), 1)
+
+            recovered.archive("eddn_sent", [
+                {"id": "two", "sent_at": "2026-01-02T00:00:00Z"},
+            ], key_field="id")
+            self.assertEqual(recovered.count("eddn_sent"), 1)
+
+    def test_corruption_discovered_mid_session_recovers_instead_of_raising(self):
+        # Construction can succeed (schema creation only touches the
+        # first page) while a later query on data pages still hits
+        # corruption - every public method needs the same safety net,
+        # not just __init__.
+        with TemporaryDirectory() as directory:
+            path = Path(directory) / "data_history.sqlite3"
+            archive = HistoryArchive(path)
+            archive.archive("eddn_sent", [
+                {"id": "one", "sent_at": "2026-01-01T00:00:00Z"},
+            ], key_field="id")
+            archive.checkpoint()
+
+            with open(path, "r+b") as handle:
+                handle.seek(100)
+                handle.write(b"\xff" * 200)
+
+            result = archive.records("eddn_sent")
+
+            self.assertEqual(result, [])
+            corrupt_copies = list(Path(directory).glob("data_history.sqlite3.corrupt-*"))
+            self.assertEqual(len(corrupt_copies), 1)
+
     def test_archive_preserves_identical_rows_within_one_source_batch(self):
         with TemporaryDirectory() as directory:
             archive = HistoryArchive(Path(directory) / "history.sqlite3")
