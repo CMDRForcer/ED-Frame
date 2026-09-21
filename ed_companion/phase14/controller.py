@@ -246,6 +246,7 @@ from .state import (
     merge_capi_loadout,
     profiled_journal_events,
     ProfileContext,
+    _read_ship_blueprints_defensively,
     LOGBOOK_FILTERS,
     load_logbook_notes,
     logbook_entries,
@@ -273,6 +274,20 @@ from .state import (
 )
 
 LOGGER = logging.getLogger(__name__)
+
+
+def _wishlist_unexpectedly_empty(state: dict) -> bool:
+    """Return whether persisted plans vanished from a freshly built state."""
+    ship = str(state.get("ship") or "")
+    if not ship or state.get("blueprints"):
+        return False
+    profile_context = state.get("_profileContext")
+    if not isinstance(profile_context, ProfileContext):
+        return False
+    plans = _read_ship_blueprints_defensively(
+        runtime_data_dir(profile_context) / "ship_blueprints.json"
+    )
+    return bool(plans.get(ship))
 
 # Upper bound on how long the Frontier CAPI tab may sit in its busy state
 # before the UI is released, in case a worker never reports back. Chosen
@@ -631,6 +646,13 @@ class CockpitController(
                     package_root, selected_ship,
                     trader_preference=trader_preference,
                 )
+                if _wishlist_unexpectedly_empty(state):
+                    retried = build_state(
+                        package_root, str(state.get("ship") or ""),
+                        trader_preference=trader_preference,
+                    )
+                    if retried.get("blueprints"):
+                        state = retried
                 state["_logbookEntries"] = logbook_entries(package_root)
                 rows = self._build_hge_candidate_rows(
                     state, hge_sightings
@@ -653,9 +675,7 @@ class CockpitController(
                     revision, profile_generation, str(exc),
                 ))
 
-        threading.Thread(
-            target=worker, name="initial-journal-state", daemon=True
-        ).start()
+        self._start_network_worker(worker, "initial-journal-state")
 
 
 
@@ -1602,7 +1622,6 @@ class CockpitController(
         eddn_config = dict(self._eddn_config)
         hge_revision = self._hge_revision
         eddn_revision = self._eddn_revision
-        is_first_refresh = not self._journal_state_ready
 
         # Threading contract: the worker runs off the Qt thread and must read
         # only the locals captured above, never live ``self._*`` mutable state.
@@ -1623,17 +1642,7 @@ class CockpitController(
                         trader_preference,
                     )
                     state["_craftBatch"] = craft_batch
-                if (
-                    is_first_refresh and state.get("ship")
-                    and not state.get("blueprints")
-                ):
-                    # The very first refresh after a cold start can land
-                    # before the fleet/CAPI snapshot behind ship <-> label
-                    # resolution has fully settled, occasionally resolving
-                    # the correct ship with an empty Wishlist even though
-                    # ship_blueprints.json has real plans for it. A second,
-                    # cheap pass a moment later has always been correct in
-                    # practice, and this only runs once per app launch.
+                if _wishlist_unexpectedly_empty(state):
                     retried = build_state(
                         package_root, str(state.get("ship") or ""),
                         preferred_plan_id, trader_preference,
@@ -1654,9 +1663,7 @@ class CockpitController(
                 LOGGER.exception("Journal state refresh failed")
                 self.refreshStateFailed.emit((revision, str(exc)))
 
-        threading.Thread(
-            target=worker, name=f"journal-state-{revision}", daemon=True,
-        ).start()
+        self._start_network_worker(worker, f"journal-state-{revision}")
 
     @Slot(object)
     def _finish_refresh_state(self, payload: object) -> None:
@@ -2624,4 +2631,3 @@ class CockpitController(
                     "page": 4, "key": row["name"],
                 })
         return results[:30]
-

@@ -714,8 +714,28 @@ def _fast_journal_profile_identity(requested: str = "") -> tuple[str, str]:
 
 
 
+_LAST_KNOWN_IDENTITY_LOCK = threading.Lock()
+_LAST_KNOWN_IDENTITY: tuple[str, str, str, str] | None = None
+
+
 def _journal_profile_identity() -> tuple[str, str]:
-    """Return the selected Frontier identity and display name from LoadGame."""
+    """Return the selected identity without regressing to an empty profile."""
+    requested = str(os.environ.get("ED_FRAME_PROFILE_FID") or "").strip()
+    root = str(journal_dir().resolve())
+    identity, name = _resolve_journal_profile_identity()
+    global _LAST_KNOWN_IDENTITY
+    if identity:
+        with _LAST_KNOWN_IDENTITY_LOCK:
+            _LAST_KNOWN_IDENTITY = (root, requested, identity, name)
+        return identity, name
+    with _LAST_KNOWN_IDENTITY_LOCK:
+        cached = _LAST_KNOWN_IDENTITY
+        if cached is not None and cached[:2] == (root, requested):
+            return cached[2], cached[3]
+    return identity, name
+
+
+def _resolve_journal_profile_identity() -> tuple[str, str]:
     requested = str(os.environ.get("ED_FRAME_PROFILE_FID") or "").strip()
     root = str(journal_dir().resolve())
     with _JOURNAL_EVENT_CACHE_LOCK:

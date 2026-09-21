@@ -173,6 +173,7 @@ from .state_fleet import (
     MANDATORY_CORE_STOCK_FAMILIES,
     _cached_profile_loadout_slots_by_ship,
     _module_display_catalog,
+    _read_ship_blueprints_defensively,
     engineering_loadout_rows,
     latest_loadout_slots,
     latest_loadout_slots_by_ship,
@@ -375,7 +376,11 @@ def current_ship(
     blueprints, aliases = reconcile_fleet_cache(data_dir, fleet_state)
     if not bindings_migrated:
         migrate_wishlist_bindings(data_dir, fleet_state, events or [])
-    blueprints = read_json(data_dir / "ship_blueprints.json", {})
+    # Binding migration may have rewritten the plans after fleet-cache
+    # reconciliation, so use the same guarded read for this second pass.
+    blueprints = _read_ship_blueprints_defensively(
+        data_dir / "ship_blueprints.json"
+    )
     rows = fleet_state.get("ships", [])
     ships = [str(row["label"]) for row in rows]
     active = next(

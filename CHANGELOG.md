@@ -1,5 +1,17 @@
 # Changelog
 
+## 1.5.15 — 2026-09-21
+
+### Fixed
+
+- **Wishlist persistence across restarts**: ED-Frame now verifies suspicious
+  empty Wishlist reads against the saved plan file, retries state construction
+  when persisted plans are missing from the freshly built state, and keeps the
+  last resolved Commander identity through a transient empty Journal lookup.
+- **Clean shutdown**: initial and recurring Journal-state workers now use the
+  tracked worker lifecycle, allowing in-flight persistence work to finish
+  before the application exits.
+
 ## 1.5.14 — 2026-09-21
 
 ### Fixed

@@ -142,13 +142,34 @@ LOGGER = logging.getLogger(__name__)
 
 
 
+def _read_ship_blueprints_defensively(path: Path) -> dict[str, Any]:
+    """Retry a suspicious empty parse without delaying a truly empty file."""
+    if not path.exists():
+        return {}
+    for attempt in range(5):
+        payload = read_json(path, {})
+        payload = payload if isinstance(payload, dict) else {}
+        if payload:
+            return payload
+        try:
+            if path.stat().st_size <= 4:
+                return {}
+        except OSError:
+            pass
+        if attempt == 4:
+            return {}
+        time.sleep(0.15)
+    return {}
+
+
 def reconcile_fleet_cache(
     data_dir: Path, fleet_state: dict[str, Any]
 ) -> tuple[dict[str, list[Any]], dict[str, str]]:
     """Migrate wishlist labels by ShipID and replace stale fleet metadata."""
     old_metadata = read_json(data_dir / "ship_metadata.json", {})
-    old_plans = read_json(data_dir / "ship_blueprints.json", {})
-    old_plans = old_plans if isinstance(old_plans, dict) else {}
+    old_plans = _read_ship_blueprints_defensively(
+        data_dir / "ship_blueprints.json"
+    )
     labels_by_id = {
         str(row["id"]): str(label)
         for label, row in (old_metadata.items() if isinstance(old_metadata, dict) else [])
@@ -1091,4 +1112,3 @@ def latest_loadout_slots(
     """Return one ship's bindings from the single-pass loadout projection."""
     rows = latest_loadout_slots_by_ship(events)
     return [dict(row) for row in rows.get(str(ship_id or ""), [])]
-
