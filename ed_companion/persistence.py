@@ -18,6 +18,8 @@ STALE_ATOMIC_TEMP_SECONDS = 60 * 60
 _ATOMIC_TEMP_NAME = re.compile(
     r"^\..+\.(?:json|txt|log)\.[a-z0-9_]{8}\.tmp$"
 )
+_REPLACE_RETRY_ATTEMPTS = 5
+_REPLACE_RETRY_DELAY_SECONDS = 0.05
 
 
 def cleanup_stale_atomic_temps(
@@ -48,6 +50,28 @@ def cleanup_stale_atomic_temps(
     return removed
 
 
+def _replace_with_retry(temporary, path):
+    """Retry os.replace through a transient Windows sharing violation.
+
+    On Windows, antivirus scanners, indexers and OneDrive briefly open a
+    file for reading right after it changes, which makes the following
+    os.replace() fail with PermissionError (WinError 32 - "the process
+    cannot access the file because it is being used by another process")
+    even though nothing in ED-Frame itself is still holding it open. The
+    lock is normally released within milliseconds, so a few short retries
+    resolve it without surfacing a crash for a save that would have
+    succeeded on its own a moment later.
+    """
+    for attempt in range(_REPLACE_RETRY_ATTEMPTS):
+        try:
+            os.replace(temporary, path)
+            return
+        except PermissionError:
+            if attempt == _REPLACE_RETRY_ATTEMPTS - 1:
+                raise
+            time.sleep(_REPLACE_RETRY_DELAY_SECONDS)
+
+
 def atomic_write(path, text, encoding="utf-8"):
     """Flush one unique sibling temp file and atomically replace its target."""
     path = Path(path)
@@ -65,7 +89,7 @@ def atomic_write(path, text, encoding="utf-8"):
                 handle.write(str(text))
                 handle.flush()
                 os.fsync(handle.fileno())
-            os.replace(temporary, path)
+            _replace_with_retry(temporary, path)
         finally:
             if descriptor is not None:
                 os.close(descriptor)

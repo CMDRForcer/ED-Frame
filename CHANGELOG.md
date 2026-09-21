@@ -1,5 +1,17 @@
 # Changelog
 
+## 1.5.12 — 2026-09-21
+
+### Fixed
+
+- **Crash on save**: any local save (EDDN config, Wishlist plans, UI
+  settings, etc.) could crash the app with "the process cannot access
+  the file because it is being used by another process" when antivirus,
+  Windows Search indexing, or OneDrive briefly opened the file right
+  after it changed. ED-Frame now retries a save a few times over a
+  fraction of a second before giving up, which absorbs this kind of
+  momentary lock instead of crashing.
+
 ## 1.5.11 — 2026-09-20
 
 ### Fixed
