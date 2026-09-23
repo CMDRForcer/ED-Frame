@@ -170,6 +170,7 @@ class PriorityWorkflowTests(unittest.TestCase):
             experimental_name="Stripped Down", plan_mode="combined",
             ship_id=7, slot="PowerPlant",
             module_id="int_powerplant_size5_class5",
+            engineer_rank=5,
         )
         priority[0]["_Planner"]["priority"] = True
         experimental = [{
@@ -187,7 +188,7 @@ class PriorityWorkflowTests(unittest.TestCase):
             "Ingredients": [{"Name": "Other Mat", "Size": 1}],
         }], 0, 1, plan_id="shield", instance="Slot03_Size4",
             ship_id=7, slot="Slot03_Size4",
-            module_id="int_shieldgenerator_size4_class5")
+            module_id="int_shieldgenerator_size4_class5", engineer_rank=5)
         inventory = {f"mat{grade}": grade for grade in range(1, 6)}
         inventory.update({"expmat": 2, "othermat": 0})
         metadata = {

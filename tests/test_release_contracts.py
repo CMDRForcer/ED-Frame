@@ -41,6 +41,7 @@ from ed_companion.phase14.state import (
     latest_loadout_slots_by_ship,
     learn_blueprint_id_catalog,
     load_blueprint_id_catalog,
+    material_roll_estimates_reliable,
     migrate_wishlist_bindings,
     module_matches_type,
     partition_engineer_assignments,
@@ -378,6 +379,34 @@ class ReleaseContractTests(unittest.TestCase):
 
         self.assertEqual(action["kind"], "COLLECT")
         self.assertIn("Tungsten", action["title"])
+
+    def test_operations_block_material_actions_until_budget_is_exact(self):
+        state = {
+            "blueprints": [{
+                "module": "Fragment Cannon", "blueprint": "Double Shot",
+                "targetGrade": 5, "targetStatus": "not_started",
+                "canCraftNext": False, "materialProgress": [{
+                    "key": "chromium", "name": "Chromium", "missing": 5,
+                }],
+            }],
+            "materials": [{
+                "key": "chromium", "name": "Chromium", "missing": 5,
+            }],
+            "trades": [{
+                "targetKey": "chromium", "receiveAmount": 5,
+                "system": "Deciat", "station": "Trader",
+            }],
+            "calculationWarning": (
+                "Materialbedarf noch nicht exakt berechenbar – "
+                "Engineer oder Rang nicht eindeutig."
+            ),
+        }
+
+        action = select_operation_action(state, [])
+
+        self.assertEqual(action["kind"], "CALCULATION_BLOCKER")
+        self.assertNotEqual(action["kind"], "TRADE")
+        self.assertNotEqual(action["kind"], "COLLECT")
 
     def test_operations_require_the_exact_planned_module_before_materials(self):
         def plan():
@@ -909,6 +938,26 @@ class ReleaseContractTests(unittest.TestCase):
         self.assertEqual(action["moduleName"], "Shield Generator")
         self.assertEqual(action["engineerName"], "Lei Cheung")
 
+    def test_route_does_not_change_to_an_engineer_with_a_different_material_rank(self):
+        plans = [{
+            "module": "Shield Generator", "blueprint": "Thermal Resistant",
+            "grade": 5, "targetGrade": 5, "nextGrade": 3,
+            "eligibleEngineers": ["Lei Cheung", "Didi Vatermann"],
+            "selectedEngineer": "Didi Vatermann",
+            "completion": 1, "targetStatus": "not_started",
+        }]
+        engineers = [{
+            "name": "Lei Cheung", "statusGroup": "unlocked", "rank": 4,
+            "distance": 0, "status": "UNLOCKED",
+        }, {
+            "name": "Didi Vatermann", "statusGroup": "unlocked", "rank": 5,
+            "distance": 40, "status": "UNLOCKED",
+        }]
+
+        route = assign_plans_to_nearest_engineers(plans, engineers)
+
+        self.assertEqual([row["name"] for row in route], ["Didi Vatermann"])
+
     def test_build_import_accepts_file_dialog_urls(self):
         with TemporaryDirectory() as directory:
             path = Path(directory) / "Krait build.json"
@@ -1228,13 +1277,151 @@ class ReleaseContractTests(unittest.TestCase):
             0, 1, ship_id=37, slot="TinyHardpoint4",
             module_id="hpt_heatsinklauncher_turret_tiny",
         )
-        self.assertEqual(required_materials([plan]), {"vanadium": 1})
+        self.assertEqual(required_materials([plan]), {"vanadium": 5})
+        self.assertFalse(material_roll_estimates_reliable([plan]))
         planner = plan[0]["_Planner"]
         planner["grade_progress"] = {"1": 0.25}
         planner["crafts_completed"] = {"1": 1}
-        self.assertEqual(required_materials([plan]), {"vanadium": 1})
+        self.assertEqual(required_materials([plan]), {"vanadium": 3})
+        self.assertTrue(material_roll_estimates_reliable([plan]))
 
-    def test_roll_learning_is_scoped_to_exact_blueprint_and_grade(self):
+    def test_engineer_rank_sets_exact_pre_craft_material_budget(self):
+        plan = build_engineering_plan(
+            [{
+                "Type": "Chaff Launcher", "Name": "Lightweight",
+                "Grade": grade,
+                "Ingredients": [{"Name": f"Material {grade}", "Size": 1}],
+            } for grade in range(1, 6)],
+            0, 5, ship_id=45, slot="TinyHardpoint6",
+            module_id="hpt_chafflauncher_tiny", engineer_rank=3,
+        )
+
+        self.assertEqual([row["_Rolls"] for row in plan], [3, 4, 5, 5, 5])
+        self.assertEqual(
+            required_materials([plan]),
+            {f"material{grade}": rolls for grade, rolls in enumerate(
+                (3, 4, 5, 5, 5), start=1
+            )},
+        )
+        self.assertTrue(material_roll_estimates_reliable([plan]))
+
+        rank_five = build_engineering_plan(
+            [{
+                "Type": "Chaff Launcher", "Name": "Lightweight",
+                "Grade": grade,
+            } for grade in range(1, 6)],
+            0, 5, engineer_rank=5,
+        )
+        self.assertEqual([row["_Rolls"] for row in rank_five], [1, 2, 3, 4, 5])
+
+        partial = build_engineering_plan(
+            [{
+                "Type": "Chaff Launcher", "Name": "Lightweight", "Grade": 3,
+                "Ingredients": [{"Name": "Manganese", "Size": 1}],
+            }],
+            3, 3, engineer_rank=3,
+            grade_progress={"3": 0.4}, crafts_completed={"3": 2},
+        )
+        self.assertEqual(required_materials([partial]), {"manganese": 3})
+
+    def test_existing_plan_is_rebudgeted_from_selected_engineer_rank(self):
+        with TemporaryDirectory() as directory:
+            data_dir = Path(directory)
+            plan = build_engineering_plan(
+                [{
+                    "Type": "Chaff Launcher", "Name": "Lightweight",
+                    "Grade": grade,
+                    "Engineers": ["Ram Tah", "Petra Olmanova"],
+                    "Ingredients": [{"Name": "Manganese", "Size": 1}],
+                } for grade in range(1, 4)],
+                0, 3, ship_id=45, slot="TinyHardpoint6",
+                module_id="hpt_chafflauncher_tiny", engineer_rank=5,
+            )
+            planner = plan[0]["_Planner"]
+            plan[0]["_SelectedEngineer"] = {"name": "Ram Tah"}
+            for row in plan:
+                grade = int(row["Grade"])
+                row["_Rolls"] = grade
+                planner["rolls"][str(grade)] = grade
+            planner.pop("roll_estimate_sources", None)
+            (data_dir / "ship_blueprints.json").write_text(
+                json.dumps({"Python Mk II": [plan]}), encoding="utf-8"
+            )
+            events = [{
+                "timestamp": "2026-09-23T18:51:39Z",
+                "event": "EngineerProgress",
+                "Engineer": "Ram Tah", "Rank": 3, "Progress": "Unlocked",
+            }]
+
+            migrate_wishlist_bindings(
+                data_dir,
+                {"ships": [{"label": "Python Mk II", "id": "45"}]},
+                events,
+            )
+            saved = json.loads(
+                (data_dir / "ship_blueprints.json").read_text(encoding="utf-8")
+            )["Python Mk II"][0]
+
+        self.assertEqual([row["_Rolls"] for row in saved], [3, 4, 5])
+        self.assertEqual(required_materials([saved]), {"manganese": 12})
+        self.assertTrue(material_roll_estimates_reliable([saved]))
+
+    def test_pending_first_craft_is_not_seeded_before_journal_replay(self):
+        with TemporaryDirectory() as directory:
+            data_dir = Path(directory)
+            plan = build_engineering_plan(
+                [{
+                    "Type": "Chaff Launcher", "Name": "Lightweight",
+                    "Grade": 1, "Engineers": ["Ram Tah"],
+                    "Ingredients": [{"Name": "Phosphorus", "Size": 1}],
+                }],
+                0, 1, ship_id=45, slot="TinyHardpoint6",
+                module_id="hpt_chafflauncher_tiny", engineer_rank=3,
+                journal_baseline={
+                    "fingerprint": "prior-craft",
+                    "timestamp": "2026-09-23T19:27:54Z",
+                },
+            )
+            (data_dir / "ship_blueprints.json").write_text(
+                json.dumps({"Python Mk II": [plan]}), encoding="utf-8"
+            )
+            craft = {
+                "timestamp": "2026-09-23T19:46:13Z",
+                "event": "EngineerCraft", "ShipID": 45,
+                "Slot": "TinyHardpoint6", "Module": "hpt_chafflauncher_tiny",
+                "Engineer": "Ram Tah", "BlueprintID": 128731476,
+                "BlueprintName": "Misc_LightWeight", "Level": 1,
+                "Quality": 0.333,
+                "Ingredients": [{"Name": "phosphorus", "Count": 1}],
+            }
+            events = [{
+                "timestamp": "2026-09-23T19:40:00Z", "event": "Loadout",
+                "ShipID": 45, "Modules": [{
+                    "Slot": "TinyHardpoint6", "Item": "hpt_chafflauncher_tiny",
+                }],
+            }, craft]
+
+            migrate_wishlist_bindings(
+                data_dir,
+                {"ships": [{"label": "Python Mk II", "id": "45"}]},
+                events,
+            )
+            migrated = json.loads(
+                (data_dir / "ship_blueprints.json").read_text(encoding="utf-8")
+            )["Python Mk II"][0][0]["_Planner"]
+            result = apply_engineer_craft(
+                data_dir / "ship_blueprints.json", "Python Mk II", craft,
+                ship_id=45,
+            )
+            replayed = json.loads(
+                (data_dir / "ship_blueprints.json").read_text(encoding="utf-8")
+            )["Python Mk II"][0][0]["_Planner"]
+
+        self.assertEqual(migrated.get("crafts_completed", {}), {})
+        self.assertEqual(result["status"], "applied")
+        self.assertEqual(replayed["crafts_completed"], {"1": 1})
+
+    def test_unknown_engineer_uses_safe_ceiling_for_every_blueprint(self):
         with TemporaryDirectory() as directory:
             data_dir = Path(directory)
             heat_sink = build_engineering_plan(
@@ -1277,7 +1464,7 @@ class ReleaseContractTests(unittest.TestCase):
 
         self.assertEqual(saved[0][0]["_Rolls"], 5)
         self.assertEqual(required_materials([saved[0]]), {"vanadium": 3})
-        self.assertEqual(saved[1][0]["_Rolls"], 1)
+        self.assertEqual(saved[1][0]["_Rolls"], 5)
 
     def test_different_installed_blueprint_grants_no_material_credit(self):
         with TemporaryDirectory() as directory:

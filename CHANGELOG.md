@@ -1,5 +1,23 @@
 # Changelog
 
+## 1.5.16 — 2026-09-23
+
+### Fixed
+
+- **Exact Engineering material budgets**: Wishlist requirements are now
+  calculated from the selected Engineer's live unlock rank, so every grade
+  reserves exactly the rolls that Engineer needs. If the Engineer or rank is
+  not known yet, ED-Frame clearly blocks readiness, collection, and trade
+  recommendations instead of claiming that all materials are available or
+  turning a conservative estimate into an oversized shopping list.
+- **First-craft tracking**: the first Journal craft after creating a plan is
+  no longer counted once while seeding installed progress and a second time
+  during Journal replay. Partial grades now retain the correct remaining roll
+  and material count.
+- **Engineer routing consistency**: automatic routing no longer switches a
+  plan to a different-rank Engineer, which could silently change its material
+  budget between planning and crafting.
+
 ## 1.5.15 — 2026-09-21
 
 ### Fixed

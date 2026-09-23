@@ -1538,6 +1538,12 @@ ApplicationWindow {
                                   ? (nbaLayout.loadoutBlocked
                                      ? "Engineering material plan remains saved; continue after loadout confirmation."
                                      : "Engineering material plan remains saved; continue after installation.")
+                                  : !(cockpit.operationAction.materialCompletionReliable !== undefined
+                                      ? cockpit.operationAction.materialCompletionReliable
+                                      : cockpit.completionReliable)
+                                  ? (cockpit.operationAction.calculationWarning
+                                     || cockpit.calculationWarning
+                                     || "Material requirement is not yet reliable")
                                   : (cockpit.operationAction.missingMaterials || cockpit.missingMaterials).length > 0
                                   ? (cockpit.operationAction.missingMaterials || cockpit.missingMaterials)
                                     .map(function(row) { return row.name + " ×" + row.missing }).join("   ·   ")

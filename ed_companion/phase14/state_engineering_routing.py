@@ -305,8 +305,16 @@ def assign_plans_to_nearest_engineers(plans, engineer_rows):
                     if engineer_index[name].get("distance") is not None else -1
                 ) < 0.05
             ]
-            if current:
-                candidates = current
+            selected_rank = int(
+                (engineer_index.get(selected) or {}).get("rank", 0) or 0
+            )
+            rank_equivalent_current = [
+                name for name in current
+                if not selected_rank
+                or int(engineer_index[name].get("rank", 0) or 0) == selected_rank
+            ]
+            if rank_equivalent_current:
+                candidates = rank_equivalent_current
             elif selected in candidates:
                 candidates = [selected]
         elif selected in candidates:
@@ -455,4 +463,3 @@ def engineer_options_for_plan(plan, engineer_rows, blueprint_records=None):
         row["distance"] if row["distance"] >= 0 else 0,
         row["name"].casefold(),
     ))
-

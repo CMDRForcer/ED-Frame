@@ -146,6 +146,20 @@ LOGGER = logging.getLogger(__name__)
 
 MATERIAL_STATUS = ("READY", "PARTIAL", "MISSING")
 
+# Frontier's fixed engineering progression needs at most five crafts for one
+# grade. A lower-rank Engineer adds the rank deficit to the normal grade count
+# (for example Rank 3: G1=3, G2=4, G3+=5). If no exact Engineer rank is known,
+# budgeting the five-craft ceiling preserves the pre-craft material guarantee.
+MAX_GRADE_ROLLS = 5
+
+
+def planned_grade_rolls(grade: object, engineer_rank: object = 0) -> int:
+    level = max(1, min(MAX_GRADE_ROLLS, int(grade or 1)))
+    rank = max(0, min(MAX_GRADE_ROLLS, int(engineer_rank or 0)))
+    if rank <= 0:
+        return MAX_GRADE_ROLLS
+    return min(MAX_GRADE_ROLLS, level + (MAX_GRADE_ROLLS - rank))
+
 
 GRADE_STATUS_LABELS = {
     "not_applicable": "NOT APPLICABLE",
@@ -177,23 +191,14 @@ def migrate_wishlist_bindings(
     }
     changed = False
     loadout_slots_by_ship = _cached_profile_loadout_slots_by_ship(events)
-    observed_rolls: dict[tuple[str, int], int] = {}
-    for event in events or []:
-        if not isinstance(event, dict) or event.get("event") != "EngineerCraft":
-            continue
-        level = int(event.get("Level", 0) or 0)
-        quality = float(event.get("Quality", 0) or 0)
-        blueprint = JOURNAL_BLUEPRINT_NAMES.get(
-            normalize(event.get("BlueprintName")),
-            str(event.get("BlueprintName") or ""),
-        )
-        if level <= 0 or not blueprint or not 0 < quality < 0.999:
-            continue
-        key = (normalize(blueprint), level)
-        observed_rolls[key] = max(
-            observed_rolls.get(key, 0),
-            max(1, min(5, round(1 / quality))),
-        )
+    engineer_progress = engineer_progress_from_events(events)
+    craft_rows = _craft_events_with_ship_context(events)
+    cursor = read_json(data_dir / "engineer_craft_cursor.json", {})
+    acknowledged_crafts = {
+        str(value) for value in (
+            cursor.get("acknowledged", []) if isinstance(cursor, dict) else []
+        ) if value
+    }
     for label, tasks in payload.items():
         ship_id = ids_by_label.get(str(label), "")
         slots = loadout_slots_by_ship.get(ship_id, [])
@@ -207,24 +212,83 @@ def migrate_wishlist_bindings(
             if not planner.get("plan_mode"):
                 planner["plan_mode"] = planner_mode(planner)
                 changed = True
-            target_name = normalize(first.get("Name"))
-            learned_any = False
+            selected_engineer = str(
+                (first.get("_SelectedEngineer") or {}).get("name") or ""
+            )
+            eligible_engineers = {
+                engineer
+                for row in task if isinstance(row, dict)
+                for engineer in real_engineers(row)
+            }
+            unlocked_engineers = [
+                (
+                    int((engineer_progress.get(engineer) or {}).get("rank", 0) or 0),
+                    engineer,
+                )
+                for engineer in eligible_engineers
+                if str(
+                    (engineer_progress.get(engineer) or {}).get("progress") or ""
+                ).casefold() == "unlocked"
+                and int(
+                    (engineer_progress.get(engineer) or {}).get("rank", 0) or 0
+                ) > 0
+            ]
+            if not selected_engineer and unlocked_engineers:
+                _rank, selected_engineer = min(
+                    unlocked_engineers,
+                    key=lambda row: (-row[0], row[1].casefold()),
+                )
+                first["_SelectedEngineer"] = {"name": selected_engineer}
+                changed = True
+            selected_rank = int(
+                (engineer_progress.get(selected_engineer) or {}).get("rank", 0)
+                or 0
+            )
+            if int(planner.get("engineer_rank_at_plan", 0) or 0) != selected_rank:
+                planner["engineer_rank_at_plan"] = selected_rank
+                changed = True
+            baseline_timestamp = str(
+                (planner.get("journal_baseline") or {}).get("timestamp") or ""
+            )
+            processed_crafts = {
+                str(value) for value in (planner.get("processed_crafts") or [])
+                if value
+            }
+            pending_exact_craft = any(
+                str(event.get("_ResolvedShipID") or "") == ship_id
+                and str(event.get("timestamp") or "") > baseline_timestamp
+                and str(event.get("Slot") or "") == str(planner.get("slot") or "")
+                and same_module_identity(
+                    event.get("Module"), planner.get("module_id")
+                )
+                and _grade_craft_matches_blueprint(first, event)
+                and engineer_craft_fingerprint(event, ship_id)
+                not in processed_crafts | acknowledged_crafts
+                for event in craft_rows
+            )
+            estimates_changed = False
             for grade_record in task:
                 if not isinstance(grade_record, dict) or grade_record.get("Grade") is None:
                     continue
                 level = int(grade_record.get("Grade", 0) or 0)
-                learned = observed_rolls.get((target_name, level), 0)
-                if learned:
-                    sources = planner.setdefault("roll_estimate_sources", {})
-                    if (
-                        int(grade_record.get("_Rolls", 0) or 0) != learned
-                        or str(sources.get(str(level)) or "") != "journal_history"
-                    ):
-                        grade_record["_Rolls"] = learned
-                        planner.setdefault("rolls", {})[str(level)] = learned
-                        sources[str(level)] = "journal_history"
-                        learned_any = True
-            if learned_any:
+                existing = max(0, int(grade_record.get("_Rolls", 0) or 0))
+                budgeted = planned_grade_rolls(level, selected_rank)
+                source = (
+                    "engineer_rank" if selected_rank > 0 else
+                    "conservative_max"
+                )
+                sources = planner.setdefault("roll_estimate_sources", {})
+                if (
+                    existing != budgeted
+                    or int((planner.get("rolls", {}) or {}).get(str(level), 0) or 0)
+                    != budgeted
+                    or str(sources.get(str(level)) or "") != source
+                ):
+                    grade_record["_Rolls"] = budgeted
+                    planner.setdefault("rolls", {})[str(level)] = budgeted
+                    sources[str(level)] = source
+                    estimates_changed = True
+            if estimates_changed:
                 planner["estimated_total_rolls"] = sum(
                     int(row.get("_Rolls", 0) or 0)
                     for row in task if isinstance(row, dict)
@@ -272,7 +336,7 @@ def migrate_wishlist_bindings(
                 # Journal crafts are stronger evidence than Loadout. Only
                 # initialize/reset progress while this plan has not accepted
                 # any exact craft evidence yet.
-                if not (planner.get("processed_crafts") or []):
+                if not processed_crafts and not pending_exact_craft:
                     if int(planner.get("current_grade", 0) or 0) != current_grade:
                         planner["current_grade"] = current_grade
                         planner["current_label"] = (
@@ -390,7 +454,7 @@ def remaining_grade_rolls(
         # Quality is stronger evidence than a catalog estimate. Derive the
         # observed total roll count (for example 1 craft / 25% = 4 rolls).
         observed_total = max(done + 1, round(done / quality))
-        planned = max(done, min(planned, observed_total))
+        planned = max(done, min(MAX_GRADE_ROLLS, observed_total))
     estimated_remaining = max(0, planned - done)
     if level == target:
         return max(1, estimated_remaining)
@@ -472,6 +536,32 @@ def required_materials(
                         if consistency_issues is not None:
                             consistency_issues.append(message)
     return dict(required)
+
+
+def material_roll_estimates_reliable(tasks: object) -> bool:
+    """Return whether every unfinished grade has an exact roll basis."""
+    for task in tasks or []:
+        if not isinstance(task, list) or not task:
+            continue
+        first = next((item for item in task if isinstance(item, dict)), {})
+        if first.get("Kind") == "ExperimentalEffect":
+            continue
+        planner = first.get("_Planner", {}) or {}
+        sources = planner.get("roll_estimate_sources", {}) or {}
+        progress = planner.get("grade_progress", {}) or {}
+        for grade in task:
+            if not isinstance(grade, dict) or grade.get("Grade") is None:
+                continue
+            level = int(grade.get("Grade", 0) or 0)
+            if remaining_grade_rolls(planner, grade) <= 0:
+                continue
+            if float(progress.get(str(level), 0) or 0) > 0:
+                continue
+            if str(sources.get(str(level)) or "") not in {
+                "engineer_rank", "journal_history",
+            }:
+                return False
+    return True
 
 
 
@@ -738,7 +828,7 @@ def blueprint_rows(
         roll_estimate_reliable = bool(
             target_status["code"] in {"completed", "experimental_pending"}
             or live_grade_progress > 0
-            or roll_estimate_source == "journal_history"
+            or roll_estimate_source in {"journal_history", "engineer_rank"}
         )
         is_priority = bool(
             priority_plan_id and str(planner.get("plan_id") or "") == priority_plan_id
@@ -873,9 +963,11 @@ def blueprint_rows(
                     message.split(" ingredient ", 1)[1].split(" in ", 1)[0]
                     for message in unresolved
                 }))
-                if unresolved else ""
+                if unresolved else
+                "Materialbedarf noch nicht exakt berechenbar – Engineer oder Rang nicht eindeutig."
+                if not roll_estimate_reliable else ""
             ),
-            "completionReliable": not unresolved,
+            "completionReliable": not unresolved and roll_estimate_reliable,
             "missingKinds": missing_kinds,
         })
     return rows
@@ -926,9 +1018,9 @@ def build_engineering_plan(
     grades, current_grade, target_grade, *, plan_id="", instance="",
     experimental_id="", experimental_name="", ship_id="", slot="", module_id="",
     plan_mode="", journal_baseline=None, grade_progress=None,
-    crafts_completed=None,
+    crafts_completed=None, engineer_rank=0,
 ):
-    """Build a Classic-compatible deterministic Rank-5 engineering task."""
+    """Build a material-safe engineering task for the selected Engineer rank."""
     current_grade = max(0, int(current_grade or 0))
     target_grade = max(1, int(target_grade or 1))
     initial_progress = (
@@ -951,7 +1043,7 @@ def build_engineering_plan(
         grade = int(source.get("Grade", 0) or 0)
         if start <= grade <= target_grade:
             record = deepcopy(source)
-            planned_rolls = grade
+            planned_rolls = planned_grade_rolls(grade, engineer_rank)
             record["_Rolls"] = planned_rolls
             rolls[str(grade)] = planned_rolls
             plan.append(record)
@@ -965,8 +1057,16 @@ def build_engineering_plan(
                 "Not engineered" if current_grade <= 0 else f"G{current_grade}"
             ),
             "target_grade": target_grade,
-            "profile": "Fixed Rank-5 system",
+            "profile": "Engineer-rank material model",
             "rolls": rolls,
+            "roll_estimate_sources": {
+                str(grade): (
+                    "engineer_rank" if int(engineer_rank or 0) > 0
+                    else "conservative_max"
+                )
+                for grade in rolls
+            },
+            "engineer_rank_at_plan": max(0, int(engineer_rank or 0)),
             "estimated_total_rolls": sum(rolls.values()),
             "experimental_id": str(experimental_id or ""),
             "experimental_name": str(experimental_name or ""),
@@ -2407,4 +2507,3 @@ def _reconcile_engineer_craft_batch_locked(
         "unresolved": unresolved,
         "preferredPlanApplied": bool(preferred_plan_id and not preferred),
     }
-

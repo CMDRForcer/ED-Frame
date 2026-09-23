@@ -196,6 +196,7 @@ from .state import (
     module_matches_type,
     partition_engineer_assignments,
     planner_mode,
+    planned_grade_rolls,
     real_engineers,
     read_json,
     read_journal_tail_records,
@@ -1199,6 +1200,11 @@ class EngineeringMixin:
                 journal_baseline=plan_baseline, **binding,
             )
         else:
+            selected_engineer_rank = int(next((
+                option.get("commanderRank", 0)
+                for option in self._selected_blueprint.get("engineerOptions", [])
+                if option.get("name") == self._selected_engineer
+            ), 0) or 0)
             installed_grade = int(
                 self._selected_blueprint.get("installedGrade") or 0
             )
@@ -1217,7 +1223,9 @@ class EngineeringMixin:
                 installed_matches and installed_quality_known
                 and 0 < installed_grade <= self._target_grade
             ):
-                planned_rolls = installed_grade
+                planned_rolls = planned_grade_rolls(
+                    installed_grade, selected_engineer_rank
+                )
                 initial_progress[str(installed_grade)] = installed_quality
                 initial_completed[str(installed_grade)] = max(
                     0, min(
@@ -1238,6 +1246,7 @@ class EngineeringMixin:
                 plan_mode=self._plan_mode, journal_baseline=plan_baseline,
                 grade_progress=initial_progress,
                 crafts_completed=initial_completed,
+                engineer_rank=selected_engineer_rank,
                 **binding,
             )
         if not plan:

@@ -243,12 +243,14 @@ from .state_engineering import (
     is_unconfirmed_legacy_history,
     journal_craft_baseline,
     material_completion,
+    material_roll_estimates_reliable,
     material_status_label,
     migrate_legacy_plan_baselines,
     migrate_wishlist_bindings,
     move_ship_plan,
     planner_mode,
     planner_physical_identity,
+    planned_grade_rolls,
     progress_status_label,
     reconcile_engineer_craft_batch,
     remaining_grade_rolls,
@@ -637,6 +639,7 @@ def build_state(
         ),
     }
     wishlist_required = required_materials(tasks, metadata, consistency_issues)
+    roll_estimates_reliable = material_roll_estimates_reliable(tasks)
     unlock_catalog = load_unlock_catalog(data_dir, package_root)
     unlock_signals = memoize_projection(
         "engineer_unlock_signals", _projection_key,
@@ -745,7 +748,22 @@ def build_state(
         if key in metadata and key in inventory
     )
     total = sum(required.values())
-    trades = plan_material_trades(missing, required, inventory, metadata)
+    material_calculation_warning = (
+        "Materialbedarf unvollständig berechenbar – unbekanntes Material: "
+        + ", ".join(unresolved_required)
+        if unresolved_required else
+        "Materialbedarf noch nicht exakt berechenbar – Engineer oder Rang nicht eindeutig."
+        if not roll_estimates_reliable else ""
+    )
+    # A conservative roll ceiling keeps the inventory projection safe while
+    # the Engineer/rank is unknown, but it is not an exact shopping list.
+    # Do not turn that ceiling into trade or collection instructions: that
+    # could make the Commander acquire more material than the selected
+    # Engineer actually needs.
+    trades = (
+        plan_material_trades(missing, required, inventory, metadata)
+        if not material_calculation_warning else []
+    )
     latest_location = next(
         (event for event in reversed(events)
          if event.get("event") in {"Location", "FSDJump", "CarrierJump"}),
@@ -1204,9 +1222,10 @@ def build_state(
         "required": total,
         "covered": covered,
         "completion": material_completion(
-            covered, total, reliable=not unresolved_required
+            covered, total,
+            reliable=not unresolved_required and roll_estimates_reliable,
         ),
-        "completionReliable": not unresolved_required,
+        "completionReliable": not unresolved_required and roll_estimates_reliable,
         "materialStatus": material_status,
         "planProgressStatus": aggregate_plan_progress(blueprint_state),
         "craftTrackingIssues": classified_craft_issues,
@@ -1223,11 +1242,7 @@ def build_state(
         "historicalCraftTrackingIssues": [
             row for row in classified_craft_issues if row.get("historical")
         ],
-        "calculationWarning": (
-            "Materialbedarf unvollständig berechenbar – unbekanntes Material: "
-            + ", ".join(unresolved_required)
-            if unresolved_required else ""
-        ),
+        "calculationWarning": material_calculation_warning,
         "missingKinds": len(missing),
         "trades": cards,
         "traderRoute": route.get("stops", []),
@@ -1239,6 +1254,8 @@ def build_state(
         "nextAction": (
             "Waiting for Commander Journal data"
             if not commander_name or not ships else
+            "Resolve incomplete material data"
+            if material_calculation_warning else
             f"Track Tech Broker unlock · {tracked_row.get('name')}"
             if tracked_row else
             f"Complete {len(cards)} material trade{'s' if len(cards) != 1 else ''}"
