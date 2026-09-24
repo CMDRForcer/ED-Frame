@@ -116,6 +116,7 @@ from ed_companion.navigation.hge import (
     rank_state_find_systems,
 )
 from ed_companion.navigation.mining_finder import (
+    MINING_EVIDENCE_RANK,
     fetch_spansh_system_dump,
     is_mining_commodity_signal,
     merge_mining_candidate_batch,
@@ -939,6 +940,21 @@ class NavigationMixin:
                 continue
             if reserve_filter == "MAJOR" and "major" not in reserve:
                 continue
+            target_stat = next((
+                item for item in source_row.get("yieldStats", [])
+                if isinstance(item, dict)
+                and mining_commodity_id(item.get("commodity")) == commodity_id
+            ), None) if not all_commodities else None
+            local_hits = int(
+                (target_stat or {}).get("prospectorHits", 0) or 0
+            )
+            local_refined = int(
+                (target_stat or {}).get("refinedCount", 0) or 0
+            )
+            local_positive = local_hits > 0 or local_refined > 0
+            local_samples = int(
+                source_row.get("prospectorSampleCount", 0) or 0
+            )
             if method == RHINO_SURFACE:
                 if not int(
                     source_row.get("planetaryMiningLocationCount", 0) or 0
@@ -950,7 +966,7 @@ class NavigationMixin:
                     for item in source_row.get("hotspots", [])
                     if isinstance(item, dict)
                 }
-                if commodity_id not in hotspot_ids:
+                if commodity_id not in hotspot_ids and not local_positive:
                     if not (
                         selected and method
                         and method in selected.get("methods", ())
@@ -963,6 +979,12 @@ class NavigationMixin:
                     if not ring_type or ring_type not in eligible:
                         continue
             row = fresh_row
+            row["localSampleCount"] = local_samples
+            row["localYieldHits"] = local_hits
+            row["localRefinedCount"] = local_refined
+            row["localAverageProportion"] = (
+                (target_stat or {}).get("averageProportion")
+            )
             if method == RHINO_SURFACE:
                 row["targetMatch"] = "PLANETARY_MINING_LOCATION"
                 row["targetMatchName"] = (
@@ -979,16 +1001,84 @@ class NavigationMixin:
                     mining_commodity_id(item.get("commodity"))
                     for item in row.get("hotspots", []) if isinstance(item, dict)
                 }
-                if commodity_id in hotspot_ids:
+                if local_positive:
+                    row["targetMatch"] = "LOCAL_YIELD"
+                    if local_hits:
+                        label = (
+                            f"LOCAL YIELD OBSERVED · {local_hits}/{local_samples} "
+                            "PROSPECTORS"
+                        )
+                        average = row.get("localAverageProportion")
+                        if average is not None:
+                            label += f" · AVG {float(average):.1f}%"
+                        if local_refined:
+                            label += f" · {local_refined} REFINED"
+                    else:
+                        label = f"LOCAL REFINED · {local_refined} UNITS"
+                    row["targetMatchName"] = label
+                elif commodity_id in hotspot_ids:
                     row["targetMatch"] = "HOTSPOT"
-                    row["targetMatchName"] = "HOTSPOT SIGNAL"
+                    row["targetMatchName"] = (
+                        f"HOTSPOT CONFIRMED · {int(row.get('sourceCount', 1) or 1)} "
+                        "SOURCE(S)"
+                    )
                 else:
                     row["targetMatch"] = "RING_TYPE"
-                    row["targetMatchName"] = "RING-TYPE AVAILABILITY · NO HOTSPOT REQUIRED"
+                    row["targetMatchName"] = (
+                        "RING TYPE ONLY · YIELD UNCONFIRMED"
+                    )
+                if local_samples and not local_positive:
+                    row["targetMatchName"] += (
+                        f" · LOCAL SAMPLE 0/{local_samples} · NOT CONCLUSIVE"
+                    )
             else:
                 row["targetMatch"] = "ANY"
                 row["targetMatchName"] = "ALL RECORDED RING EVIDENCE"
             result.append(row)
+        if not all_commodities:
+            def mining_rank(row):
+                target = row.get("targetMatch")
+                evidence_rank = MINING_EVIDENCE_RANK.get(
+                    row.get("sourceEvidence") or row.get("evidence"), 0
+                )
+                if target == "LOCAL_YIELD":
+                    match_rank = 0
+                elif row.get("localSampleCount") and not (
+                    row.get("localYieldHits") or row.get("localRefinedCount")
+                ):
+                    match_rank = 4
+                elif target in {"HOTSPOT", "PLANETARY_MINING_LOCATION"}:
+                    match_rank = 1 if evidence_rank >= MINING_EVIDENCE_RANK[
+                        "LIVE_REPORTED"
+                    ] else 2
+                elif target == "RING_TYPE":
+                    match_rank = 3
+                else:
+                    match_rank = 5
+                reserve_name = normalize(row.get("reserveLevel"))
+                reserve_rank = (
+                    0 if "pristine" in reserve_name
+                    else 1 if "major" in reserve_name else 2
+                )
+                distance = row.get("distanceLy")
+                arrival = row.get("distanceToArrivalLs")
+                return (
+                    match_rank,
+                    bool(row.get("stale")),
+                    -evidence_rank,
+                    -int(row.get("sourceCount", 0) or 0),
+                    reserve_rank,
+                    distance is None,
+                    float(distance or 0),
+                    arrival is None,
+                    float(arrival or 0),
+                    str(row.get("system") or "").casefold(),
+                    str(row.get("ring") or "").casefold(),
+                )
+
+            # This sorts only the already filtered/cached result. The large
+            # catalog projection remains off the UI thread and untouched.
+            result.sort(key=mining_rank)
         self._mining_find_cache_key = cache_key
         self._mining_find_cache = result
         return result

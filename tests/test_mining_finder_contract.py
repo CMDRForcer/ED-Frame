@@ -22,7 +22,7 @@ class MiningFinderContractTests(unittest.TestCase):
     def test_only_existing_public_mining_observations_use_eddn(self):
         self.assertEqual(
             MINING_SOURCE_POLICY["eddn"]["events"],
-            ("Scan", "SAASignalsFound"),
+            ("Scan", "SAASignalsFound", "FSSBodySignals"),
         )
         for event_name in MINING_SOURCE_POLICY["eddn"]["events"]:
             self.assertTrue(supports_event({"event": event_name}))

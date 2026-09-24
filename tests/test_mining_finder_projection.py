@@ -480,6 +480,57 @@ class MiningFinderProjectionTests(unittest.TestCase):
         self.assertEqual(rows[0]["distanceLy"], 0.0)
         self.assertEqual(rows[0]["hotspotNames"], "Platinum")
 
+    def test_controller_ranks_observed_yield_before_hotspot_and_ring_type(self):
+        controller = CockpitController.__new__(CockpitController)
+        controller._mining_rows_cache_key = ("rank",)
+        common = {
+            "observedAt": datetime.now(timezone.utc).isoformat(),
+            "reserveLevel": "PristineResources", "sourceCount": 1,
+            "planetaryMiningLocationCount": 0,
+        }
+        controller._mining_rows = Mock(return_value=[{
+            **common, "system": "Ring Type", "ring": "Ring Type A Ring",
+            "distanceLy": 1.0, "distanceToArrivalLs": 100,
+            "evidence": "LIVE_REPORTED", "ringTypeName": "Metallic",
+            "hotspots": [],
+        }, {
+            **common, "system": "Hotspot", "ring": "Hotspot A Ring",
+            "distanceLy": 2.0, "distanceToArrivalLs": 100,
+            "evidence": "LIVE_REPORTED", "ringTypeName": "Metallic",
+            "hotspots": [{"commodity": "platinum", "count": 1}],
+            "sourceCount": 2,
+        }, {
+            **common, "system": "Observed Belt", "ring": "Observed A Belt",
+            "distanceLy": 20.0, "distanceToArrivalLs": None,
+            "evidence": "LOCAL_CONFIRMED", "ringTypeName": "Unknown",
+            "hotspots": [], "prospectorSampleCount": 3,
+            "yieldStats": [{
+                "commodity": "platinum", "prospectorHits": 2,
+                "averageProportion": 25.0, "refinedCount": 1,
+            }],
+        }, {
+            **common, "system": "Negative Sample", "ring": "Negative A Ring",
+            "distanceLy": 0.5, "distanceToArrivalLs": 50,
+            "evidence": "LOCAL_CONFIRMED", "ringTypeName": "Metallic",
+            "hotspots": [{"commodity": "platinum", "count": 1}],
+            "prospectorSampleCount": 4, "yieldStats": [],
+        }])
+
+        rows = controller.miningFindPageForMethod(
+            "Platinum", 100, "ALL EVIDENCE", "ALL RESERVES", "LASER"
+        )
+
+        self.assertEqual(
+            [row["system"] for row in rows],
+            ["Observed Belt", "Hotspot", "Ring Type", "Negative Sample"],
+        )
+        self.assertEqual(rows[0]["targetMatch"], "LOCAL_YIELD")
+        self.assertIn("2/3 PROSPECTORS", rows[0]["targetMatchName"])
+        self.assertIn("AVG 25.0%", rows[0]["targetMatchName"])
+        self.assertIn("HOTSPOT CONFIRMED", rows[1]["targetMatchName"])
+        self.assertIn("YIELD UNCONFIRMED", rows[2]["targetMatchName"])
+        self.assertIn("NOT CONCLUSIVE", rows[3]["targetMatchName"])
+
     NOW = datetime(2026, 9, 4, 12, 0, tzinfo=timezone.utc)
 
     def test_local_scan_and_saa_form_one_confirmed_ring_candidate(self):
@@ -508,6 +559,109 @@ class MiningFinderProjectionTests(unittest.TestCase):
         self.assertEqual(sample["materials"], [
             {"commodity": "platinum", "proportion": 22.4},
         ])
+
+    def test_ring_context_binds_and_aggregates_local_yield_until_departure(self):
+        result = project_local_mining_evidence([{
+            "event": "Location", "StarSystem": "Yield Test",
+            "SystemAddress": 7, "StarPos": [1, 2, 3],
+        }, {
+            "event": "Scan", "timestamp": "2026-09-04T10:00:00Z",
+            "BodyName": "Yield Test 2", "BodyID": 11,
+            "ReserveLevel": "PristineResources", "Rings": [{
+                "Name": "Yield Test 2 A Ring",
+                "RingClass": "eRingClass_MetalRich",
+            }],
+        }, {
+            "event": "SupercruiseExit", "timestamp": "2026-09-04T10:01:00Z",
+            "StarSystem": "Yield Test", "SystemAddress": 7,
+            "Body": "Yield Test 2 A Ring", "BodyID": 12,
+            "BodyType": "PlanetaryRing",
+        }, {
+            "event": "ProspectedAsteroid", "timestamp": "2026-09-04T10:02:00Z",
+            "Materials": [{"Name": "Platinum", "Proportion": 20.0}],
+        }, {
+            "event": "ProspectedAsteroid", "timestamp": "2026-09-04T10:03:00Z",
+            "Materials": [{"Name": "Platinum", "Proportion": 30.0}],
+        }, {
+            "event": "ProspectedAsteroid", "timestamp": "2026-09-04T10:04:00Z",
+            "Materials": [{"Name": "Osmium", "Proportion": 12.0}],
+        }, {
+            "event": "MiningRefined", "timestamp": "2026-09-04T10:05:00Z",
+            "Type": "Platinum",
+        }, {
+            "event": "SupercruiseEntry", "timestamp": "2026-09-04T10:06:00Z",
+            "StarSystem": "Yield Test", "SystemAddress": 7,
+        }, {
+            "event": "ProspectedAsteroid", "timestamp": "2026-09-04T10:07:00Z",
+            "Materials": [{"Name": "Platinum", "Proportion": 99.0}],
+        }])
+
+        self.assertEqual(len(result["candidates"]), 1)
+        candidate = result["candidates"][0]
+        self.assertEqual(candidate["prospectorSampleCount"], 3)
+        platinum = next(
+            row for row in candidate["yieldStats"]
+            if row["commodity"] == "platinum"
+        )
+        self.assertEqual(platinum["prospectorHits"], 2)
+        self.assertEqual(platinum["averageProportion"], 25.0)
+        self.assertEqual(platinum["maxProportion"], 30.0)
+        self.assertEqual(platinum["refinedCount"], 1)
+        self.assertTrue(result["prospectorSamples"][0]["boundToRing"])
+        self.assertFalse(result["prospectorSamples"][-1]["boundToRing"])
+
+    def test_belt_location_context_safely_binds_local_yield(self):
+        result = project_local_mining_evidence([{
+            "event": "Location", "timestamp": "2026-09-04T10:00:00Z",
+            "StarSystem": "Belt Test", "SystemAddress": 8,
+            "StarPos": [1, 2, 3], "Body": "Belt Test A Belt Cluster 1",
+            "BodyID": 2, "BodyType": "AsteroidCluster",
+        }, {
+            "event": "ProspectedAsteroid", "timestamp": "2026-09-04T10:01:00Z",
+            "Materials": [{"Name": "Osmium", "Proportion": 12.5}],
+        }, {
+            "event": "MiningRefined", "timestamp": "2026-09-04T10:02:00Z",
+            "Type": "Osmium",
+        }])
+
+        candidate = result["candidates"][0]
+        self.assertEqual(candidate["ring"], "Belt Test A Belt Cluster 1")
+        self.assertEqual(candidate["miningSiteType"], "BELT")
+        self.assertEqual(candidate["prospectorSampleCount"], 1)
+        self.assertEqual(candidate["yieldStats"][0]["commodity"], "osmium")
+        self.assertEqual(candidate["yieldStats"][0]["refinedCount"], 1)
+
+    def test_merge_combines_compact_local_yield_history(self):
+        common = {
+            "system": "Merge Test", "systemAddress": 9, "bodyId": 2,
+            "ring": "Merge Test A Ring", "evidence": "LOCAL_CONFIRMED",
+            "hotspots": [],
+        }
+        merged = merge_mining_candidates([{
+            **common, "observedAt": "2026-09-04T10:00:00Z",
+            "prospectorSampleCount": 2, "yieldStats": [{
+                "commodity": "platinum", "prospectorHits": 1,
+                "proportionTotal": 20.0, "proportionSamples": 1,
+                "averageProportion": 20.0, "maxProportion": 20.0,
+                "refinedCount": 1, "lastObservedAt": "2026-09-04T10:00:00Z",
+            }],
+        }, {
+            **common, "observedAt": "2026-09-04T11:00:00Z",
+            "prospectorSampleCount": 3, "yieldStats": [{
+                "commodity": "platinum", "prospectorHits": 2,
+                "proportionTotal": 60.0, "proportionSamples": 2,
+                "averageProportion": 30.0, "maxProportion": 35.0,
+                "refinedCount": 4, "lastObservedAt": "2026-09-04T11:00:00Z",
+            }],
+        }], now=self.NOW)[0]
+
+        self.assertEqual(merged["prospectorSampleCount"], 5)
+        self.assertEqual(merged["yieldStats"][0]["prospectorHits"], 3)
+        self.assertAlmostEqual(
+            merged["yieldStats"][0]["averageProportion"], 80 / 3, places=3
+        )
+        self.assertEqual(merged["yieldStats"][0]["maxProportion"], 35.0)
+        self.assertEqual(merged["yieldStats"][0]["refinedCount"], 5)
 
     def test_spansh_dump_projects_catalog_candidate_and_source_timestamp(self):
         candidates = project_spansh_mining_candidates(

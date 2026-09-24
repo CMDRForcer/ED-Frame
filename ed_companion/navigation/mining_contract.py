@@ -26,6 +26,26 @@ LOCAL_MINING_EVENT_FIELDS = MappingProxyType({
     "SAASignalsFound": frozenset({
         "timestamp", "SystemAddress", "BodyName", "BodyID", "Signals",
     }),
+    "FSSBodySignals": frozenset({
+        "timestamp", "SystemAddress", "BodyName", "BodyID", "Signals",
+    }),
+    "Location": frozenset({
+        "timestamp", "StarSystem", "SystemAddress", "StarPos", "Body",
+        "BodyName", "BodyID", "BodyType",
+    }),
+    "FSDJump": frozenset({
+        "timestamp", "StarSystem", "SystemAddress", "StarPos",
+    }),
+    "CarrierJump": frozenset({
+        "timestamp", "StarSystem", "SystemAddress", "StarPos",
+    }),
+    "SupercruiseExit": frozenset({
+        "timestamp", "StarSystem", "SystemAddress", "Body", "BodyName",
+        "BodyID", "BodyType",
+    }),
+    "SupercruiseEntry": frozenset({
+        "timestamp", "StarSystem", "SystemAddress",
+    }),
     "ProspectedAsteroid": frozenset({
         "timestamp", "Materials", "Content", "MotherlodeMaterial", "Remaining",
     }),
@@ -46,7 +66,7 @@ MINING_SOURCE_POLICY = MappingProxyType({
     }),
     "eddn": MappingProxyType({
         "role": "live public ring and hotspot observations",
-        "events": ("Scan", "SAASignalsFound"),
+        "events": ("Scan", "SAASignalsFound", "FSSBodySignals"),
         "network": True,
         "privacy": "existing journal/1 allowlist and schema validation",
     }),

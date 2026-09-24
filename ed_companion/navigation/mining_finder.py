@@ -24,6 +24,10 @@ NON_COMMODITY_SAA_SIGNALS = frozenset({
     "planetarymininglocation",
 })
 
+MINING_BODY_TYPES = frozenset({
+    "planetaryring", "stellarring", "asteroidcluster",
+})
+
 
 def fetch_spansh_system_dump(system_address: int, get: Any, timeout: int = 20):
     """Fetch one documented public-system dump without sending private data."""
@@ -218,6 +222,65 @@ def merge_mining_candidates(
             int(source.get("planetaryMiningLocationCount", 0) or 0)
             for source in observations
         )
+        strongest["prospectorSampleCount"] = sum(
+            int(source.get("prospectorSampleCount", 0) or 0)
+            for source in observations
+        )
+        yield_stats: dict[str, dict[str, Any]] = {}
+        for source in observations:
+            for stat in source.get("yieldStats") or []:
+                if not isinstance(stat, dict):
+                    continue
+                commodity = _commodity_id(stat.get("commodity"))
+                if not commodity:
+                    continue
+                combined = yield_stats.setdefault(commodity, {
+                    "commodity": commodity,
+                    "prospectorHits": 0,
+                    "proportionTotal": 0.0,
+                    "proportionSamples": 0,
+                    "maxProportion": None,
+                    "refinedCount": 0,
+                    "lastObservedAt": "",
+                })
+                hits = int(stat.get("prospectorHits", 0) or 0)
+                proportion_samples = int(
+                    stat.get("proportionSamples", hits) or 0
+                )
+                proportion_total = stat.get("proportionTotal")
+                if proportion_total is None:
+                    proportion_total = (
+                        float(stat.get("averageProportion", 0) or 0)
+                        * proportion_samples
+                    )
+                combined["prospectorHits"] += hits
+                combined["proportionSamples"] += proportion_samples
+                combined["proportionTotal"] += float(proportion_total or 0)
+                combined["refinedCount"] += int(
+                    stat.get("refinedCount", 0) or 0
+                )
+                maximum = stat.get("maxProportion")
+                if maximum is not None:
+                    maximum = float(maximum)
+                    current_maximum = combined["maxProportion"]
+                    combined["maxProportion"] = (
+                        maximum if current_maximum is None
+                        else max(current_maximum, maximum)
+                    )
+                combined["lastObservedAt"] = max(
+                    combined["lastObservedAt"],
+                    _text(stat.get("lastObservedAt")),
+                )
+        strongest["yieldStats"] = []
+        for commodity in sorted(yield_stats):
+            stat = yield_stats[commodity]
+            sample_count = stat["proportionSamples"]
+            stat["averageProportion"] = (
+                round(stat["proportionTotal"] / sample_count, 3)
+                if sample_count else None
+            )
+            stat["proportionTotal"] = round(stat["proportionTotal"], 3)
+            strongest["yieldStats"].append(stat)
         strongest["learnedAt"] = max(
             (_text(source.get("learnedAt")) for source in observations),
             default="",
@@ -318,6 +381,61 @@ def project_local_mining_evidence(
     samples: list[dict[str, Any]] = []
     refined: dict[str, dict[str, Any]] = {}
     active_srv = ""
+    active_ring = ""
+
+    def ensure_ring(
+        ring_name: str, body_id: Any, observed_at: str, source: str,
+    ) -> dict[str, Any] | None:
+        if not ring_name:
+            return None
+        key = ring_name.casefold()
+        row = rings.get(key)
+        if row is None:
+            row = {
+                "system": system,
+                "systemAddress": system_address,
+                "coordinates": list(star_pos),
+                "body": "",
+                "bodyId": body_id,
+                "ring": ring_name,
+                "ringType": "",
+                "reserveLevel": "",
+                "distanceToArrivalLs": None,
+                "hotspots": [],
+                "evidence": "LOCAL_CONFIRMED",
+                "observedAt": observed_at,
+                "source": source,
+            }
+            rings[key] = row
+            candidates.append(row)
+        return row
+
+    def update_ring_yield(
+        row: dict[str, Any], commodity: str, observed_at: str,
+        *, proportion: float | None = None, refined_count: int = 0,
+    ) -> None:
+        if not commodity:
+            return
+        stats = row.setdefault("_yieldStats", {})
+        stat = stats.setdefault(commodity, {
+            "commodity": commodity,
+            "prospectorHits": 0,
+            "proportionTotal": 0.0,
+            "proportionSamples": 0,
+            "maxProportion": None,
+            "refinedCount": 0,
+            "lastObservedAt": "",
+        })
+        if proportion is not None:
+            stat["prospectorHits"] += 1
+            stat["proportionTotal"] += proportion
+            stat["proportionSamples"] += 1
+            stat["maxProportion"] = (
+                proportion if stat["maxProportion"] is None
+                else max(stat["maxProportion"], proportion)
+            )
+        stat["refinedCount"] += refined_count
+        stat["lastObservedAt"] = max(stat["lastObservedAt"], observed_at)
 
     for event in events or []:
         if not isinstance(event, dict):
@@ -330,9 +448,48 @@ def project_local_mining_evidence(
             active_srv = ""
             continue
         if name in {"Location", "FSDJump", "CarrierJump"}:
+            active_ring = ""
             system = _text(event.get("StarSystem")) or system
             system_address = event.get("SystemAddress", system_address)
             star_pos = _coordinates(event.get("StarPos")) or star_pos
+            body_type = _text(event.get("BodyType")).casefold()
+            site_name = _text(event.get("Body") or event.get("BodyName"))
+            if name == "Location" and body_type in MINING_BODY_TYPES and site_name:
+                row = ensure_ring(
+                    site_name, event.get("BodyID"),
+                    _text(event.get("timestamp")),
+                    f"Frontier Journal · {event.get('BodyType')} location",
+                )
+                if row:
+                    row["miningSiteType"] = (
+                        "BELT" if body_type in {"stellarring", "asteroidcluster"}
+                        else "RING"
+                    )
+                    active_ring = site_name.casefold()
+            continue
+        if name == "SupercruiseEntry":
+            active_ring = ""
+            continue
+        if name == "SupercruiseExit":
+            system = _text(event.get("StarSystem")) or system
+            system_address = event.get("SystemAddress", system_address)
+            star_pos = _coordinates(event.get("StarPos")) or star_pos
+            body_type = _text(event.get("BodyType")).casefold()
+            ring_name = _text(event.get("Body") or event.get("BodyName"))
+            if body_type in MINING_BODY_TYPES and ring_name:
+                row = ensure_ring(
+                    ring_name, event.get("BodyID"),
+                    _text(event.get("timestamp")),
+                    f"Frontier Journal · {event.get('BodyType')} arrival",
+                )
+                if row:
+                    row["miningSiteType"] = (
+                        "BELT" if body_type in {"stellarring", "asteroidcluster"}
+                        else "RING"
+                    )
+                active_ring = ring_name.casefold() if row else ""
+            else:
+                active_ring = ""
             continue
         if name == "Scan":
             reserve = _text(event.get("ReserveLevel"))
@@ -341,45 +498,32 @@ def project_local_mining_evidence(
                 if not isinstance(ring, dict) or not _text(ring.get("Name")):
                     continue
                 ring_name = _text(ring["Name"])
-                row = {
+                row = ensure_ring(
+                    ring_name, event.get("BodyID"),
+                    _text(event.get("timestamp")), "Frontier Journal · Scan",
+                )
+                row.update({
                     "system": system,
                     "systemAddress": system_address,
                     "coordinates": list(star_pos),
                     "body": body,
                     "bodyId": event.get("BodyID"),
-                    "ring": ring_name,
                     "ringType": _text(ring.get("RingClass")),
                     "reserveLevel": reserve,
                     "distanceToArrivalLs": event.get("DistanceFromArrivalLS"),
-                    "hotspots": [],
-                    "evidence": "LOCAL_CONFIRMED",
                     "observedAt": _text(event.get("timestamp")),
                     "source": "Frontier Journal · Scan",
-                }
-                rings[ring_name.casefold()] = row
-                candidates.append(row)
+                })
             continue
         if name in {"SAASignalsFound", "FSSBodySignals"}:
             ring_name = _text(event.get("BodyName"))
-            row = rings.get(ring_name.casefold())
+            row = ensure_ring(
+                ring_name, event.get("BodyID"),
+                _text(event.get("timestamp")),
+                f"Frontier Journal · {name}",
+            )
             if row is None:
-                row = {
-                    "system": system,
-                    "systemAddress": system_address,
-                    "coordinates": list(star_pos),
-                    "body": "",
-                    "bodyId": event.get("BodyID"),
-                    "ring": ring_name,
-                    "ringType": "",
-                    "reserveLevel": "",
-                    "distanceToArrivalLs": None,
-                    "hotspots": [],
-                    "evidence": "LOCAL_CONFIRMED",
-                    "observedAt": _text(event.get("timestamp")),
-                    "source": "Frontier Journal · SAASignalsFound",
-                }
-                rings[ring_name.casefold()] = row
-                candidates.append(row)
+                continue
             row["hotspots"] = _signal_rows(event.get("Signals"))
             planetary_count = _named_signal_count(
                 event.get("Signals"), "planetarymininglocation"
@@ -407,15 +551,30 @@ def project_local_mining_evidence(
             samples.append({
                 "system": system,
                 "systemAddress": system_address,
+                "ring": rings[active_ring]["ring"] if active_ring else "",
+                "bodyId": (
+                    rings[active_ring].get("bodyId") if active_ring else None
+                ),
                 "observedAt": _text(event.get("timestamp")),
                 "content": _text(event.get("Content")),
                 "remaining": event.get("Remaining"),
                 "motherlode": _commodity_id(event.get("MotherlodeMaterial")),
                 "materials": materials,
-                "boundToRing": False,
+                "boundToRing": bool(active_ring),
                 "evidence": "LOCAL_CONFIRMED",
                 "source": "Frontier Journal · ProspectedAsteroid",
             })
+            if active_ring:
+                ring_row = rings[active_ring]
+                ring_row["prospectorSampleCount"] = int(
+                    ring_row.get("prospectorSampleCount", 0) or 0
+                ) + 1
+                for material in materials:
+                    update_ring_yield(
+                        ring_row, material["commodity"],
+                        _text(event.get("timestamp")),
+                        proportion=material["proportion"],
+                    )
             continue
         if name == "MiningRefined":
             commodity = _commodity_id(event.get("Type"))
@@ -434,6 +593,23 @@ def project_local_mining_evidence(
             )
             if "rhino" in active_srv and RHINO_SURFACE not in row["methods"]:
                 row["methods"].append(RHINO_SURFACE)
+            if active_ring:
+                update_ring_yield(
+                    rings[active_ring], commodity,
+                    _text(event.get("timestamp")), refined_count=1,
+                )
+    for candidate in candidates:
+        stats = candidate.pop("_yieldStats", {})
+        candidate["yieldStats"] = []
+        for commodity in sorted(stats):
+            stat = stats[commodity]
+            count = stat["proportionSamples"]
+            stat["proportionTotal"] = round(stat["proportionTotal"], 3)
+            stat["averageProportion"] = (
+                round(stat["proportionTotal"] / count, 3)
+                if count else None
+            )
+            candidate["yieldStats"].append(stat)
     return {
         "candidates": candidates,
         "prospectorSamples": samples,
