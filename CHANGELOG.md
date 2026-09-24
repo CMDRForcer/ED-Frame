@@ -1,5 +1,29 @@
 # Changelog
 
+## 1.5.21 — 2026-09-24
+
+### Added
+
+- **Observed mining yield**: Prospector samples and refined commodities are
+  now safely assigned to the active planetary ring or asteroid belt and
+  compactly aggregated by commodity, including hit rate, average and maximum
+  measured proportion, and refined-unit count.
+- **Belt support**: Journal locations reported as `AsteroidCluster` or
+  `StellarRing` receive the same local-yield tracking as planetary rings,
+  including sessions that start while already inside a belt.
+
+### Fixed
+
+- **Evidence-first Mining Finder ranking**: selected commodities now prefer
+  observed local yield, then corroborated hotspot evidence, and only then
+  unconfirmed ring-type compatibility. Distance resolves otherwise comparable
+  targets instead of overruling stronger evidence.
+- **Truthful negative samples**: a local zero-hit sample is visible and ranked
+  cautiously but is never presented as proof that a commodity cannot occur.
+- **Complete EDDN mining contract**: official `FSSBodySignals` observations are
+  explicitly included alongside `Scan` and `SAASignalsFound`; private local
+  yield events remain local and are never uploaded to EDDN.
+
 ## 1.5.20 — 2026-09-24
 
 ### Fixed
