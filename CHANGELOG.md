@@ -1,5 +1,17 @@
 # Changelog
 
+## 1.5.20 — 2026-09-24
+
+### Fixed
+
+- **Exact Engineer access labels**: Engineer cards and unlock details no longer
+  merge `INVITED` and `KNOWN` into the ambiguous `PENDING` label. All Journal
+  access states are shown separately as `UNLOCKED`, `INVITED`, `KNOWN`,
+  `UNKNOWN`, or `LOCKED`.
+- **Consistent invitation highlight**: a yellow Engineer-card border now means
+  exactly that an invitation has been received. Known, unknown, and locked
+  Engineers retain neutral borders while their precise status remains visible.
+
 ## 1.5.19 — 2026-09-24
 
 ### Fixed
