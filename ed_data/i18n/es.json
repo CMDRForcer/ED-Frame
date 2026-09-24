@@ -829,5 +829,14 @@
   "exobiology.show_missing_genera": "MOSTRAR FALTANTES",
   "exobiology.hide_missing_genera": "OCULTAR",
   "exobiology.genus_all_found": "TODOS LOS GÉNEROS CONOCIDOS ENCONTRADOS",
-  "exobiology.checklist_more": "+%1 MÁS"
+  "exobiology.checklist_more": "+%1 MÁS",
+  "wishlist.material_monitor_waiting": "MONITOR DE MATERIALES · ESPERANDO UNA TIRADA",
+  "wishlist.material_monitor_adapted": "MONITOR DE MATERIALES · %1 ADAPTACIÓN(ES) AUTOMÁTICA(S)",
+  "wishlist.material_monitor_verified": "MONITOR DE MATERIALES · %1 TIRADA(S) VERIFICADA(S)",
+  "wishlist.material_monitor_warning_title": "MONITOR DE MATERIALES · PLAN ADAPTADO AUTOMÁTICAMENTE",
+  "wishlist.material_monitor_recipe_and_roll": "Elite informó de una receta distinta y necesitó otra tirada. Los materiales restantes se recalcularon; nada está bloqueado.",
+  "wishlist.material_monitor_recipe": "Elite informó de una receta distinta. El coste del diario reemplazó la estimación y los materiales restantes se recalcularon.",
+  "wishlist.material_monitor_roll": "El grado aún necesitaba progreso tras el presupuesto previsto. Se reserva la siguiente tirada observada; nada está bloqueado.",
+  "wishlist.material_monitor_reduction_title": "MONITOR DE MATERIALES · RESERVA LIBERADA",
+  "wishlist.material_monitor_reduction": "Ya no se necesitan %1 tirada(s) ni %2 unidad(es) de material. Los requisitos restantes se redujeron automáticamente."
 }

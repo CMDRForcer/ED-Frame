@@ -2483,7 +2483,67 @@ ApplicationWindow {
                     Layout.fillWidth: true
                         Label { text: window.t("wishlist.pinned_builds", "PINNED BUILDS"); color: textPrimary; font.pixelSize: 17; font.bold: true }
                     Item { Layout.fillWidth: true }
-                        Label { text: window.t("wishlist.journal_automatic", "Journal inventory · automatic"); color: green; font.pixelSize: 11; font.bold: true }
+                        Label {
+                            text: (cockpit.materialMonitor.observedCount || 0) === 0
+                                  ? window.t("wishlist.material_monitor_waiting", "MATERIAL MONITOR · WAITING FOR A ROLL")
+                                  : (cockpit.materialMonitor.adaptationCount || 0) > 0
+                                    ? window.tf("wishlist.material_monitor_adapted", "MATERIAL MONITOR · %1 AUTOMATIC ADAPTATION(S)", [cockpit.materialMonitor.adaptationCount])
+                                    : window.tf("wishlist.material_monitor_verified", "MATERIAL MONITOR · %1 ROLL(S) VERIFIED", [cockpit.materialMonitor.verifiedCount])
+                            color: (cockpit.materialMonitor.adaptationCount || 0) > 0 ? orange : green
+                            font.pixelSize: 11; font.bold: true
+                        }
+                }
+                Rectangle {
+                    id: materialMonitorWarning
+                    objectName: "qa-material-monitor-warning"
+                    property var issue: cockpit.materialMonitor.latestIssue || ({})
+                    visible: (cockpit.materialMonitor.adaptationCount || 0) > 0
+                    Layout.fillWidth: true
+                    Layout.preferredHeight: visible ? 62 : 0
+                    radius: 8; color: warningBackground
+                    border.width: 1; border.color: orange
+                    ColumnLayout {
+                        anchors.fill: parent; anchors.margins: 8; spacing: 3
+                        Label {
+                            Layout.fillWidth: true
+                            text: window.t("wishlist.material_monitor_warning_title", "MATERIAL MONITOR · PLAN ADAPTED AUTOMATICALLY")
+                            color: orange; font.pixelSize: 10; font.bold: true
+                        }
+                        Label {
+                            Layout.fillWidth: true
+                            text: materialMonitorWarning.issue.recipeChanged
+                                  && materialMonitorWarning.issue.rollBudgetExtended
+                                  ? window.t("wishlist.material_monitor_recipe_and_roll", "Elite reported a different recipe and needed another roll. Remaining materials were recalculated; nothing is blocked.")
+                                  : materialMonitorWarning.issue.recipeChanged
+                                    ? window.t("wishlist.material_monitor_recipe", "Elite reported a different recipe. The Journal cost replaced the estimate and remaining materials were recalculated.")
+                                    : window.t("wishlist.material_monitor_roll", "The grade still needed progress after the planned roll budget. The next observed roll is reserved; nothing is blocked.")
+                            color: textPrimary; font.pixelSize: 10
+                            wrapMode: Text.WordWrap
+                        }
+                    }
+                }
+                Rectangle {
+                    id: materialMonitorReduction
+                    property var reduction: cockpit.materialMonitor.latest || ({})
+                    visible: !!reduction.requirementReduced
+                    Layout.fillWidth: true
+                    Layout.preferredHeight: visible ? 54 : 0
+                    radius: 8; color: successBackground
+                    border.width: 1; border.color: green
+                    RowLayout {
+                        anchors.fill: parent; anchors.margins: 9; spacing: 10
+                        Label {
+                            text: window.t("wishlist.material_monitor_reduction_title", "MATERIAL MONITOR · RESERVE RELEASED")
+                            color: green; font.pixelSize: 10; font.bold: true
+                        }
+                        Rectangle { Layout.preferredWidth: 1; Layout.fillHeight: true; color: borderTone }
+                        Label {
+                            Layout.fillWidth: true
+                            text: window.tf("wishlist.material_monitor_reduction", "%1 roll(s) and %2 material unit(s) are no longer needed. Remaining requirements were reduced automatically.", [materialMonitorReduction.reduction.rollsReleased || 0, materialMonitorReduction.reduction.releasedMaterialUnits || 0])
+                            color: textPrimary; font.pixelSize: 10
+                            wrapMode: Text.WordWrap
+                        }
+                    }
                 }
                 Rectangle {
                     visible: cockpit.relevantCraftTrackingIssues.length > 0

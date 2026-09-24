@@ -467,6 +467,12 @@ class EngineeringMixin:
     )
 
 
+    materialMonitor = Property(
+        "QVariantMap", lambda self: self._get("materialMonitor", {}),
+        notify=CoreControllerMixin.wishlistChanged,
+    )
+
+
     craftTrackingIssues = Property(
         "QVariantList", lambda self: self._get("craftTrackingIssues", []),
         notify=CoreControllerMixin.wishlistChanged,

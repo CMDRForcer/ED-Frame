@@ -54,7 +54,10 @@ from ed_companion.navigation.trader import is_material_tradeable
 from ed_companion.navigation.mining_finder import project_local_mining_evidence
 from ed_companion.navigation.trader_type_cache import normalize_timestamp
 from ed_companion.trader_config import HEURISTIC_TRADER_WARNING_KEY
-from ed_companion.material_integrity import material_key
+from ed_companion.material_integrity import (
+    material_key,
+    material_monitor_snapshot,
+)
 from ed_companion.module_identity import (
     canonical_module_id,
     module_identity_key,
@@ -627,6 +630,10 @@ def build_state(
     selected_ship_type = next(
         (str(row.get("type") or "") for row in fleet_state.get("ships", [])
          if row.get("label") == ship), "",
+    )
+    material_monitor = material_monitor_snapshot(
+        read_json(data_dir / "engineering_material_monitor.json", []),
+        selected_ship_id, ship,
     )
     # Physical module state starts with fleet/loadout events but must also see
     # later EngineerCraft events, which ship_journal_events deliberately omits.
@@ -1275,6 +1282,7 @@ def build_state(
         "rollEstimateKind": str(roll_estimate["kind"]),
         "materialStatus": material_status,
         "planProgressStatus": aggregate_plan_progress(blueprint_state),
+        "materialMonitor": material_monitor,
         "craftTrackingIssues": classified_craft_issues,
         "freshCraftTrackingIssues": [
             row for row in classified_craft_issues if not row.get("historical")

@@ -829,5 +829,14 @@
   "exobiology.show_missing_genera": "AFFICHER LES MANQUANTS",
   "exobiology.hide_missing_genera": "MASQUER",
   "exobiology.genus_all_found": "TOUS LES GENRES CONNUS TROUVÉS",
-  "exobiology.checklist_more": "+%1 DE PLUS"
+  "exobiology.checklist_more": "+%1 DE PLUS",
+  "wishlist.material_monitor_waiting": "MONITEUR DE MATÉRIAUX · EN ATTENTE D'UN JET",
+  "wishlist.material_monitor_adapted": "MONITEUR DE MATÉRIAUX · %1 ADAPTATION(S) AUTOMATIQUE(S)",
+  "wishlist.material_monitor_verified": "MONITEUR DE MATÉRIAUX · %1 JET(S) VÉRIFIÉ(S)",
+  "wishlist.material_monitor_warning_title": "MONITEUR DE MATÉRIAUX · PLAN ADAPTÉ AUTOMATIQUEMENT",
+  "wishlist.material_monitor_recipe_and_roll": "Elite a signalé une recette différente et demandé un jet supplémentaire. Les matériaux restants ont été recalculés ; rien n'est bloqué.",
+  "wishlist.material_monitor_recipe": "Elite a signalé une recette différente. Le coût du journal remplace l'estimation et les matériaux restants ont été recalculés.",
+  "wishlist.material_monitor_roll": "Le grade demandait encore de la progression après le budget prévu. Le prochain jet observé est réservé ; rien n'est bloqué.",
+  "wishlist.material_monitor_reduction_title": "MONITEUR DE MATÉRIAUX · RÉSERVE LIBÉRÉE",
+  "wishlist.material_monitor_reduction": "%1 jet(s) et %2 unité(s) de matériau ne sont plus nécessaires. Les besoins restants ont été réduits automatiquement."
 }

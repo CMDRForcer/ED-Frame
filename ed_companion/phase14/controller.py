@@ -723,7 +723,8 @@ class CockpitController(
         if previous is None or any(
             previous.get(key) != state.get(key)
             for key in (
-                "blueprints", "craftTrackingIssues", "freshCraftTrackingIssues",
+                "blueprints", "materialMonitor", "craftTrackingIssues",
+                "freshCraftTrackingIssues",
                 "historicalCraftTrackingIssues", "relevantCraftTrackingIssues",
                 "unrelatedCraftTrackingIssues",
             )

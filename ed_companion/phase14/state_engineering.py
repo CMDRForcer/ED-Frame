@@ -56,7 +56,10 @@ from ed_companion.navigation.trader import is_material_tradeable
 from ed_companion.navigation.mining_finder import project_local_mining_evidence
 from ed_companion.navigation.trader_type_cache import normalize_timestamp
 from ed_companion.trader_config import HEURISTIC_TRADER_WARNING_KEY
-from ed_companion.material_integrity import material_key
+from ed_companion.material_integrity import (
+    compare_ingredient_costs,
+    material_key,
+)
 from ed_companion.module_identity import (
     canonical_module_id,
     module_identity_key,
@@ -1759,6 +1762,49 @@ def _grade_craft_matches_blueprint(
     return normalize(canonical_journal_name) == normalize(planned_name)
 
 
+def _experimental_ingredients_for_plan(
+    tasks: list, chosen_index: int, planner: dict[str, Any],
+) -> list[dict[str, Any]]:
+    """Return the planned effect recipe for standalone or combined plans."""
+
+    first = tasks[chosen_index][0]
+    if first.get("Kind") == "ExperimentalEffect":
+        return list(first.get("Ingredients") or [])
+    plan_id = str(planner.get("plan_id") or "")
+    for task in tasks:
+        if not isinstance(task, list) or not task or not isinstance(task[0], dict):
+            continue
+        candidate = task[0]
+        if (
+            candidate.get("Kind") == "ExperimentalEffect"
+            and str(candidate.get("_ParentPlanId") or "") == plan_id
+        ):
+            return list(candidate.get("Ingredients") or [])
+    return []
+
+
+def _record_material_monitor_observation(
+    plan_path: Path, observation: dict[str, Any],
+) -> None:
+    """Persist one bounded local observation without affecting craft flow."""
+
+    monitor_path = plan_path.parent / "engineering_material_monitor.json"
+    try:
+        rows = read_json(monitor_path, [])
+        rows = rows if isinstance(rows, list) else []
+        fingerprint = str(observation.get("fingerprint") or "")
+        retained = [
+            row for row in rows
+            if not isinstance(row, dict)
+            or str(row.get("fingerprint") or "") != fingerprint
+        ]
+        _write_json_if_changed(monitor_path, (retained + [observation])[-200:])
+    except (OSError, TypeError, ValueError) as exc:
+        # Monitoring is deliberately fail-open: an unavailable diagnostic
+        # file must never prevent a Commander from crafting or travelling.
+        LOGGER.warning("Material monitor could not persist an observation: %s", exc)
+
+
 
 def apply_engineer_craft(
     path: Path, ship: str, event: dict[str, Any], preferred_plan_id: str = "",
@@ -2010,7 +2056,17 @@ def apply_engineer_craft(
         if equivalent_slot:
             planner["instance"] = str(event.get("Slot") or planner.get("instance") or "")
     instance = str(planner.get("instance") or "module")
+    observed_ingredients = list(event.get("Ingredients") or [])
+    expected_ingredients: list[dict[str, Any]] = []
+    planned = 1
+    done_before = 0
+    remaining_before = 1
+    remaining_after = 0
+    grade_complete = False
     if action == "experimental":
+        expected_ingredients = _experimental_ingredients_for_plan(
+            tasks, index, planner
+        )
         planner["experimental_complete"] = True
         if tasks[index][0].get("Kind") == "ExperimentalEffect":
             tasks[index][0]["_Completed"] = True
@@ -2042,6 +2098,12 @@ def apply_engineer_craft(
             item for item in tasks[index] if isinstance(item, dict)
             and int(item.get("Grade", 0) or 0) == level
         )
+        expected_ingredients = list(grade.get("Ingredients") or [])
+        remaining_before = remaining_grade_rolls(planner, grade)
+        planned = int(grade.get("_Rolls", 1) or 1)
+        done_before = int(
+            (planner.get("crafts_completed", {}) or {}).get(str(level), 0) or 0
+        )
         journal_ingredients = [
             {
                 "Name": journal_material_name(item),
@@ -2056,9 +2118,8 @@ def apply_engineer_craft(
         ]
         if journal_ingredients:
             grade["Ingredients"] = journal_ingredients
-        planned = int(grade.get("_Rolls", 1) or 1)
         completed = planner.setdefault("crafts_completed", {})
-        done = int(completed.get(str(level), 0) or 0) + 1
+        done = done_before + 1
         completed[str(level)] = done
         progress = planner.setdefault("grade_progress", {})
         progress[str(level)] = max(
@@ -2076,6 +2137,7 @@ def apply_engineer_craft(
         )
         planner.setdefault("processed_crafts", []).append(event_key)
         grade_complete = float(progress[str(level)] or 0) >= 0.999
+        remaining_after = remaining_grade_rolls(planner, grade)
         reason = f"{instance}: G{level} craft {done}"
         if done <= planned:
             reason += f"/{planned} estimated"
@@ -2087,6 +2149,68 @@ def apply_engineer_craft(
     planner["last_craft_status"] = target_status["code"]
     planner["last_craft_event"] = event_key
     atomic_write(path, json.dumps(payload, ensure_ascii=False, indent=2))
+    comparison = compare_ingredient_costs(
+        expected_ingredients, observed_ingredients
+    )
+    recipe_changed = bool(comparison["expected"]) and not comparison["matches"]
+    roll_budget_extended = bool(
+        action == "grade" and not grade_complete
+        and remaining_after > 0 and (done_before + 1) >= planned
+    )
+    rolls_released = (
+        max(0, remaining_before - 1 - remaining_after)
+        if action == "grade" else 0
+    )
+    released_ingredients = {
+        key: amount * rolls_released
+        for key, amount in comparison["observed"].items()
+        if amount > 0 and rolls_released > 0
+    }
+    requirement_reduced = bool(released_ingredients)
+    if recipe_changed and roll_budget_extended:
+        monitor_kind = "recipe_and_roll_adapted"
+    elif recipe_changed:
+        monitor_kind = "recipe_adapted"
+    elif roll_budget_extended:
+        monitor_kind = "roll_budget_extended"
+    elif requirement_reduced:
+        monitor_kind = "requirement_reduced"
+    else:
+        monitor_kind = "verified"
+    _record_material_monitor_observation(path, {
+        "fingerprint": event_key,
+        "timestamp": str(event.get("timestamp") or ""),
+        "ship": str(ship or ""),
+        "shipId": str(ship_id or event.get("ShipID") or ""),
+        "slot": str(event.get("Slot") or ""),
+        "module": str(event.get("Module") or event.get("Module_Localised") or ""),
+        "blueprint": str(
+            event.get("BlueprintName_Localised")
+            or event.get("BlueprintName") or ""
+        ),
+        "grade": int(event.get("Level", 0) or 0),
+        "experimental": bool(action == "experimental"),
+        "quality": float(event.get("Quality", 0) or 0),
+        "kind": monitor_kind,
+        "blocking": False,
+        "recipeChanged": recipe_changed,
+        "rollBudgetExtended": roll_budget_extended,
+        "requirementReduced": requirement_reduced,
+        "rollsReleased": rolls_released,
+        "releasedIngredients": released_ingredients,
+        "releasedMaterialUnits": sum(released_ingredients.values()),
+        "plannedRolls": planned,
+        "completedBefore": done_before,
+        "completedAfter": done_before + 1,
+        "remainingRollsBefore": remaining_before,
+        "remainingRollsAfter": remaining_after,
+        "expectedIngredients": comparison["expected"],
+        "observedIngredients": comparison["observed"],
+        "ingredientDifferences": comparison["differences"],
+        "inventoryDelta": {
+            key: -amount for key, amount in comparison["observed"].items()
+        },
+    })
     return {
         "status": "applied",
         "index": index,

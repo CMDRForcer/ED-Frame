@@ -829,5 +829,14 @@
   "exobiology.show_missing_genera": "FEHLENDE ANZEIGEN",
   "exobiology.hide_missing_genera": "AUSBLENDEN",
   "exobiology.genus_all_found": "ALLE BEKANNTEN GATTUNGEN GEFUNDEN",
-  "exobiology.checklist_more": "+%1 WEITERE"
+  "exobiology.checklist_more": "+%1 WEITERE",
+  "wishlist.material_monitor_waiting": "MATERIALMONITOR · WARTET AUF EINEN ROLL",
+  "wishlist.material_monitor_adapted": "MATERIALMONITOR · %1 AUTOMATISCHE ANPASSUNG(EN)",
+  "wishlist.material_monitor_verified": "MATERIALMONITOR · %1 ROLL(S) BESTÄTIGT",
+  "wishlist.material_monitor_warning_title": "MATERIALMONITOR · PLAN AUTOMATISCH ANGEPASST",
+  "wishlist.material_monitor_recipe_and_roll": "Elite meldete ein anderes Rezept und benötigte einen weiteren Roll. Der Restbedarf wurde neu berechnet; nichts wird blockiert.",
+  "wishlist.material_monitor_recipe": "Elite meldete ein anderes Rezept. Die Journalkosten ersetzen die Schätzung und der Restbedarf wurde neu berechnet.",
+  "wishlist.material_monitor_roll": "Das Grade benötigte nach dem geplanten Rollbudget weiteren Fortschritt. Der nächste beobachtete Roll ist reserviert; nichts wird blockiert.",
+  "wishlist.material_monitor_reduction_title": "MATERIALMONITOR · RESERVE FREIGEGEBEN",
+  "wishlist.material_monitor_reduction": "%1 Roll(s) und %2 Materialeinheit(en) werden nicht mehr benötigt. Der Restbedarf wurde automatisch reduziert."
 }

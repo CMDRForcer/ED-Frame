@@ -829,5 +829,14 @@
   "exobiology.show_missing_genera": "SHOW MISSING",
   "exobiology.hide_missing_genera": "HIDE",
   "exobiology.genus_all_found": "ALL KNOWN GENERA FOUND",
-  "exobiology.checklist_more": "+%1 MORE"
+  "exobiology.checklist_more": "+%1 MORE",
+  "wishlist.material_monitor_waiting": "MATERIAL MONITOR · WAITING FOR A ROLL",
+  "wishlist.material_monitor_adapted": "MATERIAL MONITOR · %1 AUTOMATIC ADAPTATION(S)",
+  "wishlist.material_monitor_verified": "MATERIAL MONITOR · %1 ROLL(S) VERIFIED",
+  "wishlist.material_monitor_warning_title": "MATERIAL MONITOR · PLAN ADAPTED AUTOMATICALLY",
+  "wishlist.material_monitor_recipe_and_roll": "Elite reported a different recipe and needed another roll. Remaining materials were recalculated; nothing is blocked.",
+  "wishlist.material_monitor_recipe": "Elite reported a different recipe. The Journal cost replaced the estimate and remaining materials were recalculated.",
+  "wishlist.material_monitor_roll": "The grade still needed progress after the planned roll budget. The next observed roll is reserved; nothing is blocked.",
+  "wishlist.material_monitor_reduction_title": "MATERIAL MONITOR · RESERVE RELEASED",
+  "wishlist.material_monitor_reduction": "%1 roll(s) and %2 material unit(s) are no longer needed. Remaining requirements were reduced automatically."
 }
