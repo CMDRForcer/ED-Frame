@@ -1,5 +1,21 @@
 # Changelog
 
+## 1.5.19 — 2026-09-24
+
+### Fixed
+
+- **Global Engineer access routing**: every blueprint now prefers an unlocked
+  and usable Engineer, then an invited Engineer, before merely known or locked
+  alternatives. A stale saved selection can no longer force a less advanced
+  unlock path just because that Engineer is closer.
+- **Unlocks before avoidable material runs**: when no Engineer capable of the
+  target grade is currently craftable, Operations presents the best required
+  unlock step before recommending more collection or trades. Existing material
+  requirements and safety reserves remain intact.
+- **Complete target-grade choices**: Operations now displays every Engineer who
+  can actually reach the requested grade, ordered by availability, with current
+  access status and maximum grade. Lower-grade Engineers are excluded.
+
 ## 1.5.18 — 2026-09-24
 
 ### Added
