@@ -1,5 +1,26 @@
 # Changelog
 
+## 1.5.18 — 2026-09-24
+
+### Added
+
+- **Bidirectional material monitor**: every matched `EngineerCraft` event now
+  compares Elite's actual Journal cost with the planned recipe, records a
+  bounded local history for the selected physical ship, and shows verified or
+  automatically adapted rolls directly in the Wishlist.
+
+### Fixed
+
+- **Automatic extra-demand correction**: changed ingredient quantities and
+  grades that need more rolls than planned immediately increase the remaining
+  requirement without blocking travel or Engineering.
+- **Automatic reserve release**: grades completed earlier than the reserved
+  roll budget now release the exact unneeded rolls and material units and show
+  that reduction explicitly.
+- **Fail-open monitoring**: an unavailable monitor history can no longer
+  interfere with applying a valid craft; the live Journal remains the source
+  of truth for inventory and plan progress.
+
 ## 1.5.17 — 2026-09-24
 
 ### Added
