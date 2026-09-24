@@ -1,5 +1,37 @@
 # Changelog
 
+## 1.5.17 — 2026-09-24
+
+### Added
+
+- **Surface navigation and Nav Overlay**: save, rename and reactivate
+  profile-bound surface waypoints, use current Elite coordinates, browse and
+  edit the bundled raw-material farm catalog, and follow the active target in
+  a separate persistent compass overlay.
+- **Selected-ship Power Plan**: the Engineering ship view now compares the
+  selected fleet ship's current Power Plant budget with its planned modules,
+  grades and experimental effects, while explicitly identifying unresolved or
+  assumed inputs.
+
+### Fixed
+
+- **Truthful intermediate-grade budgets**: Engineering no longer treats a
+  hard-coded 80% Journal quality as proof that Elite has exposed the next
+  grade. A grade now ends only at full quality, after its observed roll budget
+  is spent, or when a later-grade craft proves the transition.
+- **Guaranteed requirement plus visible reserve**: Wishlist material rows now
+  separate the certain minimum from the contingency needed to guarantee the
+  whole Engineer visit. Unknown Engineer ranks use the five-roll ceiling as a
+  labelled reserve instead of blocking material readiness or presenting the
+  estimate as an exact spend.
+- **Live recalculation remains authoritative**: every matching Journal craft
+  immediately reduces the remaining requirement, and a confirmed higher grade
+  releases obsolete lower-grade reserve without changing other module plans.
+- **Protected connector credentials and diagnostics**: existing INARA API keys
+  migrate from the profile JSON into Windows DPAPI storage without requiring
+  re-entry. QML receives only the configured/not-configured state, while
+  connector logs, Qt diagnostics and crash reports redact credential values.
+
 ## 1.5.16 — 2026-09-23
 
 ### Fixed

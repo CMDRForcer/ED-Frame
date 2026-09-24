@@ -22,7 +22,7 @@ ED-Frame is a free, open-source Windows companion for [Elite Dangerous](https://
 - **Your ships, your slots** — engineer the exact physical Core Internal, Optional Internal, Hardpoint and Utility slots of every known hull.
 - **Journal-confirmed progress** — installed modules, grades, experimental effects, credits, fleet movements, scans and unlock evidence update automatically.
 - **Engineer and Tech Broker guides** — searchable capabilities, prerequisite chains and one-time Human and Guardian unlock tracking.
-- **Field tools** — Material routes, Mining Finder, State Finds, live HGE assistance and a Biological Survey workspace.
+- **Field tools** — Material routes, Mining Finder, State Finds, live HGE assistance, a Biological Survey workspace and surface waypoint navigation.
 - **Commander intelligence** — live credit ticker, assets, average CR/h, ranks, reputation, fleet and a searchable flight record.
 - **Offline-first and private** — the core works from local files; Frontier CAPI, INARA, EDDN and Spansh remain explicit, controlled additions.
 
@@ -52,6 +52,8 @@ Engineer and trader routes sit beside the active work. Copy a system name, open 
 ### 2. Engineering — real modules in real slots
 
 Pick any ship ED-Frame has seen and work on its actual Core Internal, Optional Internal, Hardpoint and Utility slots. The ship panel shows speed, boost, jump range, mass, cargo capacity and how many modules can be engineered. Each slot distinguishes the installed module, current engineering and planned target.
+
+The Power Plant panel compares **Now** with the selected ship's **Plan**, including raw MW draw, capacity and reserve before any priority shutdown. The plan projects desired module swaps and bound wishlist engineering for that same ship; unbound plans, missing power catalog entries, stock-value assumptions for replacements without a planned engineering grade, and currently switched-off modules are called out rather than treated as confirmed. It uses catalog grade effects, not exact engineering rolls, and is not a live hardpoint-deployment meter.
 
 Search the blueprint catalog, choose grade-only, experimental-only or combined planning, and compare the benefits and trade-offs of experimental effects. The install guard stops an empty or wrong slot from looking craft-ready. Import ED-Frame, EDSY/SLEF and Coriolis builds through exact hull-slot validation, or export the selected ship's outfitting with its slot identities intact.
 
@@ -145,7 +147,17 @@ Species found, lifetime earnings, remaining signals on the current body, session
 
 ![Biological Survey with scan progress, values and landing targets](docs/images/edec-exobiology.png)
 
-### 12. Settings — appearance, data sources and diagnostics
+### 12. Nav — surface waypoints
+
+Near a planet or on its surface, open **Nav → Surface Nav**, enter signed latitude and longitude in decimal degrees, and save the point under a name. You can also save your current position when Elite provides coordinates, then rename that waypoint in the saved list. Saved waypoints stay with your Commander profile and can be selected again after a restart.
+
+The **Raw Material Farms** section below saved waypoints is collapsed by default. Open it to filter by material, sort either by straight-line distance from the Journal's current system position or by material then distance, copy a destination system, and turn a bundled-catalog entry with surface coordinates into a saved waypoint. You can edit a farm's material, system, body, coordinates and notes, or remove an outdated entry and restore the bundled original later. Edits are stored per Commander profile, separate from the bundled catalog. Unknown distances sort last; a changed system without known galactic coordinates also has unknown distance. Sites without exact surface coordinates cannot become compass waypoints. These distances are not jump-route lengths or a live guarantee of material availability.
+
+The compass arrow points toward the active waypoint relative to your current ship, SRV or suit heading. The page also shows the bearing and the shortest distance along the body's surface. Direction needs live coordinates and heading from Elite's `Status.json`; distance additionally needs its planet radius. Elite updates coordinates more coarsely while flying, so the final approach is more precise near the surface. A waypoint on another body or in another system remains saved, but guidance resumes only when you return there.
+
+**Show Nav Overlay** opens a separate, movable always-on-top compass with the active waypoint, relative turn, surface distance and status. Its visibility, position, opacity and scale persist independently of the Engineering overlay. Lock and click-through can be toggled from the Nav tab or the Windows tray menu. As with other desktop overlays, use Elite's borderless-windowed mode; exclusive fullscreen can cover the overlay.
+
+### 13. Settings — appearance, data sources and diagnostics
 
 Six themes, four interface languages, UI scaling, reduced motion and enhanced GPU visuals let the cockpit fit the display. Tray mode, Windows start-up behavior, renderer selection and Journal-folder controls are available without editing configuration files.
 
@@ -186,7 +198,7 @@ The complete 1.5.5 manuals are available in [English](docs/ED-Frame_User_Manual_
 
 ED-Frame works locally from Elite Dangerous Journal files. Every network integration is optional and opt-in:
 
-- **INARA** — supported Commander events are batched, deduplicated, rate-limited, and written to local receipts before any upload.
+- **INARA** — supported Commander events are batched, deduplicated, rate-limited, and written to local receipts before any upload. The API key is encrypted for the current Windows account with DPAPI, is never exposed back to QML, and is redacted from logs and crash reports.
 - **EDDN** — supported public market, station, exploration and exobiology messages are validated and stripped of private or unsupported fields before transmission.
 - **Frontier Companion API** — an explicit in-app consent tick is required before the first login. Authorisation uses Frontier's PKCE OAuth flow with no client secret; only credits and the active ship are imported, and newer Journal values always stay authoritative. OAuth tokens are encrypted for the current Windows account (DPAPI) and are never written to logs.
 - **Spansh** — optional read-only catalog data assists navigation and material guidance, with bundled offline fallbacks.
