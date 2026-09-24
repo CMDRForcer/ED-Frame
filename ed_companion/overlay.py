@@ -1,4 +1,4 @@
-"""Presentation-only engineering overlay settings and window geometry."""
+"""Presentation-only overlay settings and window geometry."""
 
 import json
 import os
@@ -41,12 +41,12 @@ def clamp_overlay_geometry(saved, screens, fallback_size=(420, 230)):
 class OverlaySettings(QObject):
     changed = Signal()
 
-    def __init__(self, path=None, parent=None):
+    def __init__(self, path=None, parent=None, filename="overlay_settings.json"):
         super().__init__(parent)
         self.path = Path(path) if path else (
             Path(os.environ.get("LOCALAPPDATA")
                  or (Path.home() / "AppData" / "Local"))
-            / "ED-Frame" / "overlay_settings.json"
+            / "ED-Frame" / filename
         )
         loaded = load_json_file(self.path, {})
         self._data = dict(DEFAULT_OVERLAY)
@@ -101,10 +101,11 @@ class OverlaySettings(QObject):
 class OverlayWindowRuntime(QObject):
     """Restore and persist one QML overlay window without domain logic."""
 
-    def __init__(self, window, settings, parent=None):
+    def __init__(self, window, settings, parent=None, fallback_size=(420, 230)):
         super().__init__(parent)
         self.window = window
         self.settings = settings
+        self.fallback_size = fallback_size
         self.timer = QTimer(self)
         self.timer.setSingleShot(True)
         self.timer.setInterval(250)
@@ -137,7 +138,7 @@ class OverlayWindowRuntime(QObject):
 
     def _restore_geometry(self):
         rectangle, _screen_id = clamp_overlay_geometry(
-            self.settings.geometry(), self._screens()
+            self.settings.geometry(), self._screens(), self.fallback_size,
         )
         self.window.setGeometry(QRect(*rectangle))
 

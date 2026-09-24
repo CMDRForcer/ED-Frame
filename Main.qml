@@ -383,6 +383,7 @@ ApplicationWindow {
         {"id": "logbook", "label": t("nav.logbook", "LOGBOOK"), "icon": "\uE8FD", "page": 9},
         {"id": "exobiology", "label": t("nav.exobiology", "EXOBIOLOGY"), "icon": "", "iconKind": "dna", "page": 13},
         {"id": "missions", "label": t("nav.missions", "MISSIONS"), "icon": "\uE71D", "page": 14},
+        {"id": "nav", "label": t("nav.nav", "NAV"), "icon": "\uE774", "page": 15},
         {"id": "settings", "label": t("nav.settings", "SETTINGS"), "icon": "\uE713", "page": 5}
     ]
     property var navigationOrder: cockpit.navigationOrder || []
@@ -1053,7 +1054,7 @@ ApplicationWindow {
                 font.pixelSize: 25
                 font.bold: true
                 Layout.leftMargin: 4
-                Layout.bottomMargin: 20
+                Layout.bottomMargin: 10
             }
             ListView {
                 id: navigationList
@@ -1061,7 +1062,7 @@ ApplicationWindow {
                 Layout.fillWidth: true
                 Layout.fillHeight: true
                 clip: true
-                spacing: 4
+                spacing: 2
                 interactive: contentHeight > height
                 boundsBehavior: Flickable.StopAtBounds
                 model: window.orderedNavigation()
@@ -1073,13 +1074,13 @@ ApplicationWindow {
                     required property var modelData
                     required property int index
                     width: ListView.view.width
-                    height: 54
+                    height: 44
                     property bool selectedNav: modelData.page === 5
                                                ? currentPage >= 5 && currentPage <= 7
                                                : currentPage === modelData.page
                     Rectangle {
                         id: navCard
-                        x: 0; y: 2; width: navTile.width; height: 50
+                        x: 0; y: 1; width: navTile.width; height: 42
                         z: navDrag.drag.active ? 100 : 1
                         activeFocusOnTab: true
                         Accessible.name: navTile.modelData.label
@@ -1089,7 +1090,7 @@ ApplicationWindow {
                                : navMouse.containsMouse ? inputBackground : "transparent"
                         Rectangle {
                             visible: navTile.selectedNav
-                            width: 4; height: 28; radius: 2; color: accent
+                            width: 4; height: 24; radius: 2; color: accent
                             anchors.left: parent.left; anchors.verticalCenter: parent.verticalCenter
                         }
                         Row {
@@ -1148,14 +1149,14 @@ ApplicationWindow {
                             drag.target: navCard
                             drag.minimumX: -navTile.x
                             drag.maximumX: navigationList.width - navTile.x - navCard.width
-                            drag.minimumY: -navTile.y + 2
-                            drag.maximumY: Math.max(2, navigationList.contentHeight - navTile.y - navCard.height - 2)
+                            drag.minimumY: -navTile.y + 1
+                            drag.maximumY: Math.max(1, navigationList.contentHeight - navTile.y - navCard.height - 1)
                             onReleased: {
                                 let target = navigationList.indexAt(
                                     navTile.x + navCard.x + navCard.width / 2,
                                     navTile.y + navCard.y + navCard.height / 2)
                                 navCard.x = 0
-                                navCard.y = 2
+                                navCard.y = 1
                                 if (target >= 0)
                                     window.moveNavigation(navTile.index, target)
                             }
@@ -1642,7 +1643,10 @@ ApplicationWindow {
                     text: cockpit.operationAction.materialScope
                           ? cockpit.operationAction.calculationWarning
                           : cockpit.calculationWarning
-                    color: error; font.pixelSize: 11; font.bold: true
+                    color: (cockpit.operationAction.materialScope
+                            ? cockpit.operationAction.calculationBlocked
+                            : cockpit.calculationBlocked) ? error : orange
+                    font.pixelSize: 11; font.bold: true
                     Layout.fillWidth: true; wrapMode: Text.WordWrap
                 }
                 Label {
@@ -2624,6 +2628,7 @@ ApplicationWindow {
                         width: wishlistList.width - 12
                         height: 280 + (modelData.targetConflict ? 54 : 0) + (materialsExpanded
                                        ? (modelData.materialProgress || []).length * 66 : 0)
+                                + (modelData.hasSafetyReserve ? 34 : 0)
                                 + (modelData.calculationWarning ? 34 : 0)
                         radius: 14
                         color: wishHover.containsMouse ? hover : panelRaised
@@ -2872,7 +2877,12 @@ ApplicationWindow {
                                 }
                                 Item { Layout.fillWidth: true }
                                 Label {
-                                    text: window.tf("status.units", "%1 / %2 units", [modelData.covered, modelData.required])
+                                    text: modelData.hasSafetyReserve
+                                          ? window.tf("wishlist.guaranteed_units",
+                                                      "%1 / %2 guaranteed units · minimum %3 + reserve %4",
+                                                      [modelData.covered, modelData.required,
+                                                       modelData.minimumRequired, modelData.reserveRequired])
+                                          : window.tf("status.units", "%1 / %2 units", [modelData.covered, modelData.required])
                                     color: muted; font.pixelSize: 11
                                 }
                             }
@@ -2938,8 +2948,17 @@ ApplicationWindow {
                                             }
                                             Label {
                                                 text: modelData.missing === 0
-                                                      ? "READY"
-                                                      : "MISSING " + modelData.missing
+                                                      ? (modelData.reserve > 0
+                                                         ? window.tf("wishlist.ready_with_reserve",
+                                                                     "READY · MIN %1 + RESERVE %2",
+                                                                     [modelData.minimumNeed, modelData.reserve])
+                                                         : "READY")
+                                                      : ("MISSING " + modelData.missing
+                                                         + (modelData.reserve > 0
+                                                            ? window.tf("wishlist.reserve_suffix",
+                                                                        " · MIN %1 + RESERVE %2",
+                                                                        [modelData.minimumNeed, modelData.reserve])
+                                                            : ""))
                                                 color: modelData.missing === 0 ? green
                                                      : modelData.status === "partial" ? orange : error
                                                 font.pixelSize: 9; font.bold: true
@@ -2949,9 +2968,17 @@ ApplicationWindow {
                                 }
                             }
                             Label {
+                                visible: modelData.hasSafetyReserve
+                                text: window.t("wishlist.reserve_explanation",
+                                               "GUARANTEED BUDGET · The reserve is carried only until Elite confirms the next grade.")
+                                color: orange; font.pixelSize: 10; font.bold: true
+                                Layout.fillWidth: true; wrapMode: Text.WordWrap
+                            }
+                            Label {
                                 visible: !!modelData.calculationWarning
                                 text: modelData.calculationWarning
-                                color: error; font.pixelSize: 10; font.bold: true
+                                color: modelData.completionReliable ? orange : error
+                                font.pixelSize: 10; font.bold: true
                                 Layout.fillWidth: true; wrapMode: Text.WordWrap
                             }
                             RowLayout {
@@ -3538,9 +3565,23 @@ ApplicationWindow {
                         }
                     }
                     ColumnLayout {
+                        id: powerBudgetPanel
                         Layout.fillWidth: true
                         spacing: 6
-                        visible: cockpit.shipPowerBudget.capacityKnown === true
+                        readonly property var actual: cockpit.shipPowerBudget || ({})
+                        readonly property var planned: cockpit.shipPowerPlan || ({})
+                        readonly property bool planUncertain: planned.capacityKnown !== true
+                            || (planned.unknownModuleSlots || []).length > 0
+                            || (planned.unknownEngineeringSlots || []).length > 0
+                            || (planned.unresolvedPlanSlots || []).length > 0
+                            || (planned.assumedStockSlots || []).length > 0
+                            || (planned.poweredOffSlots || []).length > 0
+                        function reserveText(value) {
+                            if (value === null || value === undefined)
+                                return "—"
+                            return (value >= 0 ? "+" : "") + Number(value).toFixed(2) + " MW"
+                        }
+                        visible: actual.capacityKnown === true || planned.hasPlan === true
                         RowLayout {
                             Layout.fillWidth: true
                             Label {
@@ -3548,32 +3589,88 @@ ApplicationWindow {
                                 text: window.t("engineering.power_budget", "POWER PLANT")
                                 color: muted; font.pixelSize: 9; font.bold: true
                             }
+                        }
+                        RowLayout {
+                            Layout.fillWidth: true
                             Label {
-                                text: Number(cockpit.shipPowerBudget.usedDrawMW || 0).toFixed(2) + " / "
-                                      + Number(cockpit.shipPowerBudget.capacityMW || 0).toFixed(2) + " MW"
-                                color: cockpit.shipPowerBudget.overloaded ? danger : textPrimary
+                                text: window.t("engineering.power_actual", "NOW")
+                                color: muted; font.pixelSize: 10; font.bold: true
+                            }
+                            Label {
+                                Layout.fillWidth: true
+                                horizontalAlignment: Text.AlignRight
+                                text: powerBudgetPanel.actual.capacityKnown
+                                      ? Number(powerBudgetPanel.actual.totalDrawMW || 0).toFixed(2) + " / "
+                                        + Number(powerBudgetPanel.actual.capacityMW || 0).toFixed(2) + " MW"
+                                      : "—"
+                                color: powerBudgetPanel.actual.overloaded ? danger : textPrimary
                                 font.pixelSize: 12; font.bold: true
+                            }
+                            Label {
+                                text: powerBudgetPanel.reserveText(powerBudgetPanel.actual.reserveMW)
+                                color: !powerBudgetPanel.actual.capacityKnown ? muted
+                                       : powerBudgetPanel.actual.overloaded ? danger : green
+                                font.pixelSize: 11; font.bold: true
                             }
                         }
                         Rectangle {
                             Layout.fillWidth: true; height: 8; radius: 4; color: borderTone
                             Rectangle {
                                 height: parent.height; radius: parent.radius
-                                color: cockpit.shipPowerBudget.overloaded ? danger
-                                       : (cockpit.shipPowerBudget.capacityMW > 0
-                                          && cockpit.shipPowerBudget.usedDrawMW / cockpit.shipPowerBudget.capacityMW > 0.9)
+                                color: powerBudgetPanel.actual.overloaded ? danger
+                                       : (powerBudgetPanel.actual.capacityMW > 0
+                                          && powerBudgetPanel.actual.totalDrawMW / powerBudgetPanel.actual.capacityMW > 0.9)
                                          ? orange : green
                                 width: parent.width * Math.max(0, Math.min(1,
-                                    cockpit.shipPowerBudget.capacityMW > 0
-                                    ? cockpit.shipPowerBudget.usedDrawMW / cockpit.shipPowerBudget.capacityMW : 0))
+                                    powerBudgetPanel.actual.capacityMW > 0
+                                    ? powerBudgetPanel.actual.totalDrawMW / powerBudgetPanel.actual.capacityMW : 0))
                                 Behavior on width { NumberAnimation { duration: 150 } }
+                            }
+                        }
+                        RowLayout {
+                            Layout.fillWidth: true
+                            visible: powerBudgetPanel.planned.hasPlan === true
+                            Label {
+                                text: window.t("engineering.power_plan", "PLAN")
+                                color: muted; font.pixelSize: 10; font.bold: true
+                            }
+                            Label {
+                                Layout.fillWidth: true
+                                horizontalAlignment: Text.AlignRight
+                                text: powerBudgetPanel.planned.capacityKnown
+                                      ? Number(powerBudgetPanel.planned.totalDrawMW || 0).toFixed(2) + " / "
+                                        + Number(powerBudgetPanel.planned.capacityMW || 0).toFixed(2) + " MW"
+                                      : "—"
+                                color: powerBudgetPanel.planned.overloaded ? danger : textPrimary
+                                font.pixelSize: 12; font.bold: true
+                            }
+                            Label {
+                                text: powerBudgetPanel.reserveText(powerBudgetPanel.planned.reserveMW)
+                                color: !powerBudgetPanel.planned.capacityKnown ? muted
+                                       : powerBudgetPanel.planned.overloaded ? danger
+                                       : powerBudgetPanel.planUncertain ? orange : green
+                                font.pixelSize: 11; font.bold: true
+                            }
+                        }
+                        Rectangle {
+                            Layout.fillWidth: true; height: 8; radius: 4; color: borderTone
+                            visible: powerBudgetPanel.planned.hasPlan === true
+                            Rectangle {
+                                height: parent.height; radius: parent.radius
+                                color: powerBudgetPanel.planned.overloaded ? danger
+                                       : powerBudgetPanel.planUncertain ? orange : green
+                                width: parent.width * Math.max(0, Math.min(1,
+                                    powerBudgetPanel.planned.capacityMW > 0
+                                    ? powerBudgetPanel.planned.totalDrawMW / powerBudgetPanel.planned.capacityMW : 0))
                             }
                         }
                         RowLayout {
                             Layout.fillWidth: true
                             spacing: 4
                             Repeater {
-                                model: cockpit.shipPowerBudget.groups || []
+                                model: powerBudgetPanel.planned.hasPlan
+                                       ? powerBudgetPanel.planned.groups || []
+                                       : powerBudgetPanel.actual.groups || []
                                 delegate: Rectangle {
                                     required property var modelData
                                     Layout.fillWidth: true
@@ -3598,16 +3695,69 @@ ApplicationWindow {
                         }
                         Label {
                             Layout.fillWidth: true
-                            visible: cockpit.shipPowerBudget.overloaded === true
+                            visible: powerBudgetPanel.actual.overloaded === true
                             text: window.t("engineering.power_overloaded",
                                 "Power draw exceeds Power Plant capacity — Priority 5 modules shut down first, then 4, 3, 2.")
                             color: danger; font.pixelSize: 9; wrapMode: Text.WordWrap
                         }
                         Label {
                             Layout.fillWidth: true
-                            visible: (cockpit.shipPowerBudget.unknownModuleSlots || []).length > 0
+                            visible: (powerBudgetPanel.actual.unknownModuleSlots || []).length > 0
                             text: window.t("engineering.power_unknown_modules",
                                 "Power draw unknown for one or more installed modules — this budget may be understated.")
+                            color: muted; font.pixelSize: 9; wrapMode: Text.WordWrap
+                        }
+                        Label {
+                            Layout.fillWidth: true
+                            visible: powerBudgetPanel.planned.hasPlan === true
+                                     && powerBudgetPanel.planned.overloaded === true
+                            text: window.t("engineering.power_plan_overloaded",
+                                "Planned load exceeds Power Plant output; lower-priority groups will shut down.")
+                            color: danger; font.pixelSize: 9; wrapMode: Text.WordWrap
+                        }
+                        Label {
+                            Layout.fillWidth: true
+                            visible: powerBudgetPanel.planned.hasPlan === true
+                                     && !powerBudgetPanel.planned.capacityKnown
+                            text: window.t("engineering.power_plan_unknown_capacity",
+                                "Planned Power Plant output is unknown; no reliable reserve can be shown.")
+                            color: orange; font.pixelSize: 9; wrapMode: Text.WordWrap
+                        }
+                        Label {
+                            Layout.fillWidth: true
+                            visible: (powerBudgetPanel.planned.unknownModuleSlots || []).length > 0
+                            text: window.t("engineering.power_plan_unknown_modules",
+                                "Planned module power is unknown; reserve may be overstated.")
+                            color: orange; font.pixelSize: 9; wrapMode: Text.WordWrap
+                        }
+                        Label {
+                            Layout.fillWidth: true
+                            visible: (powerBudgetPanel.planned.unresolvedPlanSlots || []).length > 0
+                                     || (powerBudgetPanel.planned.unknownEngineeringSlots || []).length > 0
+                            text: window.t("engineering.power_plan_unresolved",
+                                "Some planned engineering could not be matched to the target module or recipe.")
+                            color: orange; font.pixelSize: 9; wrapMode: Text.WordWrap
+                        }
+                        Label {
+                            Layout.fillWidth: true
+                            visible: (powerBudgetPanel.planned.assumedStockSlots || []).length > 0
+                            text: window.t("engineering.power_plan_stock",
+                                "Replacement modules without a planned engineering grade use stock values and are assumed switched on.")
+                            color: orange; font.pixelSize: 9; wrapMode: Text.WordWrap
+                        }
+                        Label {
+                            Layout.fillWidth: true
+                            visible: powerBudgetPanel.planned.hasPlan === true
+                                     && (powerBudgetPanel.planned.poweredOffSlots || []).length > 0
+                            text: window.t("engineering.power_plan_off",
+                                "Currently switched-off modules remain off in the plan; turning them on can reduce the reserve.")
+                            color: orange; font.pixelSize: 9; wrapMode: Text.WordWrap
+                        }
+                        Label {
+                            Layout.fillWidth: true
+                            visible: powerBudgetPanel.planned.hasPlan === true
+                            text: window.t("engineering.power_plan_caveat",
+                                "Plan uses catalog grade values; actual engineering rolls and deployed state may differ.")
                             color: muted; font.pixelSize: 9; wrapMode: Text.WordWrap
                         }
                     }
@@ -6808,6 +6958,19 @@ ApplicationWindow {
         asynchronous: false
         sourceComponent: Component {
             PowerplayPage {
+                appWindow: window
+                sidebarWidth: sidebar.width
+            }
+        }
+    }
+
+    Loader {
+        id: pageLoader15
+        anchors.fill: parent
+        active: window.currentPage === 15
+        asynchronous: false
+        sourceComponent: Component {
+            NavPage {
                 appWindow: window
                 sidebarWidth: sidebar.width
             }

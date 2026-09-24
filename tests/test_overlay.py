@@ -1,6 +1,7 @@
 from pathlib import Path
 from tempfile import TemporaryDirectory
 import unittest
+from unittest import mock
 
 from PySide6.QtCore import QRect
 
@@ -29,6 +30,29 @@ class OverlayTests(unittest.TestCase):
                 "screen": "DISPLAY-2", "x": 120, "y": 80,
                 "width": 460, "height": 240,
             })
+
+    def test_nav_overlay_settings_are_independent_and_persistent(self):
+        with TemporaryDirectory() as directory:
+            with mock.patch.dict("os.environ", {"LOCALAPPDATA": directory}):
+                engineering = OverlaySettings()
+                navigation = OverlaySettings(filename="nav_overlay_settings.json")
+            self.assertEqual(engineering.path.name, "overlay_settings.json")
+            self.assertEqual(navigation.path.name, "nav_overlay_settings.json")
+            navigation.visible = True
+            navigation.clickThrough = True
+            navigation.locked = True
+            navigation.opacity = 0.7
+            navigation.scale = 1.2
+            navigation.save_geometry("DISPLAY-2", QRect(300, 90, 360, 250))
+            restored = OverlaySettings(navigation.path)
+            self.assertTrue(restored.visible)
+            self.assertTrue(restored.clickThrough)
+            self.assertTrue(restored.locked)
+            self.assertAlmostEqual(restored.opacity, 0.7)
+            self.assertAlmostEqual(restored.scale, 1.2)
+            self.assertEqual(restored.geometry()["x"], 300)
+            self.assertFalse(engineering.visible)
+            self.assertFalse(engineering.clickThrough)
 
     def test_missing_monitor_geometry_falls_back_to_visible_primary_area(self):
         rectangle, screen_id = clamp_overlay_geometry(
@@ -69,6 +93,12 @@ class OverlayTests(unittest.TestCase):
         self.assertIn("cockpit.materialStatus", qml_source)
         self.assertNotIn("Journal", qml_source)
         self.assertNotIn("reloadJournalNow", qml_source)
+        nav_qml = (root / "qml" / "NavOverlay.qml").read_text(encoding="utf-8")
+        self.assertIn('qml" / "NavOverlay.qml"', main_source)
+        self.assertIn("cockpit.surfaceNav", nav_qml)
+        self.assertIn("navOverlay.guide.distanceM", nav_qml)
+        self.assertIn("navOverlaySettings.clickThrough", nav_qml)
+        self.assertNotIn("Status.json", nav_qml)
 
 
 if __name__ == "__main__":

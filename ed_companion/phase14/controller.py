@@ -146,9 +146,14 @@ COMMANDER_CARD_IDS = (
 NAVIGATION_IDS = (
     "operations", "engineering", "wishlist", "engineers", "materials",
     "mining-finder", "state-finds", "powerplay", "cmdr", "logbook",
-    "exobiology", "missions", "settings",
+    "exobiology", "missions", "nav", "settings",
 )
 LEGACY_DEFAULT_NAVIGATION_ORDERS = {
+    (
+        "operations", "engineering", "wishlist", "engineers", "materials",
+        "mining-finder", "state-finds", "powerplay", "cmdr", "logbook",
+        "exobiology", "missions", "settings",
+    ),
     (
         "operations", "engineering", "wishlist", "engineers", "materials",
         "state-finds", "cmdr", "logbook", "settings", "powerplay",
@@ -216,6 +221,7 @@ from .controller_fleet_materials import FleetMaterialsMixin
 from .controller_engineering import EngineeringMixin
 from .controller_logbook import LogbookMixin
 from .controller_exobiology import ExobiologyMixin
+from .controller_surface_nav import SurfaceNavMixin
 from .controller_frontier_capi import FrontierCapiMixin
 from .controller_inara import InaraMixin
 
@@ -298,6 +304,7 @@ FRONTIER_REQUEST_WATCHDOG_MS = 120_000
 
 class CockpitController(
     CommanderMixin, EddnMixin, EngineeringMixin, ExobiologyMixin,
+    SurfaceNavMixin,
     FleetMaterialsMixin, FrontierCapiMixin, InaraMixin, JournalHealthMixin,
     LogbookMixin, NavigationMixin, UiSettingsMixin, CoreControllerMixin,
     QObject,
@@ -404,7 +411,7 @@ class CockpitController(
         self._shutdown_complete = False
         self._network_threads = set()
         self._network_threads_lock = threading.Lock()
-        self._last_page = max(0, min(12, int(ui_config.get("last_page", 0) or 0)))
+        self._last_page = max(0, min(15, int(ui_config.get("last_page", 0) or 0)))
         configured_cards = ui_config.get("commander_card_order", [])
         configured_cards = configured_cards if isinstance(configured_cards, list) else []
         self._commander_card_order = list(dict.fromkeys(
@@ -597,6 +604,7 @@ class CockpitController(
             if isinstance(record, dict)
         ]
         self._init_exobiology()
+        self._init_surface_nav()
         self._activity = "Connecting to Elite Journal…"
         self._last_journal_stamp = None
         self._last_commander_status_stamp = None
@@ -1460,6 +1468,10 @@ class CockpitController(
         str, lambda self: str(self._get("calculationWarning", "")),
         notify=CoreControllerMixin.stateChanged,
     )
+    calculationBlocked = Property(
+        bool, lambda self: bool(self._get("calculationBlocked", False)),
+        notify=CoreControllerMixin.stateChanged,
+    )
     missingKinds = Property(int, lambda self: int(self._get("missingKinds", 0)), notify=CoreControllerMixin.stateChanged)
     trades = Property("QVariantList", lambda self: self._get("trades", []), notify=CoreControllerMixin.materialsChanged)
     tradeHistory = Property(
@@ -2230,6 +2242,7 @@ class CockpitController(
         if getattr(self, "_frontier_watchdog", None) is not None:
             self._frontier_watchdog.stop()
         self._bind_profile_paths(context)
+        self._init_surface_nav()
         self._frontier_credential_store = FrontierCredentialStore(
             self.frontier_credentials_file
         )
@@ -2524,7 +2537,7 @@ class CockpitController(
 
     @Slot(int)
     def setLastPage(self, page):
-        page = max(0, min(12, int(page)))
+        page = max(0, min(15, int(page)))
         if page != self._last_page:
             if self._last_page == 3 and page != 3:
                 self.clearCraftConfirmation()

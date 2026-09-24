@@ -416,6 +416,7 @@ class JournalHealthMixin:
     def pollJournal(self):
         if self._shutdown_complete:
             return
+        self._poll_surface_nav()
         if not self._journal_auto:
             self._maybe_start_inara_auto()
             self._process_eddn_queue()

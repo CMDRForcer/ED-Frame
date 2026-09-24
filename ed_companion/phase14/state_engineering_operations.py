@@ -200,14 +200,16 @@ def engineering_run_preflight(state: object, engineer_route: object) -> dict[str
         add(blockers, "MODULE_MISSING", "Target modules are not installed",
             f"{len(missing_modules)} bound slot(s) have no matching installed module.")
 
-    calculation_warnings = [
+    calculation_blockers = [
         str(plan.get("calculationWarning") or "")
-        for plan in plans if plan.get("calculationWarning")
+        for plan in plans
+        if plan.get("calculationBlocked") and plan.get("calculationWarning")
     ]
     state_warning = str(state.get("calculationWarning") or "")
-    if state_warning or calculation_warnings:
+    state_blocked = bool(state.get("calculationBlocked"))
+    if state_blocked or calculation_blockers:
         add(blockers, "RECIPE_DATA", "Material calculation is incomplete",
-            state_warning or calculation_warnings[0])
+            state_warning or calculation_blockers[0])
     uncertain = [
         plan for plan in plans
         if str(plan.get("targetStatus") or "") in {"not_started", "in_progress"}
@@ -508,6 +510,7 @@ def scope_operation_action_materials(state: object, action: object) -> dict:
         ],
         "planProgressStatus": str(priority.get("progressStatus") or ""),
         "calculationWarning": str(priority.get("calculationWarning") or ""),
+        "calculationBlocked": bool(priority.get("calculationBlocked")),
         "materialScope": "PRIORITY PLAN",
     })
     return result
@@ -802,7 +805,7 @@ def select_operation_action(
             "installationState": "MISMATCH" if installed_module else "EMPTY",
         }
     calculation_warning = str(state.get("calculationWarning") or "")
-    if calculation_warning:
+    if state.get("calculationBlocked"):
         return {
             "kind": "CALCULATION_BLOCKER",
             "title": "Resolve incomplete material data",
@@ -1225,4 +1228,3 @@ def select_operation_action(
         "targetPage": 1,
         "executable": True,
     }
-

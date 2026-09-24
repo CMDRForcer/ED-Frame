@@ -53,6 +53,7 @@ from ed_companion.phase14.state import (
     task_signature,
     write_ship_tasks,
 )
+from ed_companion.phase14.state_engineering import minimum_remaining_grade_rolls
 from ed_companion.loadout_export import build_loadout_export
 from ed_companion.navigation import find_nearest_catalog_trader
 from ed_companion.navigation.trader_search import _spansh_json
@@ -189,6 +190,70 @@ class ReleaseContractTests(unittest.TestCase):
         self.assertEqual(result["status"], "READY")
         self.assertTrue(result["ready"])
         self.assertEqual(result["blockers"], [])
+
+    def test_unknown_rank_safe_reserve_does_not_block_engineering_run(self):
+        plan = build_engineering_plan(
+            [{
+                "Type": "Heat Sink Launcher", "Name": "Ammo Capacity",
+                "Grade": 1,
+                "Ingredients": [{"Name": "Vanadium", "Size": 1}],
+            }],
+            0, 1, ship_id=37, slot="TinyHardpoint4",
+            module_id="hpt_heatsinklauncher_turret_tiny",
+        )
+        row = blueprint_rows([plan], {"vanadium": 5})[0]
+        row["installedModule"] = "hpt_heatsinklauncher_turret_tiny"
+
+        result = engineering_run_preflight(
+            {
+                "blueprints": [row],
+                "calculationWarning": row["calculationWarning"],
+                "calculationBlocked": row["calculationBlocked"],
+            },
+            [{"name": "Ram Tah", "craftable": True, "openJobs": 1}],
+        )
+
+        self.assertEqual(row["materialStatus"], "READY")
+        self.assertTrue(row["completionReliable"])
+        self.assertTrue(row["rollEstimateEstimated"])
+        self.assertFalse(row["calculationBlocked"])
+        self.assertEqual(result["status"], "READY")
+        self.assertTrue(result["ready"])
+        self.assertEqual(result["blockers"], [])
+
+    def test_unknown_rank_safe_reserve_does_not_block_operations(self):
+        plan = build_engineering_plan(
+            [{
+                "Type": "Heat Sink Launcher", "Name": "Ammo Capacity",
+                "Grade": 1,
+                "Ingredients": [{"Name": "Vanadium", "Size": 1}],
+            }],
+            0, 1, ship_id=37, slot="TinyHardpoint4",
+            module_id="hpt_heatsinklauncher_turret_tiny",
+        )
+        row = blueprint_rows([plan], {"vanadium": 5})[0]
+        row.update({
+            "priority": True,
+            "installedModule": "hpt_heatsinklauncher_turret_tiny",
+        })
+        state = {
+            "blueprints": [row],
+            "materials": [],
+            "trades": [],
+            "calculationWarning": row["calculationWarning"],
+            "calculationBlocked": row["calculationBlocked"],
+        }
+        route = [{
+            "name": "Ram Tah", "system": "Meene", "station": "Phoenix Base",
+            "craftable": True,
+            "jobNames": ["Heat Sink Launcher · Ammo Capacity · G1"],
+        }]
+
+        action = select_operation_action(state, route)
+
+        self.assertNotEqual(action["kind"], "CALCULATION_BLOCKER")
+        self.assertEqual(action["kind"], "GRADE_CRAFT")
+        self.assertEqual(action["actionGrade"], 1)
 
     def test_engineering_run_preflight_lists_independent_blockers(self):
         state = {"blueprints": [{
@@ -400,6 +465,7 @@ class ReleaseContractTests(unittest.TestCase):
                 "Materialbedarf noch nicht exakt berechenbar – "
                 "Engineer oder Rang nicht eindeutig."
             ),
+            "calculationBlocked": True,
         }
 
         action = select_operation_action(state, [])
@@ -1278,12 +1344,51 @@ class ReleaseContractTests(unittest.TestCase):
             module_id="hpt_heatsinklauncher_turret_tiny",
         )
         self.assertEqual(required_materials([plan]), {"vanadium": 5})
-        self.assertFalse(material_roll_estimates_reliable([plan]))
+        self.assertTrue(material_roll_estimates_reliable([plan]))
+        self.assertEqual(
+            required_materials([plan], minimum=True), {"vanadium": 1}
+        )
+        row = blueprint_rows([plan], {"vanadium": 5})[0]
+        self.assertTrue(row["completionReliable"])
+        self.assertEqual(row["minimumRequired"], 1)
+        self.assertEqual(row["reserveRequired"], 4)
+        self.assertIn("Fünf-Roll-Obergrenze", row["calculationWarning"])
+        self.assertFalse(row["calculationBlocked"])
         planner = plan[0]["_Planner"]
         planner["grade_progress"] = {"1": 0.25}
         planner["crafts_completed"] = {"1": 1}
         self.assertEqual(required_materials([plan]), {"vanadium": 3})
         self.assertTrue(material_roll_estimates_reliable([plan]))
+        progressed = blueprint_rows([plan], {"vanadium": 3})[0]
+        self.assertEqual(progressed["required"], 3)
+        self.assertEqual(progressed["reserveRequired"], 0)
+        self.assertEqual(progressed["rollEstimateKind"], "live_progress")
+        self.assertFalse(progressed["rollEstimateEstimated"])
+        self.assertEqual(progressed["calculationWarning"], "")
+
+    def test_known_rank_replaces_unknown_rank_reserve_without_underbudgeting(self):
+        blueprint = [{
+            "Type": "Heat Sink Launcher", "Name": "Ammo Capacity",
+            "Grade": 1, "Ingredients": [{"Name": "Vanadium", "Size": 1}],
+        }]
+        unknown = build_engineering_plan(blueprint, 0, 1, engineer_rank=0)
+        known = build_engineering_plan(blueprint, 0, 1, engineer_rank=5)
+
+        unknown_row = blueprint_rows([unknown], {"vanadium": 5})[0]
+        known_row = blueprint_rows([known], {"vanadium": 1})[0]
+
+        self.assertEqual(
+            (unknown_row["minimumRequired"], unknown_row["reserveRequired"]),
+            (1, 4),
+        )
+        self.assertEqual(
+            (known_row["minimumRequired"], known_row["reserveRequired"]),
+            (1, 0),
+        )
+        self.assertEqual(unknown_row["rollEstimateKind"], "conservative_max")
+        self.assertEqual(known_row["rollEstimateKind"], "engineer_rank")
+        self.assertTrue(unknown_row["completionReliable"])
+        self.assertTrue(known_row["completionReliable"])
 
     def test_engineer_rank_sets_exact_pre_craft_material_budget(self):
         plan = build_engineering_plan(
@@ -1323,6 +1428,129 @@ class ReleaseContractTests(unittest.TestCase):
             grade_progress={"3": 0.4}, crafts_completed={"3": 2},
         )
         self.assertEqual(required_materials([partial]), {"manganese": 3})
+
+    def test_intermediate_quality_is_not_a_completion_signal(self):
+        plan = build_engineering_plan(
+            [{
+                "Type": "Power Plant", "Name": "Armoured",
+                "Grade": grade,
+                "Ingredients": [{"Name": f"Material {grade}", "Size": 1}],
+            } for grade in (3, 4)],
+            3, 4, engineer_rank=4,
+            grade_progress={"3": 0.8}, crafts_completed={"3": 3},
+        )
+        planner = plan[0]["_Planner"]
+
+        self.assertEqual(remaining_grade_rolls(planner, plan[0]), 1)
+        self.assertEqual(minimum_remaining_grade_rolls(planner, plan[0]), 0)
+        self.assertEqual(
+            required_materials([plan]), {"material3": 1, "material4": 5}
+        )
+        self.assertEqual(
+            required_materials([plan], minimum=True), {"material4": 5}
+        )
+
+        planner["grade_progress"]["4"] = 0.2
+        planner["crafts_completed"]["4"] = 1
+        self.assertEqual(remaining_grade_rolls(planner, plan[0]), 0)
+
+    def test_blueprint_rows_expose_minimum_and_safety_reserve(self):
+        plan = build_engineering_plan(
+            [{
+                "Type": "Chaff Launcher", "Name": "Lightweight",
+                "Grade": grade,
+                "Ingredients": [{"Name": f"Material {grade}", "Size": 1}],
+            } for grade in range(1, 4)],
+            0, 3, engineer_rank=5,
+        )
+
+        row = blueprint_rows(
+            [plan], {"material1": 1, "material2": 2, "material3": 3}
+        )[0]
+
+        self.assertEqual(row["required"], 6)
+        self.assertEqual(row["minimumRequired"], 5)
+        self.assertEqual(row["reserveRequired"], 1)
+        self.assertTrue(row["hasSafetyReserve"])
+        self.assertTrue(row["completionReliable"])
+        material_two = next(
+            item for item in row["materialProgress"]
+            if item["key"] == "material2"
+        )
+        self.assertEqual(material_two["minimumNeed"], 1)
+        self.assertEqual(material_two["reserve"], 1)
+
+    def test_can_craft_next_uses_next_grade_recipe_not_target_grade(self):
+        plan = build_engineering_plan(
+            [{
+                "Type": "Plasma Accelerator", "Name": "Short Range Blaster",
+                "Grade": 1,
+                "Ingredients": [{"Name": "Nickel", "Size": 1}],
+            }, {
+                "Type": "Plasma Accelerator", "Name": "Short Range Blaster",
+                "Grade": 5,
+                "Ingredients": [{"Name": "Biotech Conductors", "Size": 1}],
+            }],
+            0, 5, engineer_rank=5,
+        )
+
+        row = blueprint_rows([plan], {"nickel": 1})[0]
+
+        self.assertEqual(row["nextGrade"], 1)
+        self.assertTrue(row["canCraftNext"])
+        self.assertEqual(row["rollEstimateSource"], "engineer_rank")
+
+    def test_shared_inventory_is_never_counted_twice_across_plans(self):
+        def plan(plan_id, slot):
+            return build_engineering_plan(
+                [{
+                    "Type": "Heat Sink Launcher", "Name": "Ammo Capacity",
+                    "Grade": 1,
+                    "Ingredients": [{"Name": "Vanadium", "Size": 1}],
+                }],
+                0, 1, plan_id=plan_id, ship_id=37, slot=slot,
+                module_id="hpt_heatsinklauncher_turret_tiny",
+            )
+
+        rows = blueprint_rows(
+            [plan("left", "TinyHardpoint1"), plan("right", "TinyHardpoint2")],
+            {"vanadium": 5},
+        )
+
+        allocated = sum(
+            material["have"] for row in rows
+            for material in row["materialProgress"]
+            if material["key"] == "vanadium"
+        )
+        self.assertEqual(allocated, 5)
+        self.assertEqual(sum(row["required"] for row in rows), 10)
+        self.assertFalse(any(row["materialStatus"] == "READY" for row in rows))
+
+    def test_unresolved_recipe_remains_a_real_calculation_blocker(self):
+        plan = build_engineering_plan(
+            [{
+                "Type": "Heat Sink Launcher", "Name": "Ammo Capacity",
+                "Grade": 1,
+                "Ingredients": [{"Name": "Unknown Future Material", "Size": 1}],
+            }],
+            0, 1, ship_id=37, slot="TinyHardpoint4",
+            module_id="hpt_heatsinklauncher_turret_tiny",
+        )
+        row = blueprint_rows(
+            [plan], {"unknownfuturematerial": 5}, metadata={},
+        )[0]
+        row["installedModule"] = "hpt_heatsinklauncher_turret_tiny"
+
+        result = engineering_run_preflight(
+            {"blueprints": [row]},
+            [{"name": "Ram Tah", "craftable": True, "openJobs": 1}],
+        )
+
+        self.assertTrue(row["calculationBlocked"])
+        self.assertFalse(row["completionReliable"])
+        self.assertIn("unbekanntes Material", row["calculationWarning"])
+        self.assertEqual(result["status"], "BLOCKED")
+        self.assertIn("RECIPE_DATA", {item["code"] for item in result["blockers"]})
 
     def test_existing_plan_is_rebudgeted_from_selected_engineer_rank(self):
         with TemporaryDirectory() as directory:

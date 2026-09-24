@@ -76,6 +76,7 @@ class ProfileContextTests(unittest.TestCase):
         controller._eddn_revision = 0
         controller.connectionChanged = _Signal()
         controller.hgeChanged = _Signal()
+        controller.surfaceNavChanged = _Signal()
         controller._eddn_profile_journal_paths = lambda: []
         controller._rebuild_eddn_context = lambda: {}
         controller._ensure_eddn_listener = lambda: None

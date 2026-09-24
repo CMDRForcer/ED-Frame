@@ -570,6 +570,10 @@ def ship_slot_layout(
             "desiredModule": desired_name,
             "desiredSizeRating": desired_size_rating,
             "planPending": False,
+            "planModuleId": "",
+            "planBindingRequired": False,
+            "planConflict": False,
+            "planMode": "",
             "planTargetGrade": 0,
             "planBlueprint": "",
             "planExperimental": "",
@@ -837,11 +841,131 @@ def ship_power_budget(slots: object) -> dict[str, Any]:
         "capacityMW": capacity,
         "capacityKnown": capacity_known,
         "totalDrawMW": total_draw,
+        "reserveMW": capacity - total_draw if capacity_known else None,
         "usedDrawMW": remaining if capacity_known else total_draw,
         "overloaded": capacity_known and total_draw > capacity,
         "groups": groups_summary,
         "consumers": consumers,
         "unknownModuleSlots": unknown_slots,
+    }
+
+
+def _planned_engineering_known(row: dict[str, Any]) -> bool:
+    """Whether every specified plan effect resolves to a catalog recipe."""
+    module_id = str(row.get("moduleId") or "")
+    matched_type = _matched_blueprint_type(module_id)
+    if not matched_type:
+        return False
+    grade = int(row.get("engineeringGrade") or 0)
+    blueprint = str(row.get("engineeringBlueprint") or "")
+    if grade > 0 and blueprint:
+        installed_name = JOURNAL_BLUEPRINT_NAMES.get(
+            normalize(blueprint), blueprint.replace("_", " "),
+        )
+        if not any(
+            effect.get("Type") == matched_type
+            and normalize(effect.get("Name")) == normalize(installed_name)
+            and int(effect.get("Grade") or 0) == grade
+            for effect in _blueprint_effect_rows()
+        ):
+            return False
+    experimental = str(row.get("experimentalEffect") or "")
+    if experimental:
+        installed_experimental = JOURNAL_EXPERIMENTAL_NAMES.get(
+            normalize(experimental), experimental.replace("_", " "),
+        )
+        if not any(
+            effect.get("Type") == matched_type
+            and _singular_key(effect.get("Name"))
+            == _singular_key(installed_experimental)
+            for effect in _experimental_effect_rows()
+        ):
+            return False
+    return True
+
+
+def ship_power_plan(slots: object) -> dict[str, Any]:
+    """Apply selected-ship outfitting and wishlist targets to a power budget.
+
+    A replacement's exact physical engineering is unknown until installed.
+    Model it as a stock module unless a bound wishlist plan supplies its
+    blueprint/grade. Replacements are assumed switched on so their load is
+    not silently omitted from the forecast.
+    """
+    rows = [row for row in (slots or []) if isinstance(row, dict)]
+    projected = []
+    changed_slots = []
+    assumed_stock_slots = []
+    unresolved_plan_slots = []
+    unknown_engineering_slots = []
+    for row in rows:
+        slot = str(row.get("slot") or "")
+        installed_id = str(row.get("moduleId") or "")
+        desired_id = str(row.get("desiredModuleId") or "")
+        plan_id = str(row.get("planModuleId") or "")
+        plan_pending = bool(row.get("planPending"))
+        desired_change = bool(desired_id) and not same_module_identity(
+            desired_id, installed_id,
+        )
+        target_id = (
+            desired_id if desired_change else
+            plan_id if (plan_pending and not row.get("planBindingRequired")
+                        and not row.get("planConflict"))
+            else installed_id
+        )
+        replacement = bool(target_id) and not same_module_identity(
+            target_id, installed_id,
+        )
+        planned = dict(row)
+        if replacement:
+            planned.update({
+                "moduleId": target_id, "empty": False, "poweredOn": True,
+                "engineeringBlueprint": "", "engineeringGrade": 0,
+                "experimentalEffect": "",
+            })
+        if replacement or plan_pending:
+            changed_slots.append(slot)
+        applies_plan = bool(
+            plan_pending and target_id and plan_id
+            and not row.get("planBindingRequired")
+            and not row.get("planConflict")
+            and same_module_identity(plan_id, target_id)
+        )
+        if plan_pending and not applies_plan:
+            unresolved_plan_slots.append(slot)
+        if applies_plan:
+            grade = int(row.get("planTargetGrade") or 0)
+            mode = str(row.get("planMode") or "")
+            blueprint = str(row.get("planBlueprint") or "")
+            experimental = str(row.get("planExperimental") or "")
+            if grade > 0 and mode != "experimental_only" and blueprint:
+                planned["engineeringBlueprint"] = blueprint
+                planned["engineeringGrade"] = grade
+            elif grade > 0 and mode != "experimental_only":
+                unresolved_plan_slots.append(slot)
+            if experimental:
+                planned["experimentalEffect"] = experimental
+            if (grade > 0 or experimental) and not _planned_engineering_known(planned):
+                unknown_engineering_slots.append(slot)
+        if replacement and not planned.get("engineeringGrade"):
+            assumed_stock_slots.append(slot)
+        projected.append(planned)
+    budget = ship_power_budget(projected)
+    current = ship_power_budget(rows)
+    powered_off_slots = [
+        str(row.get("slot") or "") for row in projected
+        if row.get("moduleId") and not row.get("poweredOn", True)
+    ]
+    return {
+        **budget,
+        "hasPlan": bool(changed_slots),
+        "changedSlots": changed_slots,
+        "assumedStockSlots": assumed_stock_slots,
+        "poweredOffSlots": powered_off_slots,
+        "unresolvedPlanSlots": list(dict.fromkeys(unresolved_plan_slots)),
+        "unknownEngineeringSlots": unknown_engineering_slots,
+        "drawDeltaMW": budget["totalDrawMW"] - current["totalDrawMW"],
+        "capacityDeltaMW": budget["capacityMW"] - current["capacityMW"],
     }
 
 

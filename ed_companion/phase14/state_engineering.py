@@ -152,6 +152,20 @@ MATERIAL_STATUS = ("READY", "PARTIAL", "MISSING")
 # budgeting the five-craft ceiling preserves the pre-craft material guarantee.
 MAX_GRADE_ROLLS = 5
 
+SAFE_ROLL_ESTIMATE_SOURCES = frozenset({
+    "engineer_rank", "journal_history", "conservative_max",
+})
+
+CONSERVATIVE_ROLL_NOTICE = (
+    "Ingenieursrang unbekannt – die garantierte Fünf-Roll-Obergrenze ist "
+    "als Reserve enthalten."
+)
+
+UNSAFE_ROLL_BLOCKER = (
+    "Materialbedarf nicht sicher berechenbar – für mindestens ein offenes "
+    "Grade fehlt eine belastbare Roll-Obergrenze."
+)
+
 
 def planned_grade_rolls(grade: object, engineer_rank: object = 0) -> int:
     level = max(1, min(MAX_GRADE_ROLLS, int(grade or 1)))
@@ -420,7 +434,13 @@ def migrate_wishlist_bindings(
 def remaining_grade_rolls(
     planner: dict[str, Any], grade: dict[str, Any]
 ) -> int:
-    """Return rolls still needed without treating an estimate as completion."""
+    """Return the safe roll budget still needed for one grade.
+
+    Journal ``Quality`` is progress evidence, but it is not a dependable
+    pre-craft signal that Elite has exposed the next grade. Intermediate
+    grades therefore stop only when their deterministic roll budget is spent
+    or a later grade is actually observed.
+    """
     level = int(grade.get("Grade", 0) or 0)
     if level <= 0:
         return 0
@@ -428,12 +448,7 @@ def remaining_grade_rolls(
     completed = planner.get("crafts_completed", {}) or {}
     quality = float(progress.get(str(level), 0) or 0)
     target = int(planner.get("target_grade", 0) or 0)
-    # Elite unlocks the next grade before the intermediate progress ring is
-    # visually full. Do not budget another lower-grade roll once Journal
-    # quality has crossed that usable boundary; the final target grade still
-    # requires complete quality.
-    completion_quality = 0.999 if level == target else 0.8
-    if quality >= completion_quality:
+    if quality >= 0.999:
         return 0
     if any(
         int(other_level) > level
@@ -453,7 +468,13 @@ def remaining_grade_rolls(
     if 0 < quality < 0.999 and done > 0:
         # Quality is stronger evidence than a catalog estimate. Derive the
         # observed total roll count (for example 1 craft / 25% = 4 rolls).
-        observed_total = max(done + 1, round(done / quality))
+        # Only the final target must force at least one more craft while its
+        # quality is incomplete; an intermediate grade may already expose the
+        # next grade after its observed roll budget is spent.
+        observed_total = max(
+            done + (1 if level == target else 0),
+            round(done / quality),
+        )
         planned = max(done, min(MAX_GRADE_ROLLS, observed_total))
     estimated_remaining = max(0, planned - done)
     if level == target:
@@ -461,11 +482,55 @@ def remaining_grade_rolls(
     return estimated_remaining
 
 
+def minimum_remaining_grade_rolls(
+    planner: dict[str, Any], grade: dict[str, Any]
+) -> int:
+    """Return only rolls that are certainly still required.
+
+    A future intermediate grade must be crafted at least once. Once an
+    intermediate grade has live progress, however, Journal does not reveal
+    whether the next grade is already selectable, so all remaining safe rolls
+    are contingency. The target grade has no such ambiguity and must be
+    completed in full.
+    """
+    safe_remaining = remaining_grade_rolls(planner, grade)
+    if safe_remaining <= 0:
+        return 0
+    level = int(grade.get("Grade", 0) or 0)
+    target = int(planner.get("target_grade", 0) or 0)
+    if level == target:
+        progress = planner.get("grade_progress", {}) or {}
+        completed = planner.get("crafts_completed", {}) or {}
+        source = str(
+            (planner.get("roll_estimate_sources", {}) or {}).get(str(level)) or ""
+        )
+        if (
+            source == "conservative_max"
+            and float(progress.get(str(level), 0) or 0) <= 0
+        ):
+            done = max(0, int(completed.get(str(level), 0) or 0))
+            return min(
+                safe_remaining,
+                max(0, planned_grade_rolls(level, MAX_GRADE_ROLLS) - done),
+            )
+        return safe_remaining
+    progress = planner.get("grade_progress", {}) or {}
+    completed = planner.get("crafts_completed", {}) or {}
+    if (
+        float(progress.get(str(level), 0) or 0) > 0
+        or int(completed.get(str(level), 0) or 0) > 0
+    ):
+        return 0
+    return 1
+
+
 
 def required_materials(
     tasks: object,
     metadata: dict[str, dict[str, Any]] | None = None,
     consistency_issues: list[str] | None = None,
+    *,
+    minimum: bool = False,
 ) -> dict[str, int]:
     display_keys: dict[str, list[str]] = defaultdict(list)
     if metadata is not None:
@@ -508,7 +573,10 @@ def required_materials(
             if grade.get("Kind") == "ExperimentalEffect":
                 rolls = max(1, int(grade.get("_Rolls", 1) or 1))
             else:
-                rolls = remaining_grade_rolls(planner, grade)
+                rolls = (
+                    minimum_remaining_grade_rolls(planner, grade)
+                    if minimum else remaining_grade_rolls(planner, grade)
+                )
             if rolls <= 0:
                 continue
             for ingredient in grade.get("Ingredients", []) or []:
@@ -538,8 +606,16 @@ def required_materials(
     return dict(required)
 
 
-def material_roll_estimates_reliable(tasks: object) -> bool:
-    """Return whether every unfinished grade has an exact roll basis."""
+def material_roll_estimate(tasks: object) -> dict[str, Any]:
+    """Return the single roll-safety decision shared by every app surface.
+
+    ``conservative_max`` is deliberately both reliable and estimated: it is a
+    guaranteed ceiling, so it may authorize a run once fully funded, while the
+    UI can still explain why a reserve is present. Only an unfinished grade
+    without any safe ceiling is blocking.
+    """
+    estimated = False
+    observed_sources: set[str] = set()
     for task in tasks or []:
         if not isinstance(task, list) or not task:
             continue
@@ -556,12 +632,35 @@ def material_roll_estimates_reliable(tasks: object) -> bool:
             if remaining_grade_rolls(planner, grade) <= 0:
                 continue
             if float(progress.get(str(level), 0) or 0) > 0:
+                observed_sources.add("live_progress")
                 continue
-            if str(sources.get(str(level)) or "") not in {
-                "engineer_rank", "journal_history",
-            }:
-                return False
-    return True
+            source = str(sources.get(str(level)) or "")
+            if source not in SAFE_ROLL_ESTIMATE_SOURCES:
+                return {
+                    "reliable": False,
+                    "estimated": estimated,
+                    "kind": "unsafe",
+                    "notice": "",
+                    "blockingReason": UNSAFE_ROLL_BLOCKER,
+                }
+            observed_sources.add(source)
+            estimated = estimated or source == "conservative_max"
+    return {
+        "reliable": True,
+        "estimated": estimated,
+        "kind": (
+            "conservative_max" if estimated else
+            next(iter(observed_sources)) if len(observed_sources) == 1 else
+            "mixed" if observed_sources else "not_applicable"
+        ),
+        "notice": CONSERVATIVE_ROLL_NOTICE if estimated else "",
+        "blockingReason": "",
+    }
+
+
+def material_roll_estimates_reliable(tasks: object) -> bool:
+    """Compatibility wrapper around the canonical roll-safety decision."""
+    return bool(material_roll_estimate(tasks)["reliable"])
 
 
 
@@ -648,6 +747,7 @@ def blueprint_rows(
     experimental_engineers = {}
     experimental_requirements: dict[str, dict[str, int]] = {}
     plan_requirements: dict[int, tuple[dict[str, int], list[str]]] = {}
+    plan_minimum_requirements: dict[int, dict[str, int]] = {}
     allocation_order: list[tuple[int, str, dict[str, int]]] = []
     material_plan_counts: dict[str, int] = defaultdict(int)
     priority_plan_id = next((
@@ -685,6 +785,9 @@ def blueprint_rows(
             continue
         unresolved: list[str] = []
         requirement = required_materials([task], metadata, unresolved)
+        plan_minimum_requirements[task_index] = required_materials(
+            [task], metadata, minimum=True,
+        )
         plan_requirements[task_index] = (requirement, unresolved)
         planner = first.get("_Planner", {})
         mode = planner_mode(planner)
@@ -727,6 +830,7 @@ def blueprint_rows(
         if not isinstance(task, list) or not task:
             continue
         requirement, unresolved = plan_requirements.get(task_index, ({}, []))
+        minimum_requirement = plan_minimum_requirements.get(task_index, {})
         first = next((item for item in task if isinstance(item, dict)), {})
         planner = first.get("_Planner", {}) if isinstance(first, dict) else {}
         mode = planner_mode(planner)
@@ -774,10 +878,10 @@ def blueprint_rows(
         next_craft_ingredients = {
             normalize(ingredient.get("Name") or ingredient.get("Name_Localised")):
             max(0, int(ingredient.get("Size", 1) or 1))
-            for ingredient in ((target_record or {}).get("Ingredients", []) or [])
+            for ingredient in ((next_grade_record or {}).get("Ingredients", []) or [])
             if normalize(ingredient.get("Name") or ingredient.get("Name_Localised"))
         }
-        can_craft_next = bool(target_record) and all(
+        can_craft_next = bool(next_grade_record) and all(
             int(allocation.get(key, 0) or 0) >= amount
             for key, amount in next_craft_ingredients.items()
         )
@@ -813,10 +917,11 @@ def blueprint_rows(
             if isinstance(item, dict) and item.get("Grade") is not None
         ]
         target_status = wishlist_target_status(planner)
+        roll_estimate = material_roll_estimate([task])
         estimate_sources = planner.get("roll_estimate_sources", {}) or {}
         active_grade = int(
-            target_record.get("Grade", 0) or 0
-        ) if target_record else 0
+            next_grade_record.get("Grade", 0) or 0
+        ) if next_grade_record else 0
         live_grade_progress = float(
             (planner.get("grade_progress", {}) or {}).get(
                 str(active_grade), 0
@@ -825,17 +930,16 @@ def blueprint_rows(
         roll_estimate_source = str(
             estimate_sources.get(str(active_grade)) or ""
         )
-        roll_estimate_reliable = bool(
-            target_status["code"] in {"completed", "experimental_pending"}
-            or live_grade_progress > 0
-            or roll_estimate_source in {"journal_history", "engineer_rank"}
-        )
+        roll_estimate_reliable = bool(roll_estimate["reliable"])
         is_priority = bool(
             priority_plan_id and str(planner.get("plan_id") or "") == priority_plan_id
         )
         material_progress = []
         for key, amount in requirement.items():
             need = max(0, int(amount or 0))
+            minimum_need = min(
+                need, max(0, int(minimum_requirement.get(key, 0) or 0))
+            )
             have = max(0, int(allocation.get(key, 0) or 0))
             missing = max(0, need - have)
             status = "ready" if missing == 0 else "empty" if have == 0 else "partial"
@@ -846,6 +950,8 @@ def blueprint_rows(
                 "category": str(details.get("Category") or "Unknown"),
                 "have": have,
                 "need": need,
+                "minimumNeed": minimum_need,
+                "reserve": max(0, need - minimum_need),
                 "missing": missing,
                 "progress": min(1.0, have / need) if need else 1.0,
                 "status": status,
@@ -864,6 +970,18 @@ def blueprint_rows(
         )
         material_status = material_status_label(missing_kinds, covered)
         progress_status = progress_status_label(target_status["code"])
+        minimum_total = sum(
+            min(
+                max(0, int(requirement.get(key, 0) or 0)),
+                max(0, int(amount or 0)),
+            )
+            for key, amount in minimum_requirement.items()
+        )
+        reserve_total = max(0, total - minimum_total)
+        conservative_rank = any(
+            str(source or "") == "conservative_max"
+            for source in estimate_sources.values()
+        )
         rows.append({
             "index": task_index,
             "planId": plan_id,
@@ -905,6 +1023,8 @@ def blueprint_rows(
             "gradeStatus": target_status["gradeStatus"],
             "gradeStatusLabel": target_status["gradeStatusLabel"],
             "rollEstimateReliable": roll_estimate_reliable,
+            "rollEstimateEstimated": bool(roll_estimate["estimated"]),
+            "rollEstimateKind": str(roll_estimate["kind"]),
             "rollEstimateSource": (
                 "live_progress" if live_grade_progress > 0
                 else roll_estimate_source or "catalog_default"
@@ -951,6 +1071,9 @@ def blueprint_rows(
                 next_grade_record.get("Grade", 0) or 0
             ) if next_grade_record else 0,
             "required": total,
+            "minimumRequired": minimum_total,
+            "reserveRequired": reserve_total,
+            "hasSafetyReserve": reserve_total > 0,
             "covered": covered,
             "completion": covered / total if total else 1.0,
             "completionPercent": int(round(covered / total * 100)) if total else 100,
@@ -964,9 +1087,12 @@ def blueprint_rows(
                     for message in unresolved
                 }))
                 if unresolved else
-                "Materialbedarf noch nicht exakt berechenbar – Engineer oder Rang nicht eindeutig."
-                if not roll_estimate_reliable else ""
+                str(roll_estimate["blockingReason"])
+                if not roll_estimate_reliable else
+                str(roll_estimate["notice"])
+                if conservative_rank else ""
             ),
+            "calculationBlocked": bool(unresolved) or not roll_estimate_reliable,
             "completionReliable": not unresolved and roll_estimate_reliable,
             "missingKinds": missing_kinds,
         })

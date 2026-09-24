@@ -183,6 +183,7 @@ from .state_fleet import (
     power_modifier_multiplier,
     reconcile_fleet_cache,
     ship_power_budget,
+    ship_power_plan,
     ship_slot_layout,
     slot_power_mw,
 )
@@ -243,6 +244,7 @@ from .state_engineering import (
     is_unconfirmed_legacy_history,
     journal_craft_baseline,
     material_completion,
+    material_roll_estimate,
     material_roll_estimates_reliable,
     material_status_label,
     migrate_legacy_plan_baselines,
@@ -488,6 +490,58 @@ def current_ship(
 
 
 
+def pending_power_plan_targets(tasks: object) -> dict[str, dict[str, Any]]:
+    """Combine unfinished grade and standalone experimental targets by slot."""
+    by_slot = {}
+    for task in tasks or []:
+        if not isinstance(task, list) or not task:
+            continue
+        first = next((row for row in task if isinstance(row, dict)), {})
+        planner = first.get("_Planner", {}) if isinstance(first, dict) else {}
+        if not isinstance(planner, dict):
+            continue
+        slot = str(planner.get("slot") or "")
+        if not slot or wishlist_target_status(planner)["code"] == "completed":
+            continue
+        target = by_slot.setdefault(slot, {
+            "planPending": True, "planModuleId": "",
+            "planBindingRequired": False, "planConflict": False,
+            "planMode": "", "planTargetGrade": 0,
+            "planBlueprint": "", "planExperimental": "",
+        })
+        module_id = str(planner.get("module_id") or "")
+        if (target["planModuleId"] and module_id
+                and not same_module_identity(target["planModuleId"], module_id)):
+            target["planConflict"] = True
+        elif module_id:
+            target["planModuleId"] = module_id
+        target["planBindingRequired"] = (
+            target["planBindingRequired"]
+            or bool(planner.get("binding_required")) or not module_id
+        )
+        grade = int(planner.get("target_grade") or 0)
+        mode = str(planner.get("plan_mode") or "")
+        blueprint = str(first.get("Name") or "")
+        if grade > 0 and mode != "experimental_only":
+            if (target["planTargetGrade"] > 0 and (
+                    target["planTargetGrade"] != grade
+                    or normalize(target["planBlueprint"]) != normalize(blueprint))):
+                target["planConflict"] = True
+            target["planTargetGrade"] = grade
+            target["planBlueprint"] = blueprint
+            target["planMode"] = mode or "grade_only"
+        elif not target["planMode"]:
+            target["planMode"] = "experimental_only"
+        experimental = str(planner.get("experimental_name") or "")
+        if experimental:
+            if (target["planExperimental"] and normalize(
+                    target["planExperimental"]
+            ) != normalize(experimental)):
+                target["planConflict"] = True
+            target["planExperimental"] = experimental
+    return by_slot
+
+
 def build_state(
     package_root, selected_ship="", preferred_plan_id="",
     trader_preference="confirmed",
@@ -602,21 +656,7 @@ def build_state(
             selected_ship_id, {}
         ),
     )
-    pending_plans_by_slot = {}
-    for task in tasks or []:
-        if not isinstance(task, list) or not task:
-            continue
-        first = next((row for row in task if isinstance(row, dict)), {})
-        planner = first.get("_Planner", {}) if isinstance(first, dict) else {}
-        slot = str(planner.get("slot") or "")
-        if not slot or wishlist_target_status(planner)["code"] == "completed":
-            continue
-        pending_plans_by_slot[slot] = {
-            "planPending": True,
-            "planTargetGrade": int(planner.get("target_grade") or 0),
-            "planBlueprint": str(first.get("Name") or ""),
-            "planExperimental": str(planner.get("experimental_name") or ""),
-        }
+    pending_plans_by_slot = pending_power_plan_targets(tasks)
     for row in engineering_ship_slots:
         row.update(pending_plans_by_slot.get(str(row.get("slot") or ""), {}))
     selected_loadout = next(
@@ -639,7 +679,8 @@ def build_state(
         ),
     }
     wishlist_required = required_materials(tasks, metadata, consistency_issues)
-    roll_estimates_reliable = material_roll_estimates_reliable(tasks)
+    roll_estimate = material_roll_estimate(tasks)
+    roll_estimates_reliable = bool(roll_estimate["reliable"])
     unlock_catalog = load_unlock_catalog(data_dir, package_root)
     unlock_signals = memoize_projection(
         "engineer_unlock_signals", _projection_key,
@@ -752,17 +793,20 @@ def build_state(
         "Materialbedarf unvollständig berechenbar – unbekanntes Material: "
         + ", ".join(unresolved_required)
         if unresolved_required else
-        "Materialbedarf noch nicht exakt berechenbar – Engineer oder Rang nicht eindeutig."
-        if not roll_estimates_reliable else ""
+        str(roll_estimate["blockingReason"])
+        if not roll_estimates_reliable else
+        str(roll_estimate["notice"])
     )
-    # A conservative roll ceiling keeps the inventory projection safe while
-    # the Engineer/rank is unknown, but it is not an exact shopping list.
-    # Do not turn that ceiling into trade or collection instructions: that
-    # could make the Commander acquire more material than the selected
-    # Engineer actually needs.
+    material_calculation_blocked = bool(
+        unresolved_required or not roll_estimates_reliable
+    )
+    # A conservative maximum is a safe shopping list: every listed reserve
+    # unit can be required by Elite, and the remaining requirement shrinks as
+    # Journal crafts reveal actual progress. Only genuinely unresolved data
+    # suppresses executable collection and trade instructions.
     trades = (
         plan_material_trades(missing, required, inventory, metadata)
-        if not material_calculation_warning else []
+        if not material_calculation_blocked else []
     )
     latest_location = next(
         (event for event in reversed(events)
@@ -1208,6 +1252,7 @@ def build_state(
         "engineeringModuleSlots": engineering_slots,
         "engineeringShipSlots": engineering_ship_slots,
         "shipPowerBudget": ship_power_budget(engineering_ship_slots),
+        "shipPowerPlan": ship_power_plan(engineering_ship_slots),
         "system": latest_location.get("StarSystem") or "Unknown system",
         "currentPosition": position or [],
         "techBrokerTrack": dict(tracked_row) if tracked_row else {},
@@ -1226,6 +1271,8 @@ def build_state(
             reliable=not unresolved_required and roll_estimates_reliable,
         ),
         "completionReliable": not unresolved_required and roll_estimates_reliable,
+        "rollEstimateEstimated": bool(roll_estimate["estimated"]),
+        "rollEstimateKind": str(roll_estimate["kind"]),
         "materialStatus": material_status,
         "planProgressStatus": aggregate_plan_progress(blueprint_state),
         "craftTrackingIssues": classified_craft_issues,
@@ -1243,6 +1290,7 @@ def build_state(
             row for row in classified_craft_issues if row.get("historical")
         ],
         "calculationWarning": material_calculation_warning,
+        "calculationBlocked": material_calculation_blocked,
         "missingKinds": len(missing),
         "trades": cards,
         "traderRoute": route.get("stops", []),

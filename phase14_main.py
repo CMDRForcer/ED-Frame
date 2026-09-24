@@ -344,6 +344,7 @@ class SmokeTestRunner(QObject):
         ("powerplay", 11, "qa-page-powerplay"),
         ("mining-finder", 12, "qa-page-mining-finder"),
         ("exobiology", 13, "qa-page-exobiology"),
+        ("nav", 15, "qa-page-nav"),
     ]
     DIALOG_STEPS = [
         ("dialog-build-import", "qa-dialog-build-import"),
@@ -356,7 +357,7 @@ class SmokeTestRunner(QObject):
 
     def __init__(
         self, app, window, qml_messages, screenshot=None,
-        overlay_window=None, controller=None, parent=None,
+        overlay_window=None, nav_overlay_window=None, controller=None, parent=None,
         flush_pending_qt_diagnostics=None,
     ):
         super().__init__(parent)
@@ -365,6 +366,7 @@ class SmokeTestRunner(QObject):
         self.qml_messages = qml_messages
         self.screenshot = screenshot
         self.overlay_window = overlay_window
+        self.nav_overlay_window = nav_overlay_window
         self.controller = controller
         self.flush_pending_qt_diagnostics = flush_pending_qt_diagnostics
         self.results = []
@@ -382,6 +384,7 @@ class SmokeTestRunner(QObject):
             ("connections-preview", self._connection_states),
             ("lazy-page-state-persistence", self._lazy_page_state),
             ("engineering-overlay", self._engineering_overlay),
+            ("nav-overlay", self._nav_overlay),
         ])
         for label, object_name in self.DIALOG_STEPS:
             self.steps.append((label, lambda n=object_name: self._dialog(n)))
@@ -452,6 +455,30 @@ class SmokeTestRunner(QObject):
             and readiness.property("text") == expected_readiness
         )
         self.overlay_window.hide()
+        return valid
+
+    def _nav_overlay(self):
+        if not self.nav_overlay_window or not self.controller:
+            return False
+        self.nav_overlay_window.show()
+        target_label = self.nav_overlay_window.findChild(
+            QObject, "overlay-nav-target"
+        )
+        distance_label = self.nav_overlay_window.findChild(
+            QObject, "overlay-nav-distance"
+        )
+        nav = self.controller.surfaceNav
+        target = next((row for row in nav.get("targets", [])
+                       if row.get("id") == nav.get("activeId")), {})
+        expected = target.get("name") or self.controller.translate(
+            "nav.no_target", "NO ACTIVE TARGET",
+        )
+        valid = bool(
+            target_label and distance_label
+            and target_label.property("text") == expected
+            and distance_label.property("text")
+        )
+        self.nav_overlay_window.hide()
         return valid
 
     def _lazy_page_state(self):
@@ -581,12 +608,14 @@ def tray_status_text(mode, journal_health):
 class TrayRuntime(QObject):
     """Own the optional Windows tray lifecycle without changing app logic."""
 
-    def __init__(self, app, window, controller, overlay_settings):
+    def __init__(self, app, window, controller, overlay_settings,
+                 nav_overlay_settings):
         super().__init__(app)
         self.app = app
         self.window = window
         self.controller = controller
         self.overlay_settings = overlay_settings
+        self.nav_overlay_settings = nav_overlay_settings
         self.quitting = False
         self.available = QSystemTrayIcon.isSystemTrayAvailable()
         self.controller.setSystemTrayAvailable(self.available)
@@ -602,6 +631,12 @@ class TrayRuntime(QObject):
         self.overlay_lock_action.setCheckable(True)
         self.overlay_click_action = QAction("Click-through Overlay", self.menu)
         self.overlay_click_action.setCheckable(True)
+        self.nav_overlay_action = QAction("Show Nav Overlay", self.menu)
+        self.nav_overlay_action.setCheckable(True)
+        self.nav_overlay_lock_action = QAction("Lock Nav Overlay", self.menu)
+        self.nav_overlay_lock_action.setCheckable(True)
+        self.nav_overlay_click_action = QAction("Click-through Nav Overlay", self.menu)
+        self.nav_overlay_click_action.setCheckable(True)
         self.status_action = QAction("Status", self.menu)
         self.status_action.setEnabled(False)
         self.exit_action = QAction("Exit ED-Frame", self.menu)
@@ -612,6 +647,10 @@ class TrayRuntime(QObject):
         self.menu.addAction(self.overlay_action)
         self.menu.addAction(self.overlay_lock_action)
         self.menu.addAction(self.overlay_click_action)
+        self.menu.addSeparator()
+        self.menu.addAction(self.nav_overlay_action)
+        self.menu.addAction(self.nav_overlay_lock_action)
+        self.menu.addAction(self.nav_overlay_click_action)
         self.menu.addSeparator()
         self.menu.addAction(self.status_action)
         self.menu.addSeparator()
@@ -625,6 +664,11 @@ class TrayRuntime(QObject):
         self.overlay_click_action.triggered.connect(
             overlay_settings.toggleClickThrough
         )
+        self.nav_overlay_action.triggered.connect(nav_overlay_settings.toggleVisible)
+        self.nav_overlay_lock_action.triggered.connect(nav_overlay_settings.toggleLocked)
+        self.nav_overlay_click_action.triggered.connect(
+            nav_overlay_settings.toggleClickThrough
+        )
         self.exit_action.triggered.connect(self.exit_app)
         self.restart_action.triggered.connect(self.restart_app)
         self.menu.aboutToShow.connect(self.update_status)
@@ -633,6 +677,7 @@ class TrayRuntime(QObject):
         self.controller.uiChanged.connect(self.sync)
         self.controller.activityChanged.connect(self.update_status)
         self.overlay_settings.changed.connect(self.update_status)
+        self.nav_overlay_settings.changed.connect(self.update_status)
         self.sync()
         self.restart_requested = False
 
@@ -649,6 +694,9 @@ class TrayRuntime(QObject):
         self.overlay_action.setChecked(self.overlay_settings.visible)
         self.overlay_lock_action.setChecked(self.overlay_settings.locked)
         self.overlay_click_action.setChecked(self.overlay_settings.clickThrough)
+        self.nav_overlay_action.setChecked(self.nav_overlay_settings.visible)
+        self.nav_overlay_lock_action.setChecked(self.nav_overlay_settings.locked)
+        self.nav_overlay_click_action.setChecked(self.nav_overlay_settings.clickThrough)
         if not self.available:
             mode = "TRAY UNAVAILABLE"
         else:
@@ -721,6 +769,9 @@ def run():
 
     controller = CockpitController()
     overlay_settings = OverlaySettings(parent=app)
+    nav_overlay_settings = OverlaySettings(
+        parent=app, filename="nav_overlay_settings.json",
+    )
     frontier_auth = FrontierOAuthCallbackRuntime(
         initial_oauth_callback, parent=app
     )
@@ -728,6 +779,7 @@ def run():
     engine = QQmlApplicationEngine()
     engine.rootContext().setContextProperty("cockpit", controller)
     engine.rootContext().setContextProperty("overlaySettings", overlay_settings)
+    engine.rootContext().setContextProperty("navOverlaySettings", nav_overlay_settings)
     engine.rootContext().setContextProperty(
         "smokeInjectQmlError",
         smoke_test and os.environ.get("PHASE14_SMOKE_INJECT_QML_ERROR") == "1",
@@ -758,7 +810,21 @@ def run():
     overlay_runtime = OverlayWindowRuntime(
         overlay_window, overlay_settings, parent=app
     )
-    tray_runtime = TrayRuntime(app, window, controller, overlay_settings)
+    nav_overlay_qml = Path(__file__).resolve().parent / "qml" / "NavOverlay.qml"
+    engine.load(QUrl.fromLocalFile(str(nav_overlay_qml)))
+    nav_overlay_window = next((
+        root for root in engine.rootObjects()
+        if root.objectName() == "nav-overlay-window"
+    ), None)
+    if nav_overlay_window is None:
+        return 2
+    nav_overlay_runtime = OverlayWindowRuntime(
+        nav_overlay_window, nav_overlay_settings, parent=app,
+        fallback_size=(360, 250),
+    )
+    tray_runtime = TrayRuntime(
+        app, window, controller, overlay_settings, nav_overlay_settings,
+    )
     single_instance.activationRequested.connect(tray_runtime.show_window)
     single_instance.oauthCallbackReceived.connect(frontier_auth.accept)
     frontier_auth.callbackReceived.connect(
@@ -849,7 +915,8 @@ def run():
     if smoke_test:
         smoke_runner = SmokeTestRunner(
             app, window, smoke_messages, screenshot=screenshot,
-            overlay_window=overlay_window, controller=controller, parent=app,
+            overlay_window=overlay_window, nav_overlay_window=nav_overlay_window,
+            controller=controller, parent=app,
             flush_pending_qt_diagnostics=flush_pending_qt_diagnostics,
         )
         smoke_runner.start()

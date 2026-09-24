@@ -13,7 +13,7 @@ class NavigationOrderTests(unittest.TestCase):
             (
                 "operations", "engineering", "wishlist", "engineers", "materials",
                 "mining-finder", "state-finds", "powerplay", "cmdr", "logbook",
-                "exobiology", "missions", "settings",
+                "exobiology", "missions", "nav", "settings",
             ),
         )
 
@@ -22,6 +22,14 @@ class NavigationOrderTests(unittest.TestCase):
             "operations", "engineering", "wishlist", "engineers", "materials",
             "state-finds", "mining-finder", "cmdr", "logbook", "settings",
             "powerplay",
+        ]
+        self.assertEqual(initial_navigation_order(previous_default), list(NAVIGATION_IDS))
+
+    def test_previous_release_default_places_nav_before_settings(self):
+        previous_default = [
+            "operations", "engineering", "wishlist", "engineers", "materials",
+            "mining-finder", "state-finds", "powerplay", "cmdr", "logbook",
+            "exobiology", "missions", "settings",
         ]
         self.assertEqual(initial_navigation_order(previous_default), list(NAVIGATION_IDS))
 
