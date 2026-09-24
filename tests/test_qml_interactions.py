@@ -86,6 +86,27 @@ class QmlInteractionContractTests(unittest.TestCase):
         self.assertIn("visible: nbaLayout.showEngineerOptions", source)
         self.assertIn('"ENGINEER · UNLOCK REQUIRED"', source)
 
+    def test_engineer_cards_preserve_exact_journal_access_status(self):
+        source = (ROOT / "Main.qml").read_text(encoding="utf-8-sig")
+
+        self.assertGreaterEqual(
+            source.count(
+                'window.localizedStatus(modelData.statusGroup || "unknown")'
+            ),
+            1,
+        )
+        self.assertIn(
+            'engineersPage.selectedRow.statusGroup || "unknown"', source
+        )
+        self.assertIn(
+            'border.color: modelData.statusGroup === "invited" ? warning : borderTone',
+            source,
+        )
+        self.assertNotIn(
+            'modelData.statusGroup === "invited" || modelData.statusGroup === "known"',
+            source,
+        )
+
     def test_assets_chart_chrome_requires_authoritative_asset_data(self):
         source = (ROOT / "Main.qml").read_text(encoding="utf-8-sig")
 

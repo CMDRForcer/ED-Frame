@@ -4641,11 +4641,10 @@ ApplicationWindow {
                                     Layout.fillWidth: true
                                     Label { text: modelData.name; color: textPrimary; font.pixelSize: 16; font.bold: true }
                                     Label {
-                                        text: modelData.statusGroup === "unlocked" ? window.t("status.value.unlocked", "UNLOCKED")
-                                              : modelData.statusGroup === "invited" || modelData.statusGroup === "known"
-                                                ? window.t("status.value.pending", "PENDING")
-                                                : window.t("status.value.missing", "MISSING")
-                                        color: modelData.statusGroup === "unlocked" ? green : orange
+                                        text: window.localizedStatus(modelData.statusGroup || "unknown")
+                                        color: modelData.statusGroup === "unlocked" ? green
+                                               : modelData.statusGroup === "invited" ? orange
+                                               : modelData.statusGroup === "known" ? cyan : muted
                                         font.pixelSize: 10; font.bold: true
                                     }
                                     Label { text: modelData.rank > 0 ? window.tf("powerplay.rank_value", "RANK %1", [modelData.rank]) : ""; color: cyan; font.pixelSize: 10; font.bold: true }
@@ -4753,7 +4752,9 @@ ApplicationWindow {
                     color: active
                     border.width: 1
                     border.color: engineersPage.selectedRow.statusGroup === "unlocked"
-                                  ? success : warning
+                                  ? success
+                                  : engineersPage.selectedRow.statusGroup === "invited"
+                                    ? warning : borderTone
                     ColumnLayout {
                         anchors.fill: parent; anchors.margins: 15; spacing: 6
                         RowLayout {
@@ -4783,10 +4784,11 @@ ApplicationWindow {
                             Layout.fillWidth: true
                                                 Label { text: window.t("common.status", "STATUS"); color: muted; font.pixelSize: 9; font.bold: true; Layout.preferredWidth: 118 }
                             Label {
-                                text: engineersPage.selectedRow.statusGroup === "unlocked"
-                                      ? window.t("status.value.unlocked", "UNLOCKED")
-                                      : window.t("status.value.pending", "PENDING")
-                                color: engineersPage.selectedRow.statusGroup === "unlocked" ? green : orange
+                                text: window.localizedStatus(
+                                          engineersPage.selectedRow.statusGroup || "unknown")
+                                color: engineersPage.selectedRow.statusGroup === "unlocked" ? green
+                                       : engineersPage.selectedRow.statusGroup === "invited" ? orange
+                                       : engineersPage.selectedRow.statusGroup === "known" ? cyan : muted
                                 font.pixelSize: 11; font.bold: true
                             }
                         }
