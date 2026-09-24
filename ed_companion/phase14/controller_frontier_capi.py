@@ -31,6 +31,7 @@ from ed_companion.i18n import (
 )
 from ed_companion.persistence import atomic_write, load_json_file
 from ed_companion.history_archive import HistoryArchive
+from ed_companion.logging_security import log_exception_safely, redact_secrets
 from ed_companion.integrations.inara import (
     INARA_BATCH_WINDOW_SECONDS,
     INARA_MAX_REQUESTS_PER_MINUTE,
@@ -420,18 +421,33 @@ class FrontierCapiMixin:
                     "error": "",
                 })
             except FrontierCapiError as exc:
+                secret_values = (
+                    getattr(active_tokens, "access_token", ""),
+                    getattr(active_tokens, "refresh_token", ""),
+                )
                 self.frontierFinished.emit({
                     "requestToken": request_token,
                     "profileGeneration": profile_generation,
                     "tokens": active_tokens,
                     "client": client,
                     "profile": {},
-                    "error": str(exc),
+                    "error": redact_secrets(
+                        exc, extra_secrets=secret_values
+                    ),
                 })
             except Exception as exc:
                 # Any unexpected failure must still report back, or the tab
                 # stays pinned in its busy state until the app restarts.
-                LOGGER.exception("Frontier CAPI worker failed")
+                secret_values = (
+                    getattr(active_tokens, "access_token", ""),
+                    getattr(active_tokens, "refresh_token", ""),
+                )
+                log_exception_safely(
+                    LOGGER,
+                    "Frontier CAPI worker failed",
+                    exc,
+                    extra_secrets=secret_values,
+                )
                 self.frontierFinished.emit({
                     "requestToken": request_token,
                     "profileGeneration": profile_generation,

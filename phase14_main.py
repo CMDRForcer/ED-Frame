@@ -8,6 +8,7 @@ import traceback
 from pathlib import Path
 
 from ed_companion.persistence import atomic_write, cleanup_stale_atomic_temps
+from ed_companion.logging_security import redact_secrets
 
 
 # Kept as a literal string, not imported from ed_companion.phase14.state_core
@@ -245,21 +246,28 @@ def install_diagnostics(smoke_messages=None):
     pending_delegate_failure = None  # (context, message), awaiting pairing
 
     def crash_hook(exc_type, exc_value, exc_traceback):
+        rendered = redact_secrets("".join(traceback.format_exception(
+            exc_type, exc_value, exc_traceback
+        )))
         try:
             crash_dir = directory / "crashes"
             crash_dir.mkdir(parents=True, exist_ok=True)
             path = crash_dir / f"crash-{time.strftime('%Y%m%d-%H%M%S')}.log"
             atomic_write(
                 path,
-                "".join(traceback.format_exception(
-                    exc_type, exc_value, exc_traceback
-                )),
+                rendered,
             )
         finally:
-            sys.__excepthook__(exc_type, exc_value, exc_traceback)
+            # ``sys.__excepthook__`` would render the raw exception again and
+            # undo the redaction on stderr.
+            try:
+                sys.stderr.write(rendered)
+            except (OSError, UnicodeError):
+                pass
 
     def emit_message(context, message):
-        source = getattr(context, "file", "") or "QML"
+        source = redact_secrets(getattr(context, "file", "") or "QML")
+        message = redact_secrets(message)
         line = getattr(context, "line", 0) or 0
         is_qml = str(source).lower().endswith(".qml") or ".qml:" in str(message).lower()
         if smoke_messages is not None and is_qml:

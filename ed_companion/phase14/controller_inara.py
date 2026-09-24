@@ -31,6 +31,11 @@ from ed_companion.i18n import (
 )
 from ed_companion.persistence import atomic_write, load_json_file
 from ed_companion.history_archive import HistoryArchive
+from ed_companion.logging_security import (
+    log_exception_safely,
+    redact_secrets,
+    safe_exception_text,
+)
 from ed_companion.integrations.inara import (
     INARA_BATCH_WINDOW_SECONDS,
     INARA_MAX_REQUESTS_PER_MINUTE,
@@ -47,6 +52,10 @@ from ed_companion.integrations.inara import (
     prepare_journal_batch,
     profile_event,
     send_events,
+)
+from ed_companion.integrations.inara_credentials import (
+    InaraCredentialError,
+    InaraCredentialStore,
 )
 from ed_companion.integrations.frontier_capi import (
     FRONTIER_CLIENT_ID,
@@ -235,6 +244,31 @@ class InaraMixin:
     inaraJournalScanReady = Signal(object)
 
 
+    def _inara_credential_store(self):
+        protect = getattr(self, "_inara_credential_protect", None)
+        unprotect = getattr(self, "_inara_credential_unprotect", None)
+        return InaraCredentialStore(
+            self.inara_config_file.with_name("inara_credentials.dat"),
+            protect=protect,
+            unprotect=unprotect,
+        )
+
+
+    @staticmethod
+    def _public_inara_config(config):
+        return {
+            key: value for key, value in dict(config or {}).items()
+            if key != "api_key" and not str(key).startswith("_")
+        }
+
+
+    def _write_public_inara_config(self, config):
+        return atomic_write(
+            self.inara_config_file,
+            json.dumps(self._public_inara_config(config), indent=2),
+        )
+
+
     def _load_inara_config(self):
         defaults = {
             "api_key": "", "commander_name": "", "frontier_id": "",
@@ -245,12 +279,57 @@ class InaraMixin:
             defaults.update({
                 key: loaded.get(key, defaults[key]) for key in defaults
             })
+        legacy_key = str(defaults.get("api_key") or "").strip()
+        secure_key = ""
+        credential_error = ""
+        try:
+            secure_key = self._inara_credential_store().load()
+        except InaraCredentialError as exc:
+            credential_error = str(exc)
+
+        if secure_key:
+            defaults["api_key"] = secure_key
+            self._inara_key_protected = True
+        elif legacy_key:
+            # One-time migration.  The plaintext remains untouched unless the
+            # DPAPI-protected copy was stored successfully.
+            try:
+                self._inara_credential_store().save(legacy_key)
+                self._inara_key_protected = True
+                if not self._write_public_inara_config(defaults):
+                    credential_error = (
+                        "The INARA API key is protected, but the legacy "
+                        "plaintext configuration could not yet be cleaned."
+                    )
+            except InaraCredentialError as exc:
+                self._inara_key_protected = False
+                credential_error = str(exc)
+        else:
+            self._inara_key_protected = True
+
+        # A successfully loaded secure key also cleans up a legacy duplicate
+        # left behind by an earlier interrupted migration.
+        if secure_key and isinstance(loaded, dict) and "api_key" in loaded:
+            if not self._write_public_inara_config(defaults):
+                credential_error = (
+                    "The protected INARA key is usable, but the legacy "
+                    "plaintext configuration could not yet be cleaned."
+                )
+        self._inara_credential_error = credential_error
         return defaults
 
 
     def _save_inara_config(self):
+        payload = self._public_inara_config(self._inara_config)
+        if (
+            self._inara_config.get("api_key")
+            and not getattr(self, "_inara_key_protected", False)
+        ):
+            # Availability-preserving fallback after a DPAPI failure: never
+            # delete the only usable copy of an existing legacy key.
+            payload["api_key"] = self._inara_config["api_key"]
         return self._persist_json(
-            self.inara_config_file, self._inara_config, "INARA configuration"
+            self.inara_config_file, payload, "INARA configuration"
         )
 
 
@@ -276,12 +355,6 @@ class InaraMixin:
 
     inaraCommander = Property(
         str, lambda self: str(self._inara_config.get("commander_name") or ""),
-        notify=CoreControllerMixin.connectionChanged,
-    )
-
-
-    inaraApiKey = Property(
-        str, lambda self: str(self._inara_config.get("api_key") or ""),
         notify=CoreControllerMixin.connectionChanged,
     )
 
@@ -344,18 +417,39 @@ class InaraMixin:
         if not self._sync_eddn_profile():
             return
         previous = dict(self._inara_config)
+        previous_protected = bool(getattr(self, "_inara_key_protected", False))
         api_key = str(api_key or "").strip()
         # Only overwrite the stored key when the user actually provided one.
         # An empty field means "keep the existing key" (use CLEAR KEY to remove).
         if api_key:
+            try:
+                self._inara_credential_store().save(api_key)
+            except InaraCredentialError as exc:
+                self._inara_status = f"INARA API key was not changed · {exc}"
+                self.connectionChanged.emit()
+                return
             self._inara_config["api_key"] = api_key
+            self._inara_key_protected = True
         self._inara_config.update({
             "commander_name": str(commander or "").strip(),
             "consent": bool(consent),
             "auto_sync": bool(auto_sync),
         })
         if not self._save_inara_config():
+            if api_key:
+                try:
+                    if previous.get("api_key") and previous_protected:
+                        self._inara_credential_store().save(
+                            previous["api_key"]
+                        )
+                    else:
+                        self._inara_credential_store().clear()
+                except InaraCredentialError:
+                    LOGGER.error(
+                        "INARA credential rollback failed after config error"
+                    )
             self._inara_config = previous
+            self._inara_key_protected = previous_protected
             self._inara_status = (
                 "INARA configuration could not be saved; previous settings remain active."
             )
@@ -382,10 +476,26 @@ class InaraMixin:
         if not self._sync_eddn_profile():
             return
         previous = dict(self._inara_config)
+        previous_protected = bool(getattr(self, "_inara_key_protected", False))
+        try:
+            self._inara_credential_store().clear()
+        except InaraCredentialError as exc:
+            self._inara_status = f"INARA API key was not removed · {exc}"
+            self.connectionChanged.emit()
+            return
         self._inara_config["api_key"] = ""
         self._inara_config["auto_sync"] = False
+        self._inara_key_protected = True
         if not self._save_inara_config():
+            try:
+                if previous.get("api_key") and previous_protected:
+                    self._inara_credential_store().save(previous["api_key"])
+            except InaraCredentialError:
+                LOGGER.error(
+                    "INARA credential rollback failed after config error"
+                )
             self._inara_config = previous
+            self._inara_key_protected = previous_protected
             self._inara_status = (
                 "INARA API key could not be removed from disk; previous settings remain active."
             )
@@ -562,6 +672,7 @@ class InaraMixin:
         ))
         self._inara_scan_in_flight = True
         self._inara_scan_dirty = False
+        secret_values = (self._inara_config.get("api_key", ""),)
 
         def worker():
             try:
@@ -570,7 +681,9 @@ class InaraMixin:
                     use_cached_events=True,
                 )
             except Exception as exc:
-                result = {"error": f"{type(exc).__name__}: {exc}"}
+                result = {"error": safe_exception_text(
+                    exc, extra_secrets=secret_values
+                )}
             self.inaraJournalScanReady.emit((
                 token, generation, profile_key, result,
             ))
@@ -850,6 +963,7 @@ class InaraMixin:
         self.connectionChanged.emit()
 
         def worker():
+            secret_values = (config.get("api_key", ""),)
             try:
                 # batch_events is always bound above for every operation
                 local_events = list(batch_events)
@@ -880,7 +994,9 @@ class InaraMixin:
                     "operation": operation,
                     "success": False,
                     "message": json.dumps({
-                        "message": str(exc),
+                        "message": redact_secrets(
+                            exc, extra_secrets=secret_values
+                        ),
                         "retryable": exc.retryable,
                         "statusCode": exc.status_code,
                         "schemaError": exc.schema_error,
@@ -889,14 +1005,19 @@ class InaraMixin:
                     "ships": [],
                 })
             except Exception as exc:
-                LOGGER.exception("INARA worker failed (%s)", operation)
+                log_exception_safely(
+                    LOGGER,
+                    f"INARA worker failed ({operation})",
+                    exc,
+                    extra_secrets=secret_values,
+                )
                 self.inaraFinished.emit({
                     "context": request_context,
                     "operation": operation,
                     "success": False,
                     "message": (
                         "Unexpected local connector error: "
-                        f"{type(exc).__name__}: {exc}"
+                        f"{safe_exception_text(exc, extra_secrets=secret_values)}"
                     ),
                     "ships": [],
                 })

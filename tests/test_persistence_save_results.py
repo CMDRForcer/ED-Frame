@@ -80,6 +80,12 @@ class PersistenceSaveResultTests(unittest.TestCase):
             root = Path(directory)
             controller = CockpitController.__new__(CockpitController)
             controller.inara_config_file = root / "inara_config.json"
+            controller._inara_credential_protect = (
+                lambda value: b"protected:" + value[::-1]
+            )
+            controller._inara_credential_unprotect = (
+                lambda value: value[len(b"protected:"):][::-1]
+            )
             controller._inara_config = {
                 "api_key": "old-key", "commander_name": "Old Commander",
                 "frontier_id": "F-OLD", "consent": True,
@@ -87,6 +93,8 @@ class PersistenceSaveResultTests(unittest.TestCase):
             }
             controller._sync_eddn_profile = lambda: True
             controller.connectionChanged = _Signal()
+            controller._inara_credential_store().save("old-key")
+            controller._inara_key_protected = True
             controller._save_inara_config()
             old_bytes = controller.inara_config_file.read_bytes()
 
@@ -98,6 +106,9 @@ class PersistenceSaveResultTests(unittest.TestCase):
                 )
 
             self.assertEqual(controller._inara_config["api_key"], "old-key")
+            self.assertEqual(
+                controller._inara_credential_store().load(), "old-key"
+            )
             self.assertEqual(controller.inara_config_file.read_bytes(), old_bytes)
             self.assertIn("could not be saved", controller._inara_status)
 
@@ -105,7 +116,10 @@ class PersistenceSaveResultTests(unittest.TestCase):
             saved = json.loads(
                 controller.inara_config_file.read_text(encoding="utf-8")
             )
-            self.assertEqual(saved["api_key"], "new-key")
+            self.assertNotIn("api_key", saved)
+            self.assertEqual(
+                controller._inara_credential_store().load(), "new-key"
+            )
             self.assertIn("Configuration saved", controller._inara_status)
 
     def test_navigation_and_commander_order_save_or_roll_back_together(self):

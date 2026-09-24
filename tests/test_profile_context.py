@@ -55,6 +55,12 @@ class ProfileContextTests(unittest.TestCase):
         controller._navroute_rejections = {}
         controller._logbook_notes = {}
         controller._inara_config = {}
+        controller._inara_credential_protect = (
+            lambda value: b"protected:" + value[::-1]
+        )
+        controller._inara_credential_unprotect = (
+            lambda value: value[len(b"protected:"):][::-1]
+        )
         controller._inara_cache = {}
         controller._inara_receipts = []
         controller._inara_busy = False
@@ -91,6 +97,8 @@ class ProfileContextTests(unittest.TestCase):
             "auto_sync": True,
             "request_times": [],
         }
+        controller._inara_credential_store().save(key)
+        controller._inara_key_protected = True
         controller._save_inara_config()
 
     def _prepare_spansh_controller(self, controller):
@@ -411,6 +419,12 @@ class ProfileContextTests(unittest.TestCase):
             self.assertEqual(alpha_config["frontier_id"], "F-ALPHA")
             self.assertEqual(bravo_config["api_key"], "")
             self.assertFalse(bravo_config["consent"])
+            saved_public = json.loads(
+                (alpha.directory / "inara_config.json").read_text(
+                    encoding="utf-8"
+                )
+            )
+            self.assertNotIn("api_key", saved_public)
 
 
 if __name__ == "__main__":

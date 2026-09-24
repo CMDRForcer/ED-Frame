@@ -31,8 +31,10 @@ phase14.log
 journal_path.txt
 
 inara_config.json
+inara_credentials.dat
 inara_receipts.json
 inara_journal_cache.json
+frontier_credentials.dat
 
 eddn_config.json
 eddn_journal_cursor.json

@@ -1,7 +1,8 @@
 import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
-from unittest.mock import Mock
+from types import SimpleNamespace
+from unittest.mock import Mock, patch
 
 from ed_companion.phase14.dashboard_views import (
     build_commander_cards,
@@ -19,6 +20,7 @@ from ed_companion.phase14.state import (
     merge_capi_loadout,
 )
 from ed_companion.phase14.controller import CockpitController
+from ed_companion.integrations.frontier_capi import FrontierCapiError
 
 
 class DashboardViewTests(unittest.TestCase):
@@ -460,7 +462,14 @@ class FrontierRequestResilienceTests(unittest.TestCase):
         self.assertTrue(controller._frontier_busy)
         controller._frontier_watchdog.start.assert_called_once()
 
-        workers[0]()
+        with self.assertLogs(
+            "ed_companion.phase14.controller_frontier_capi", level="ERROR"
+        ) as captured:
+            workers[0]()
+        log_output = "\n".join(captured.output)
+        self.assertIn("RuntimeError", log_output)
+        self.assertIn("[REDACTED]", log_output)
+        self.assertNotIn("SUPERSECRET", log_output)
         payload = controller.frontierFinished.emit.call_args.args[0]
         self.assertEqual(payload["profile"], {})
         self.assertIn("RuntimeError", payload["error"])
@@ -471,6 +480,26 @@ class FrontierRequestResilienceTests(unittest.TestCase):
         controller._frontier_watchdog.stop.assert_called_once()
         self.assertNotIn("SUPERSECRET", controller._frontier_status)
         self.assertNotIn("TIMED OUT", controller._frontier_status)
+
+    def test_expected_frontier_error_is_defensively_redacted(self):
+        controller = self._controller()
+        controller._frontier_client.query.side_effect = FrontierCapiError(
+            "Frontier rejected token=KNOWN-SECRET-123456"
+        )
+        workers = []
+        controller._start_network_worker = (
+            lambda target, _name: workers.append(target) or True
+        )
+
+        controller._start_frontier_profile_request(
+            tokens=controller._frontier_tokens
+        )
+        workers[0]()
+
+        payload = controller.frontierFinished.emit.call_args.args[0]
+        self.assertIn("Frontier rejected", payload["error"])
+        self.assertIn("[REDACTED]", payload["error"])
+        self.assertNotIn("KNOWN-SECRET-123456", payload["error"])
 
     def test_watchdog_releases_a_request_that_never_reports(self):
         controller = self._controller()
@@ -694,6 +723,52 @@ class InaraInitialStatusTests(unittest.TestCase):
             CockpitController._inara_initial_status(None),
             "Ready. No network request has been made.",
         )
+
+
+class InaraRequestSecurityTests(unittest.TestCase):
+    def test_unexpected_worker_error_masks_api_key_in_log_and_result(self):
+        secret = "INARA-API-KEY-123456"
+        controller = CockpitController.__new__(CockpitController)
+        controller._sync_eddn_profile = lambda: True
+        controller._inara_busy = False
+        controller._inara_connection_enabled = lambda: True
+        controller._inara_rate_wait_seconds = lambda _now: 0
+        controller._inara_config = {
+            "consent": True,
+            "api_key": secret,
+            "commander_name": "Test Commander",
+        }
+        controller._state = {"materials": []}
+        controller._inara_cache = {}
+        controller._reserve_inara_request = Mock()
+        controller._profile_generation = 1
+        controller.profile_context = SimpleNamespace(
+            key="test-profile", directory=Path.cwd()
+        )
+        controller.connectionChanged = Mock()
+        controller.inaraFinished = Mock()
+        workers = []
+        controller._start_network_worker = (
+            lambda target, _name: workers.append(target) or True
+        )
+
+        self.assertTrue(controller._start_inara("test"))
+        with patch(
+            "ed_companion.phase14.controller_inara.send_events",
+            side_effect=RuntimeError(f"transport echoed {secret}"),
+        ), self.assertLogs(
+            "ed_companion.phase14.controller_inara", level="ERROR"
+        ) as captured:
+            workers[0]()
+
+        log_output = "\n".join(captured.output)
+        payload = controller.inaraFinished.emit.call_args.args[0]
+        self.assertIn("RuntimeError", log_output)
+        self.assertIn("[REDACTED]", log_output)
+        self.assertNotIn(secret, log_output)
+        self.assertIn("RuntimeError", payload["message"])
+        self.assertIn("[REDACTED]", payload["message"])
+        self.assertNotIn(secret, payload["message"])
 
 
 class FrontierConsentTests(unittest.TestCase):
