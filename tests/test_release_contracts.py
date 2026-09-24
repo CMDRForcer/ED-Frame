@@ -37,6 +37,7 @@ from ed_companion.phase14.state import (
     build_experimental_plan,
     engineering_run_preflight,
     engineering_loadout_rows,
+    engineer_options_for_plan,
     latest_loadout_slots,
     latest_loadout_slots_by_ship,
     learn_blueprint_id_catalog,
@@ -924,6 +925,91 @@ class ReleaseContractTests(unittest.TestCase):
 
         self.assertEqual([row["name"] for row in route], ["Near G5"])
         self.assertTrue(route[0]["craftable"])
+
+    def test_locked_route_prefers_invited_engineer_over_nearer_known_choice(self):
+        plans = [{
+            "module": "Fragment Cannon", "blueprint": "Overcharged Weapon",
+            "grade": 5, "targetGrade": 5, "nextGrade": 1,
+            "eligibleEngineers": ["Marsha Hicks", "Zacariah Nemo"],
+            "selectedEngineer": "Zacariah Nemo",
+            "completion": 0.5, "targetStatus": "not_started",
+        }]
+        engineers = [{
+            "name": "Marsha Hicks", "statusGroup": "invited", "rank": 0,
+            "distance": 500, "status": "INVITED",
+        }, {
+            "name": "Zacariah Nemo", "statusGroup": "known", "rank": 0,
+            "distance": 1, "status": "KNOWN",
+        }]
+
+        route = assign_plans_to_nearest_engineers(plans, engineers)
+
+        self.assertEqual([row["name"] for row in route], ["Marsha Hicks"])
+        self.assertFalse(route[0]["craftable"])
+
+    def test_engineer_options_list_all_and_only_target_grade_capable_engineers(self):
+        plan = {
+            "module": "Fragment Cannon", "blueprint": "Overcharged Weapon",
+            "targetGrade": 5, "nextGrade": 1,
+        }
+        engineers = [{
+            "name": "Marsha Hicks", "statusGroup": "invited", "rank": 0,
+            "distance": 500,
+        }, {
+            "name": "Zacariah Nemo", "statusGroup": "known", "rank": 0,
+            "distance": 1,
+        }, {
+            "name": "Tod McQuinn", "statusGroup": "unlocked", "rank": 5,
+            "distance": 10,
+        }]
+        records = [{
+            "Type": "Fragment Cannon", "Name": "Overcharged Weapon",
+            "Grade": 3, "Engineers": ["Tod McQuinn"],
+        }, {
+            "Type": "Fragment Cannon", "Name": "Overcharged Weapon",
+            "Grade": 5, "Engineers": ["Marsha Hicks", "Zacariah Nemo"],
+        }]
+
+        options = engineer_options_for_plan(plan, engineers, records)
+
+        self.assertEqual(
+            [row["name"] for row in options],
+            ["Marsha Hicks", "Zacariah Nemo"],
+        )
+        self.assertEqual(options[0]["statusText"], "INVITED · UNLOCK REQUIRED")
+        self.assertEqual(options[1]["statusText"], "KNOWN · UNLOCK REQUIRED")
+
+    def test_engineer_unlock_precedes_material_run_when_no_target_is_craftable(self):
+        plan = {
+            "module": "Fragment Cannon", "blueprint": "Overcharged Weapon",
+            "grade": 5, "targetGrade": 5, "nextGrade": 1,
+            "targetStatus": "not_started", "canCraftNext": False,
+            "materialProgress": [{
+                "key": "nickel", "name": "Nickel", "missing": 1,
+            }],
+        }
+        route = [{
+            "name": "Marsha Hicks", "craftable": False,
+            "jobNames": ["Fragment Cannon · Overcharged Weapon · G5"],
+            "unlockGuide": {
+                "nextAction": "Complete Marsha Hicks' invitation.",
+                "navigationSystem": "Tir", "navigationStation": "The Watchtower",
+            },
+        }]
+        state = {
+            "blueprints": [plan],
+            "materials": [{"key": "nickel", "name": "Nickel", "missing": 1}],
+            "trades": [{
+                "targetKey": "nickel", "receiveAmount": 1,
+                "system": "Lodemo", "station": "Bluford Hub",
+            }],
+        }
+
+        action = select_operation_action(state, route)
+
+        self.assertEqual(action["kind"], "ENGINEER_UNLOCK")
+        self.assertEqual(action["engineerName"], "Marsha Hicks")
+        self.assertIn("invitation", action["detail"])
 
     def test_unlocked_engineer_can_rank_up_during_progressive_grade_run(self):
         plans = [{

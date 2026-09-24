@@ -76,6 +76,16 @@ class QmlInteractionContractTests(unittest.TestCase):
         )
         self.assertIn("continue after loadout confirmation.", source)
 
+    def test_next_best_action_shows_every_target_grade_engineer_option(self):
+        source = (ROOT / "Main.qml").read_text(encoding="utf-8-sig")
+
+        self.assertIn(
+            "property bool showEngineerOptions: engineerOptions.length > 1",
+            source,
+        )
+        self.assertIn("visible: nbaLayout.showEngineerOptions", source)
+        self.assertIn('"ENGINEER · UNLOCK REQUIRED"', source)
+
     def test_assets_chart_chrome_requires_authoritative_asset_data(self):
         source = (ROOT / "Main.qml").read_text(encoding="utf-8-sig")
 

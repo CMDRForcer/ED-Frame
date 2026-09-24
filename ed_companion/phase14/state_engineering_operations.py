@@ -989,6 +989,37 @@ def select_operation_action(
             )
         ), None)
 
+    def engineer_unlock_action(stop):
+        guide = dict(stop.get("unlockGuide") or {})
+        system = str(guide.get("navigationSystem") or "")
+        station = str(guide.get("navigationStation") or "")
+        next_step = str(
+            guide.get("nextAction")
+            or (stop.get("blockReasons") or [
+                "Unlock or rank up this Engineer."
+            ])[0]
+        )
+        return {
+            "kind": "ENGINEER_UNLOCK",
+            "title": f"Unlock {stop.get('name', 'required Engineer')}",
+            "detail": next_step,
+            "reason": (
+                "No Engineer who can complete this target Grade is currently "
+                "craftable. The most advanced eligible access path is shown first."
+            ),
+            "after": (
+                "After access and rank are confirmed, continue this same plan; "
+                "its material reserve remains available."
+            ),
+            "system": system,
+            "station": station,
+            "buttonLabel": "COPY TARGET SYSTEM" if system else "OPEN ENGINEERS",
+            "targetPage": -1 if system else 4,
+            "executable": True,
+            "portraitUrl": str(stop.get("portraitUrl") or ""),
+            "engineerName": str(stop.get("name") or ""),
+        }
+
     def craft_action(plan, stop, experimental=False):
         system = str((stop or {}).get("system") or "")
         station = str((stop or {}).get("station") or "")
@@ -1100,6 +1131,11 @@ def select_operation_action(
             "system": "", "station": "", "buttonLabel": "OPEN WISHLIST",
             "targetPage": 1, "executable": True,
         }
+    # Engineer access is a real prerequisite, unlike an unknown material-roll
+    # estimate. Surface the best unlock path before sending the Commander on a
+    # material run that cannot yet end in an executable craft.
+    if active_stop and not active_stop.get("craftable", False):
+        return engineer_unlock_action(active_stop)
     # A plan already underway - a Grade roll banked, or only its planned
     # Experimental left - is a workflow already in progress at an Engineer.
     # Its own materials being ready must keep it primary; the global
@@ -1164,33 +1200,7 @@ def select_operation_action(
     if route:
         stop = route[0]
         if not stop.get("craftable", False):
-            guide = dict(stop.get("unlockGuide") or {})
-            system = str(guide.get("navigationSystem") or "")
-            station = str(guide.get("navigationStation") or "")
-            next_step = str(
-                guide.get("nextAction")
-                or (stop.get("blockReasons") or [
-                    "Unlock or rank up this Engineer."
-                ])[0]
-            )
-            return {
-                "kind": "ENGINEER_UNLOCK",
-                "title": f"Unlock {stop.get('name', 'required Engineer')}",
-                "detail": next_step,
-                "reason": (
-                    f"The selected blueprint requires an unlocked Engineer with "
-                    f"sufficient rank; {stop.get('name', 'this Engineer')} is the "
-                    "best eligible route target but is not craftable yet."
-                ),
-                "after": "After access and rank are confirmed, the ready craft becomes the primary action.",
-                "system": system,
-                "station": station,
-                "portraitUrl": str(stop.get("portraitUrl") or ""),
-                "engineerName": str(stop.get("name") or ""),
-                "buttonLabel": "COPY TARGET SYSTEM" if system else "OPEN ENGINEERS",
-                "targetPage": -1 if system else 4,
-                "executable": True,
-            }
+            return engineer_unlock_action(stop)
         distance = float(stop.get("distance", -1) or -1)
         system = str(stop.get("system") or "")
         station = str(stop.get("station") or "")

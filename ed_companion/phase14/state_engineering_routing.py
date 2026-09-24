@@ -216,17 +216,32 @@ def _shortest_engineer_route(names, engineer_index):
 
 
 def _minimum_engineer_cover(candidate_sets, engineer_index):
-    """Minimize stops first and the complete route distance second."""
+    """Minimize stops, then access work, then complete route distance."""
     requirements = [set(values) for values in candidate_sets if values]
     if not requirements:
         return set()
     best = None
+
+    access_order = {
+        "unlocked": 0,
+        "invited": 1,
+        "known": 2,
+        "unknown": 3,
+        "locked": 4,
+    }
+
+    def engineer_access(name):
+        return access_order.get(
+            str(engineer_index.get(name, {}).get("statusGroup") or "unknown").casefold(),
+            5,
+        )
 
     def engineer_order(name):
         row = engineer_index.get(name, {})
         distance_value = row.get("distance")
         distance = float(distance_value if distance_value is not None else -1)
         return (
+            engineer_access(name),
             distance < 0,
             distance if distance >= 0 else 0,
             str(name).casefold(),
@@ -239,7 +254,9 @@ def _minimum_engineer_cover(candidate_sets, engineer_index):
             route, distance = _shortest_engineer_route(
                 candidate, engineer_index
             )
-            score = (len(candidate), distance, tuple(
+            score = (len(candidate), sum(
+                engineer_access(name) for name in candidate
+            ), distance, tuple(
                 name.casefold() for name in route
             ))
             if best is None or score < best[0]:
@@ -318,7 +335,23 @@ def assign_plans_to_nearest_engineers(plans, engineer_rows):
             elif selected in candidates:
                 candidates = [selected]
         elif selected in candidates:
-            candidates = [selected]
+            # A stale/manual choice must not hide an easier access path. Keep
+            # it only when it is at least as far unlocked as every alternative.
+            access_order = {
+                "unlocked": 0, "invited": 1, "known": 2,
+                "unknown": 3, "locked": 4,
+            }
+            selected_access = access_order.get(str(
+                engineer_index[selected].get("statusGroup") or "unknown"
+            ).casefold(), 5)
+            best_access = min(
+                access_order.get(str(
+                    engineer_index[name].get("statusGroup") or "unknown"
+                ).casefold(), 5)
+                for name in candidates
+            )
+            if selected_access == best_access:
+                candidates = [selected]
         prepared.append((
             plan, target_grade, next_grade, candidates, bool(usable)
         ))
@@ -431,9 +464,11 @@ def engineer_options_for_plan(plan, engineer_rows, blueprint_records=None):
             continue
         row = engineer_index.get(name, {})
         rank = int(row.get("rank", 0) or 0)
-        unlocked = str(row.get("statusGroup") or "") == "unlocked"
+        access_status = str(row.get("statusGroup") or "unknown").casefold()
+        unlocked = access_status == "unlocked"
         if not unlocked:
-            code, text = "unlock_required", "UNLOCK REQUIRED"
+            code = "unlock_required"
+            text = f"{access_status.upper()} · UNLOCK REQUIRED"
         elif rank >= next_grade and rank < target:
             code, text = "rank_progression", "RANK UP HERE"
         elif rank < next_grade:
@@ -446,6 +481,7 @@ def engineer_options_for_plan(plan, engineer_rows, blueprint_records=None):
             "station": str(row.get("station") or ""),
             "maxGrade": maximum,
             "rank": rank,
+            "accessStatus": access_status,
             "status": code,
             "statusText": text,
             "craftable": code in {"craftable", "rank_progression"},
@@ -456,8 +492,13 @@ def engineer_options_for_plan(plan, engineer_rows, blueprint_records=None):
         "craftable": 0, "rank_progression": 1,
         "rank_too_low": 2, "unlock_required": 3,
     }
+    access_order = {
+        "unlocked": 0, "invited": 1, "known": 2,
+        "unknown": 3, "locked": 4,
+    }
     return sorted(options, key=lambda row: (
         order.get(row["status"], 9),
+        access_order.get(row["accessStatus"], 5),
         -int(row["rank"]),
         row["distance"] < 0,
         row["distance"] if row["distance"] >= 0 else 0,

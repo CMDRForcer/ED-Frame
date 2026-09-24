@@ -1290,6 +1290,11 @@ ApplicationWindow {
             property bool installationBlocked: cockpit.operationAction.kind === "OUTFITTING_BLOCKER"
             property bool loadoutBlocked: cockpit.operationAction.kind === "LOADOUT_BLOCKER"
             property bool modulePrerequisiteBlocked: installationBlocked || loadoutBlocked
+            property bool engineerUnlockRequired: cockpit.operationAction.kind === "ENGINEER_UNLOCK"
+                                                  || cockpit.operationAction.kind === "ENGINEER_PREPARE"
+            property var engineerOptions: cockpit.operationAction.engineerOptions || []
+            property bool showEngineerOptions: engineerOptions.length > 1
+                                               || (engineerUnlockRequired && engineerOptions.length > 0)
             property string engineerPortrait: cockpit.operationAction.portraitUrl
                                                 || cockpit.nextEngineerStop.portraitUrl || ""
             property string engineerName: cockpit.operationAction.engineerName
@@ -1298,7 +1303,7 @@ ApplicationWindow {
                                                 || cockpit.nextEngineerStop.station || ""
             property string engineerSystem: cockpit.operationAction.system
                                                || cockpit.nextEngineerStop.system || ""
-            property int focusHeight: 350
+            property int focusHeight: showEngineerOptions ? 455 : 350
             function effectSummary() {
                 var effects = cockpit.operationAction.experimentalEffects || []
                 var parts = []
@@ -1383,6 +1388,7 @@ ApplicationWindow {
                                     "label": nbaLayout.loadoutBlocked
                                              ? "LOADOUT · CONFIRMATION REQUIRED"
                                              : nbaLayout.installationBlocked ? "MODULE · INSTALLATION REQUIRED"
+                                             : nbaLayout.engineerUnlockRequired ? "ENGINEER · UNLOCK REQUIRED"
                                              : nbaMaterialStrip.ready ? "MATERIALS · READY" : "MATERIALS · REQUIRED",
                                     "detail": "",
                                     "tone": nbaLayout.modulePrerequisiteBlocked ? orange : nbaMaterialStrip.ready ? green : orange,
@@ -1671,25 +1677,28 @@ ApplicationWindow {
                     Layout.fillWidth: true; elide: Text.ElideRight
                 }
                 Label {
-                    visible: false
+                    visible: nbaLayout.showEngineerOptions
                     text: window.t("operations.engineers", "ENGINEERS FOR TARGET GRADE · RECOMMENDED FIRST")
                     color: orange; font.pixelSize: 10; font.bold: true
                 }
                 ListView {
-                    visible: false
+                    visible: nbaLayout.showEngineerOptions
                     Layout.fillWidth: true
                     Layout.preferredHeight: visible ? 66 : 0
                     orientation: ListView.Horizontal
                     spacing: 8; clip: true
-                    model: cockpit.operationAction.engineerOptions || []
+                    model: nbaLayout.engineerOptions
                     ScrollBar.horizontal: CockpitScrollBar {}
                     delegate: Rectangle {
                         required property var modelData
                         width: 340; height: 58; radius: 9
-                        color: modelData.craftable ? successBackground : panelRaised
+                        color: modelData.craftable ? successBackground
+                              : modelData.status === "unlock_required" ? warningBackground
+                              : panelRaised
                         border.width: 1
                         border.color: modelData.craftable ? success
-                                      : modelData.status === "rank_too_low" ? warning : borderTone
+                                      : modelData.status === "rank_too_low"
+                                        || modelData.status === "unlock_required" ? warning : borderTone
                         RowLayout {
                             anchors.fill: parent; anchors.margins: 9; spacing: 8
                             Item {
