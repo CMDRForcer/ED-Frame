@@ -219,11 +219,33 @@ def engineering_run_preflight(state: object, engineer_route: object) -> dict[str
         add(warnings, "ROLL_ESTIMATE", "Roll demand is still estimated",
             f"{len(uncertain)} plan(s) have no matching live or Journal-history roll evidence.")
 
-    locked_stops = [row for row in route if not bool(row.get("craftable"))]
+    uncertain_stops = [
+        row for row in route
+        if not bool(row.get("craftable"))
+        and (
+            bool(row.get("accessUncertain"))
+            or str(
+                row.get("accessStatus") or row.get("statusGroup") or ""
+            ).casefold() == "unknown"
+        )
+    ]
+    uncertain_ids = {id(row) for row in uncertain_stops}
+    locked_stops = [
+        row for row in route
+        if not bool(row.get("craftable")) and id(row) not in uncertain_ids
+    ]
     if locked_stops:
         names = ", ".join(str(row.get("name") or "Engineer") for row in locked_stops)
         add(blockers, "ENGINEER_ACCESS", "Engineer access or rank is insufficient",
             f"{len(locked_stops)} blocked stop(s): {names}")
+    if uncertain_stops:
+        names = ", ".join(
+            str(row.get("name") or "Engineer") for row in uncertain_stops
+        )
+        add(
+            warnings, "ENGINEER_ACCESS_UNKNOWN", "Engineer access is unconfirmed",
+            f"Journal data is missing for {names}; travel remains available for verification.",
+        )
     routed_jobs = sum(int(row.get("openJobs", 0) or 0) for row in route)
     if plans and routed_jobs < len(plans):
         add(blockers, "ENGINEER_ROUTE", "Some plans have no Engineer stop",
@@ -614,6 +636,7 @@ def attach_operation_plan_context(
         "LOADOUT_BLOCKER", "OUTFITTING_BLOCKER", "EXPERIMENTAL_BLOCKER",
         "TRADE", "COLLECT", "GRADE_CRAFT",
         "EXPERIMENTAL_CRAFT", "ENGINEER_PREPARE", "ENGINEER_UNLOCK",
+        "ENGINEER_VERIFY",
         "ENGINEER_TRAVEL",
     }
     if plan is None and kind in plan_action_kinds:
@@ -990,6 +1013,35 @@ def select_operation_action(
         ), None)
 
     def engineer_unlock_action(stop):
+        access_status = str(
+            stop.get("accessStatus") or stop.get("statusGroup") or "unknown"
+        ).casefold()
+        if access_status == "unknown" or stop.get("accessUncertain"):
+            system = str(stop.get("system") or "")
+            station = str(stop.get("station") or "")
+            return {
+                "kind": "ENGINEER_VERIFY",
+                "title": f"Verify access at {stop.get('name', 'Engineer')}",
+                "detail": (
+                    "The Journal has no current access or rank record. "
+                    "Travel is available, but crafting is not claimed as confirmed."
+                ),
+                "reason": (
+                    "No confirmed craftable Engineer is available for this target; "
+                    "the best unconfirmed candidate is shown without blocking travel."
+                ),
+                "after": (
+                    "Docking or opening Engineer Workshop updates the Journal; "
+                    "ED-Frame will then select the confirmed craft or unlock path."
+                ),
+                "system": system,
+                "station": station,
+                "buttonLabel": "COPY TARGET SYSTEM" if system else "OPEN ENGINEERS",
+                "targetPage": -1 if system else 4,
+                "executable": True,
+                "portraitUrl": str(stop.get("portraitUrl") or ""),
+                "engineerName": str(stop.get("name") or ""),
+            }
         guide = dict(stop.get("unlockGuide") or {})
         system = str(guide.get("navigationSystem") or "")
         station = str(guide.get("navigationStation") or "")

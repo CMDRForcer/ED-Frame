@@ -1291,6 +1291,7 @@ ApplicationWindow {
             property bool loadoutBlocked: cockpit.operationAction.kind === "LOADOUT_BLOCKER"
             property bool modulePrerequisiteBlocked: installationBlocked || loadoutBlocked
             property bool engineerUnlockRequired: cockpit.operationAction.kind === "ENGINEER_UNLOCK"
+                                                  || cockpit.operationAction.kind === "ENGINEER_VERIFY"
                                                   || cockpit.operationAction.kind === "ENGINEER_PREPARE"
             property var engineerOptions: cockpit.operationAction.engineerOptions || []
             property bool showEngineerOptions: engineerOptions.length > 1
@@ -1697,6 +1698,7 @@ ApplicationWindow {
                               : panelRaised
                         border.width: 1
                         border.color: modelData.craftable ? success
+                                      : modelData.status === "access_unknown" ? cyan
                                       : modelData.status === "rank_too_low"
                                         || modelData.status === "unlock_required" ? warning : borderTone
                         RowLayout {
@@ -1728,6 +1730,7 @@ ApplicationWindow {
                                 Label {
                                     text: window.tf("status.max_grade", "MAX G%1 · %2", [modelData.maxGrade, modelData.statusText])
                                     color: modelData.craftable ? green
+                                         : modelData.status === "access_unknown" ? cyan
                                          : modelData.status === "rank_too_low" ? orange : muted
                                     font.pixelSize: 9; font.bold: true
                                 }
@@ -1746,6 +1749,7 @@ ApplicationWindow {
                              && (String(cockpit.operationAction.kind).indexOf("BLOCKER") >= 0
                                  || String(cockpit.operationAction.kind).indexOf("TECH_BROKER") >= 0
                                  || cockpit.operationAction.kind === "ENGINEER_UNLOCK"
+                                 || cockpit.operationAction.kind === "ENGINEER_VERIFY"
                                  || cockpit.operationAction.kind === "ENGINEER_PREPARE")
                     text: window.tf("status.why", "WHY · %1", [cockpit.operationAction.reason || ""])
                     color: cyan; font.pixelSize: 11; font.bold: true
@@ -1757,6 +1761,7 @@ ApplicationWindow {
                              && (String(cockpit.operationAction.kind).indexOf("BLOCKER") >= 0
                                  || String(cockpit.operationAction.kind).indexOf("TECH_BROKER") >= 0
                                  || cockpit.operationAction.kind === "ENGINEER_UNLOCK"
+                                 || cockpit.operationAction.kind === "ENGINEER_VERIFY"
                                  || cockpit.operationAction.kind === "ENGINEER_PREPARE"
                                  || cockpit.operationAction.kind === "TRADE"
                                  || cockpit.operationAction.kind === "COLLECT")
@@ -4252,7 +4257,7 @@ ApplicationWindow {
                                 id: engineeringEngineerSelector
                                 Layout.fillWidth: true; Layout.preferredHeight: 38
                                 model: cockpit.selectedBlueprint.engineerOptions || []
-                                textRole: "name"
+                                textRole: "displayLabel"
                                 currentIndex: {
                                     for (var index = 0; index < model.length; ++index) {
                                         if (model[index].name === cockpit.selectedEngineer)
@@ -4267,9 +4272,7 @@ ApplicationWindow {
                                 contentItem: Label {
                                     leftPadding: 12
                                     text: engineeringEngineerSelector.currentIndex >= 0
-                                          ? engineeringEngineerSelector.model[engineeringEngineerSelector.currentIndex].name
-                                            + " · " + engineeringEngineerSelector.model[engineeringEngineerSelector.currentIndex].system
-                                            + " · G" + engineeringEngineerSelector.model[engineeringEngineerSelector.currentIndex].capabilityGrade
+                                          ? engineeringEngineerSelector.model[engineeringEngineerSelector.currentIndex].displayLabel
                                           : "NO ENGINEER AVAILABLE"
                                     color: textPrimary; verticalAlignment: Text.AlignVCenter
                                     elide: Text.ElideRight

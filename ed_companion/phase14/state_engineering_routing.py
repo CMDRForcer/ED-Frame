@@ -142,6 +142,31 @@ LOGGER = logging.getLogger(__name__)
 from .state_fleet import _cached_profile_loadout_slots_by_ship, module_matches_type
 
 
+ENGINEER_ACCESS_ORDER = {
+    "unlocked": 0,
+    "invited": 1,
+    "known": 2,
+    "unknown": 3,
+    "locked": 4,
+}
+
+
+def engineer_access_status(row):
+    """Return one canonical Journal access state without inventing access."""
+    row = row if isinstance(row, dict) else {}
+    rank = int(row.get("rank", row.get("commanderRank", 0)) or 0)
+    if rank > 0:
+        return "unlocked"
+    explicit = str(row.get("statusGroup") or "").strip().casefold()
+    if explicit in ENGINEER_ACCESS_ORDER:
+        return explicit
+    raw = str(
+        row.get("status") or row.get("unlockState")
+        or row.get("progress") or ""
+    ).strip().casefold()
+    return raw if raw in ENGINEER_ACCESS_ORDER else "unknown"
+
+
 
 def _engineer_leg_distance(left, right):
     """Return an exact inter-Engineer distance when both coordinates exist."""
@@ -222,17 +247,9 @@ def _minimum_engineer_cover(candidate_sets, engineer_index):
         return set()
     best = None
 
-    access_order = {
-        "unlocked": 0,
-        "invited": 1,
-        "known": 2,
-        "unknown": 3,
-        "locked": 4,
-    }
-
     def engineer_access(name):
-        return access_order.get(
-            str(engineer_index.get(name, {}).get("statusGroup") or "unknown").casefold(),
+        return ENGINEER_ACCESS_ORDER.get(
+            engineer_access_status(engineer_index.get(name, {})),
             5,
         )
 
@@ -285,11 +302,13 @@ def _minimum_engineer_cover(candidate_sets, engineer_index):
 
 def assign_plans_to_nearest_engineers(plans, engineer_rows):
     """Globally minimize Engineer visits, then prefer access and distance."""
-    engineer_index = {
-        row["name"]: dict(row)
-        for row in engineer_rows or []
-        if row.get("name")
-    }
+    engineer_index = {}
+    for row in engineer_rows or []:
+        if not row.get("name"):
+            continue
+        prepared_row = dict(row)
+        prepared_row["statusGroup"] = engineer_access_status(prepared_row)
+        engineer_index[row["name"]] = prepared_row
     prepared = []
     for plan in plans or []:
         if str(plan.get("targetStatus") or "") == "completed":
@@ -337,17 +356,13 @@ def assign_plans_to_nearest_engineers(plans, engineer_rows):
         elif selected in candidates:
             # A stale/manual choice must not hide an easier access path. Keep
             # it only when it is at least as far unlocked as every alternative.
-            access_order = {
-                "unlocked": 0, "invited": 1, "known": 2,
-                "unknown": 3, "locked": 4,
-            }
-            selected_access = access_order.get(str(
-                engineer_index[selected].get("statusGroup") or "unknown"
-            ).casefold(), 5)
+            selected_access = ENGINEER_ACCESS_ORDER.get(
+                engineer_access_status(engineer_index[selected]), 5
+            )
             best_access = min(
-                access_order.get(str(
-                    engineer_index[name].get("statusGroup") or "unknown"
-                ).casefold(), 5)
+                ENGINEER_ACCESS_ORDER.get(
+                    engineer_access_status(engineer_index[name]), 5
+                )
                 for name in candidates
             )
             if selected_access == best_access:
@@ -374,17 +389,29 @@ def assign_plans_to_nearest_engineers(plans, engineer_rows):
         ))
         chosen = engineer_index[selection[0]]
         rank = int(chosen.get("rank", 0) or 0)
-        block_reason = "" if craftable else (
-            f"Engineer access/rank insufficient: requires unlocked G{next_grade} now "
-            f"for progressive target G{target_grade}, "
-            f"Journal reports {chosen.get('status', 'UNKNOWN')} G{rank}"
-        )
+        access_status = engineer_access_status(chosen)
+        if craftable:
+            block_reason = ""
+        elif access_status == "unknown":
+            block_reason = (
+                f"Engineer access/rank is unconfirmed: target G{target_grade}; "
+                "the Journal has no current EngineerProgress record"
+            )
+        else:
+            block_reason = (
+                f"Engineer access/rank insufficient: requires unlocked G{next_grade} now "
+                f"for progressive target G{target_grade}, "
+                f"Journal reports {chosen.get('status', access_status.upper())} G{rank}"
+            )
         bucket = assignments.setdefault(chosen["name"], {
             **chosen,
             "openJobs": 0,
             "readyJobs": 0,
             "jobNames": [],
             "craftable": True,
+            "accessStatus": access_status,
+            "accessUncertain": access_status == "unknown",
+            "travelAllowed": access_status == "unknown",
             "blockReasons": [],
         })
         bucket["openJobs"] += 1
@@ -438,6 +465,9 @@ def engineer_options_for_plan(plan, engineer_rows, blueprint_records=None):
     next_grade = int(plan.get("nextGrade", 0) or target)
     module_key = normalize(plan.get("module"))
     blueprint_key = normalize(plan.get("blueprint"))
+    eligible_names = {
+        str(name) for name in (plan.get("eligibleEngineers") or []) if name
+    }
     capabilities: dict[str, int] = {}
     for record in blueprint_records or []:
         if not isinstance(record, dict):
@@ -449,10 +479,14 @@ def engineer_options_for_plan(plan, engineer_rows, blueprint_records=None):
         grade = int(record.get("Grade", 0) or 0)
         for name in real_engineers(record):
             capabilities[name] = max(capabilities.get(name, 0), grade)
+    if capabilities and eligible_names:
+        capabilities = {
+            name: grade for name, grade in capabilities.items()
+            if name in eligible_names
+        }
     if not capabilities:
         capabilities = {
-            str(name): target for name in (plan.get("eligibleEngineers") or [])
-            if name
+            name: target for name in eligible_names
         }
     engineer_index = {
         str(row.get("name") or ""): row
@@ -464,9 +498,12 @@ def engineer_options_for_plan(plan, engineer_rows, blueprint_records=None):
             continue
         row = engineer_index.get(name, {})
         rank = int(row.get("rank", 0) or 0)
-        access_status = str(row.get("statusGroup") or "unknown").casefold()
+        access_status = engineer_access_status(row)
         unlocked = access_status == "unlocked"
-        if not unlocked:
+        if access_status == "unknown":
+            code = "access_unknown"
+            text = "UNKNOWN · VERIFY ACCESS"
+        elif not unlocked:
             code = "unlock_required"
             text = f"{access_status.upper()} · UNLOCK REQUIRED"
         elif rank >= next_grade and rank < target:
@@ -482,25 +519,29 @@ def engineer_options_for_plan(plan, engineer_rows, blueprint_records=None):
             "maxGrade": maximum,
             "rank": rank,
             "accessStatus": access_status,
+            "statusGroup": access_status,
             "status": code,
             "statusText": text,
             "craftable": code in {"craftable", "rank_progression"},
-            "distance": float(row.get("distance", -1) or -1),
+            "travelAllowed": access_status == "unknown",
+            "unlockGuide": dict(row.get("unlockGuide") or {}),
+            "distance": float(
+                row.get("distance") if row.get("distance") is not None else -1
+            ),
             "portraitUrl": str(row.get("portraitUrl") or ""),
         })
     order = {
         "craftable": 0, "rank_progression": 1,
-        "rank_too_low": 2, "unlock_required": 3,
+        "rank_too_low": 2, "unlock_required": 3, "access_unknown": 3,
     }
-    access_order = {
-        "unlocked": 0, "invited": 1, "known": 2,
-        "unknown": 3, "locked": 4,
-    }
-    return sorted(options, key=lambda row: (
+    options = sorted(options, key=lambda row: (
         order.get(row["status"], 9),
-        access_order.get(row["accessStatus"], 5),
+        ENGINEER_ACCESS_ORDER.get(row["accessStatus"], 5),
         -int(row["rank"]),
         row["distance"] < 0,
         row["distance"] if row["distance"] >= 0 else 0,
         row["name"].casefold(),
     ))
+    for index, option in enumerate(options):
+        option["recommended"] = index == 0
+    return options

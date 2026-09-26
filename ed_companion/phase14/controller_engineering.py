@@ -177,6 +177,7 @@ from .state import (
     discard_bound_module_plans,
     duplicate_ship_plan,
     engineering_run_preflight,
+    engineer_options_for_plan,
     journal_dir,
     journal_change_signature,
     journal_craft_baseline,
@@ -841,7 +842,6 @@ class EngineeringMixin:
             for engineer in (grade.get("Engineers", []) or [])
             if engineer and not str(engineer).startswith("@")
         })
-        progress = self._state.get("engineerProgress", {})
         self._selected_blueprint_id = identifier
         self._editing_grade_complete = False
         self._selected_experimental_id = ""
@@ -878,40 +878,6 @@ class EngineeringMixin:
             self._selected_module_id = ""
         self._current_grade = 0
         self._target_grade = max(int(value.get("Grade", 0) or 0) for value in grades)
-        engineer_options = [
-            {
-                "name": engineer,
-                "system": ENGINEER_SYSTEMS.get(engineer, "System not stored"),
-                "capabilityGrade": max(
-                    int(grade.get("Grade", 0) or 0) for grade in grades
-                    if engineer in real_engineers(grade)
-                ),
-                "unlockState": str(
-                    progress.get(engineer, {}).get("progress") or "No Journal data"
-                ),
-                "commanderRank": int(
-                    progress.get(engineer, {}).get("rank", 0) or 0
-                ),
-            }
-            for engineer in engineer_names
-        ]
-
-        def engineer_priority(option):
-            capability = int(option.get("capabilityGrade", 0) or 0)
-            rank = int(option.get("commanderRank", 0) or 0)
-            unlocked = str(option.get("unlockState") or "").casefold() == "unlocked"
-            return (
-                capability < self._target_grade,
-                not unlocked,
-                bool(rank and rank < self._target_grade),
-                -capability,
-                str(option.get("name") or "").casefold(),
-            )
-
-        preferred_engineer = min(
-            engineer_options, key=engineer_priority, default={}
-        )
-        self._selected_engineer = str(preferred_engineer.get("name") or "")
         matching_instances = sum(
             1 for row in self._state.get("blueprints", [])
             if row.get("module") == module and row.get("editable")
@@ -924,13 +890,72 @@ class EngineeringMixin:
             "name": name,
             "maxGrade": self._target_grade,
             "engineers": ", ".join(engineer_names),
-            "engineerOptions": engineer_options,
+            "engineerOptions": [],
             "grades": grade_rows,
             "experimentals": compatible,
         }
+        self._refresh_selected_engineer_options()
         self._apply_installed_slot_engineering()
         self._engineering_status = "Choose current grade, target grade and optional experimental."
         self.engineeringChanged.emit()
+
+
+    def _refresh_selected_engineer_options(self):
+        """Keep planner choices aligned with target Grade and Journal access."""
+        selected = self._selected_blueprint
+        if not isinstance(selected, dict) or not self._selected_blueprint_id:
+            return
+        records = list(self._blueprint_groups.get(self._selected_blueprint_id, []))
+        candidate_records = records
+        eligible = []
+        if self._plan_mode in {"combined", "experimental_only"}:
+            effect = next((
+                row for row in self._experimentals
+                if str(row.get("ExperimentalId") or row.get("Name") or "")
+                == self._selected_experimental_id
+            ), None)
+            if effect:
+                eligible = real_engineers(effect)
+                if self._plan_mode == "experimental_only":
+                    candidate_records = []
+        plan = {
+            "module": str(selected.get("module") or ""),
+            "blueprint": str(selected.get("name") or ""),
+            "targetGrade": (
+                0 if self._plan_mode == "experimental_only" else self._target_grade
+            ),
+            "nextGrade": (
+                0 if self._plan_mode == "experimental_only"
+                else min(self._target_grade, max(1, self._current_grade + 1))
+            ),
+            "eligibleEngineers": eligible,
+        }
+        options = engineer_options_for_plan(
+            plan, self._engineer_index(), candidate_records
+        )
+        if eligible and self._plan_mode == "combined":
+            allowed = set(eligible)
+            options = [row for row in options if row.get("name") in allowed]
+        for option in options:
+            access = str(option.get("accessStatus") or "unknown")
+            option.update({
+                "capabilityGrade": int(option.get("maxGrade", 0) or 0),
+                "commanderRank": int(option.get("rank", 0) or 0),
+                "unlockState": (
+                    "No Journal data" if access == "unknown" else access.upper()
+                ),
+                "displayLabel": (
+                    f"{option.get('name', 'Engineer')} · {access.upper()} · "
+                    f"G{int(option.get('maxGrade', 0) or 0)} · "
+                    f"{option.get('system', 'System not stored')}"
+                ),
+            })
+        selected["engineerOptions"] = options
+        names = {str(option.get("name") or "") for option in options}
+        if self._selected_engineer not in names:
+            self._selected_engineer = str(
+                options[0].get("name") if options else ""
+            )
 
 
     def _apply_installed_slot_engineering(self) -> None:
@@ -1007,6 +1032,7 @@ class EngineeringMixin:
         self._plan_mode = selected
         if selected == "grade_only":
             self._selected_experimental_id = ""
+        self._refresh_selected_engineer_options()
         self._engineering_status = {
             "grade_only": "Grade target only.",
             "experimental_only": "Experimental Effect only; no Grade target required.",
@@ -1027,7 +1053,12 @@ class EngineeringMixin:
         )
         state = str(option.get("unlockState") or "No Journal data")
         rank = int(option.get("commanderRank", 0) or 0)
-        if state.casefold() not in {"unlocked", "no journal data"}:
+        if state.casefold() == "no journal data":
+            self._engineering_status = (
+                f"{self._selected_engineer}: access unknown. Planning and travel "
+                "remain available; crafting will be confirmed from the Journal."
+            )
+        elif state.casefold() != "unlocked":
             self._engineering_status = (
                 f"{self._selected_engineer}: {state}. You can plan now, "
                 "but must unlock this engineer before crafting."
@@ -1087,6 +1118,7 @@ class EngineeringMixin:
         selected = first.get("_SelectedEngineer", {})
         if selected.get("name"):
             self._selected_engineer = str(selected["name"])
+        self._refresh_selected_engineer_options()
         self._engineering_status = (
             f"Editing {self._module_instance}. Save replaces this plan."
         )

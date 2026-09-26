@@ -1879,6 +1879,7 @@ class CockpitController(
     def setCurrentGrade(self, grade):
         self.clearCraftConfirmation()
         self._current_grade = max(0, min(int(grade), self._target_grade))
+        self._refresh_selected_engineer_options()
         self.engineeringChanged.emit()
 
     @Slot(int)
@@ -1887,12 +1888,14 @@ class CockpitController(
         maximum = int(self._selected_blueprint.get("maxGrade", 5) or 5)
         self._target_grade = max(1, min(int(grade), maximum))
         self._current_grade = min(self._current_grade, self._target_grade)
+        self._refresh_selected_engineer_options()
         self.engineeringChanged.emit()
 
     @Slot(str)
     def setSelectedExperimental(self, identifier):
         self.clearCraftConfirmation()
         self._selected_experimental_id = str(identifier or "")
+        self._refresh_selected_engineer_options()
         self.engineeringChanged.emit()
 
 

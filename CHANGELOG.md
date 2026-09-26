@@ -1,5 +1,28 @@
 # Changelog
 
+## 1.5.23 — 2026-09-26
+
+### Fixed
+
+- **One global Engineer recommendation model**: Wishlist planning, Operations
+  and route assignment now use the same target-grade capability and Journal
+  access rules. Changing the target grade immediately removes Engineers who
+  cannot perform it and reorders every valid alternative.
+- **Truthful unknown access handling**: missing `EngineerProgress` data is now
+  a caution instead of proof that an Engineer is locked. A confirmed unlocked
+  alternative is preferred; when none exists, travel remains available as an
+  explicit verification step without claiming that crafting is ready.
+- **Actionable locked routes**: invited, known and locked candidates retain
+  their exact status and lead to the relevant unlock guide instead of being
+  presented as a normal engineering flight.
+
+### Tests
+
+- **Whole-catalog Engineer contract**: every target grade of all 160 bundled
+  blueprints is checked against all 34 referenced Engineers, including complete
+  candidate lists, destination data, access-state preservation and preference
+  for a confirmed craftable option.
+
 ## 1.5.22 — 2026-09-26
 
 ### Fixed

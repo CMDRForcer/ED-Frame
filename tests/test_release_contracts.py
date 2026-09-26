@@ -48,6 +48,7 @@ from ed_companion.phase14.state import (
     partition_engineer_assignments,
     powerplay_journal_overview,
     remaining_grade_rolls,
+    real_engineers,
     required_materials,
     select_operation_action,
     ship_slot_layout,
@@ -979,6 +980,186 @@ class ReleaseContractTests(unittest.TestCase):
         self.assertEqual(options[0]["statusText"], "INVITED · UNLOCK REQUIRED")
         self.assertEqual(options[1]["statusText"], "KNOWN · UNLOCK REQUIRED")
 
+    def test_every_catalog_blueprint_resolves_all_target_grade_engineers(self):
+        root = Path(__file__).resolve().parents[1]
+        records = json.loads(
+            (root / "ed_data" / "blueprints.json").read_text(encoding="utf-8")
+        )
+        unlocks = json.loads(
+            (root / "ed_data" / "engineer_unlocks.json").read_text(
+                encoding="utf-8"
+            )
+        )["engineers"]
+        groups = {}
+        all_engineers = set()
+        for record in records:
+            engineers = real_engineers(record)
+            if record.get("Grade") is None or not engineers:
+                continue
+            key = (str(record.get("Type") or ""), str(record.get("Name") or ""))
+            groups.setdefault(key, []).append(record)
+            all_engineers.update(engineers)
+
+        self.assertTrue(groups)
+        self.assertTrue(all_engineers)
+        self.assertEqual(all_engineers - set(unlocks), set())
+        self.assertEqual([
+            name for name in sorted(all_engineers)
+            if not unlocks[name].get("system") or not unlocks[name].get("station")
+        ], [])
+
+        for (module, blueprint), blueprint_records in groups.items():
+            capabilities = {}
+            for record in blueprint_records:
+                grade = int(record.get("Grade", 0) or 0)
+                for engineer in real_engineers(record):
+                    capabilities[engineer] = max(
+                        capabilities.get(engineer, 0), grade
+                    )
+            engineer_rows = [{
+                "name": name,
+                "statusGroup": "locked",
+                "rank": 0,
+                "distance": index + 1,
+                "system": unlocks[name]["system"],
+                "station": unlocks[name]["station"],
+            } for index, name in enumerate(sorted(capabilities))]
+            for target_grade in range(1, max(capabilities.values()) + 1):
+                expected = {
+                    name for name, grade in capabilities.items()
+                    if grade >= target_grade
+                }
+                plan = {
+                    "module": module,
+                    "blueprint": blueprint,
+                    "grade": target_grade,
+                    "targetGrade": target_grade,
+                    "nextGrade": 1,
+                    "eligibleEngineers": sorted(expected),
+                    "targetStatus": "not_started",
+                    "completion": 1,
+                }
+                options = engineer_options_for_plan(
+                    plan, engineer_rows, blueprint_records
+                )
+                self.assertEqual(
+                    {row["name"] for row in options}, expected,
+                    f"{module} / {blueprint} / G{target_grade}",
+                )
+
+                preferred = min(expected)
+                routing_rows = [dict(row) for row in engineer_rows]
+                for row in routing_rows:
+                    if row["name"] == preferred:
+                        row.update({
+                            "statusGroup": "unlocked",
+                            "status": "UNLOCKED",
+                            "rank": target_grade,
+                        })
+                route = assign_plans_to_nearest_engineers(
+                    [plan], routing_rows
+                )
+                self.assertEqual(
+                    [row["name"] for row in route], [preferred],
+                    f"{module} / {blueprint} / G{target_grade}",
+                )
+                self.assertTrue(route[0]["craftable"])
+
+    def test_engineer_options_preserve_all_five_access_states(self):
+        states = ["unlocked", "invited", "known", "unknown", "locked"]
+        plan = {
+            "module": "Test Module", "blueprint": "Test Blueprint",
+            "targetGrade": 1, "nextGrade": 1,
+            "eligibleEngineers": [state.title() for state in states],
+        }
+        rows = [{
+            "name": state.title(), "statusGroup": state,
+            "rank": 1 if state == "unlocked" else 0,
+            "distance": index,
+        } for index, state in enumerate(states)]
+
+        options = engineer_options_for_plan(plan, rows)
+        by_name = {row["name"]: row for row in options}
+
+        self.assertEqual(
+            {name: row["accessStatus"] for name, row in by_name.items()},
+            {state.title(): state for state in states},
+        )
+        self.assertEqual(by_name["Unknown"]["status"], "access_unknown")
+        self.assertTrue(by_name["Unknown"]["travelAllowed"])
+        self.assertFalse(by_name["Unknown"]["craftable"])
+        self.assertEqual(by_name["Locked"]["status"], "unlock_required")
+
+    def test_combined_plan_options_respect_experimental_engineer_intersection(self):
+        plan = {
+            "module": "Fragment Cannon", "blueprint": "Overcharged Weapon",
+            "targetGrade": 5, "nextGrade": 1,
+            "eligibleEngineers": ["Marsha Hicks"],
+        }
+        records = [{
+            "Type": "Fragment Cannon", "Name": "Overcharged Weapon",
+            "Grade": 5, "Engineers": ["Marsha Hicks", "Zacariah Nemo"],
+        }]
+        engineers = [{
+            "name": name, "statusGroup": "unlocked", "rank": 5,
+            "distance": index,
+        } for index, name in enumerate(("Marsha Hicks", "Zacariah Nemo"))]
+
+        options = engineer_options_for_plan(plan, engineers, records)
+
+        self.assertEqual([row["name"] for row in options], ["Marsha Hicks"])
+
+    def test_confirmed_engineer_beats_nearer_unknown_alternative(self):
+        plan = {
+            "module": "Frame Shift Drive", "blueprint": "Increased Range",
+            "grade": 5, "targetGrade": 5, "nextGrade": 1,
+            "eligibleEngineers": ["Unknown Near", "Unlocked Far"],
+            "completion": 1, "targetStatus": "not_started",
+        }
+        engineers = [{
+            "name": "Unknown Near", "statusGroup": "unknown", "rank": 0,
+            "distance": 1, "status": "NO JOURNAL DATA",
+        }, {
+            "name": "Unlocked Far", "statusGroup": "unlocked", "rank": 5,
+            "distance": 100, "status": "UNLOCKED",
+        }]
+
+        route = assign_plans_to_nearest_engineers([plan], engineers)
+
+        self.assertEqual([row["name"] for row in route], ["Unlocked Far"])
+        self.assertTrue(route[0]["craftable"])
+
+    def test_unknown_engineer_access_warns_without_blocking_travel(self):
+        plan = {
+            "module": "Fragment Cannon", "blueprint": "Overcharged Weapon",
+            "grade": 5, "targetGrade": 5, "nextGrade": 1,
+            "targetStatus": "not_started", "canCraftNext": True,
+            "materialProgress": [],
+        }
+        route = [{
+            "name": "Zacariah Nemo", "statusGroup": "unknown",
+            "accessStatus": "unknown", "accessUncertain": True,
+            "travelAllowed": True, "craftable": False, "openJobs": 1,
+            "jobNames": ["Fragment Cannon · Overcharged Weapon · G5"],
+            "system": "Yoru", "station": "Nemo Cyber Party Base",
+        }]
+        state = {"blueprints": [plan], "materials": [], "trades": []}
+
+        preflight = engineering_run_preflight(state, route)
+        action = select_operation_action(state, route)
+
+        self.assertEqual(preflight["status"], "CAUTION")
+        self.assertNotIn(
+            "ENGINEER_ACCESS", {row["code"] for row in preflight["blockers"]}
+        )
+        self.assertIn(
+            "ENGINEER_ACCESS_UNKNOWN",
+            {row["code"] for row in preflight["warnings"]},
+        )
+        self.assertEqual(action["kind"], "ENGINEER_VERIFY")
+        self.assertEqual(action["system"], "Yoru")
+        self.assertTrue(action["executable"])
+
     def test_engineer_unlock_precedes_material_run_when_no_target_is_craftable(self):
         plan = {
             "module": "Fragment Cannon", "blueprint": "Overcharged Weapon",
@@ -990,6 +1171,7 @@ class ReleaseContractTests(unittest.TestCase):
         }
         route = [{
             "name": "Marsha Hicks", "craftable": False,
+            "statusGroup": "invited", "accessStatus": "invited",
             "jobNames": ["Fragment Cannon · Overcharged Weapon · G5"],
             "unlockGuide": {
                 "nextAction": "Complete Marsha Hicks' invitation.",

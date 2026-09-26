@@ -85,6 +85,10 @@ class QmlInteractionContractTests(unittest.TestCase):
         )
         self.assertIn("visible: nbaLayout.showEngineerOptions", source)
         self.assertIn('"ENGINEER · UNLOCK REQUIRED"', source)
+        self.assertIn('textRole: "displayLabel"', source)
+        self.assertIn(
+            'cockpit.operationAction.kind === "ENGINEER_VERIFY"', source
+        )
 
     def test_engineer_cards_preserve_exact_journal_access_status(self):
         source = (ROOT / "Main.qml").read_text(encoding="utf-8-sig")
