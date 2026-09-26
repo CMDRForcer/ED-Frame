@@ -1,5 +1,19 @@
 # Changelog
 
+## 1.5.22 — 2026-09-26
+
+### Fixed
+
+- **Single authoritative INARA cargo snapshot**: cargo changes reconstructed
+  from purchases, sales, mining, collection and transfers are now coalesced
+  into the newest complete state per Journal scan. A following Frontier
+  `Cargo.json` snapshot replaces the calculated intermediate state instead of
+  sending the same cargo twice.
+- **Safe cargo fallback**: when Frontier has not yet written an itemized cargo
+  snapshot, the latest calculated transaction state is still delivered. Empty
+  cargo, later confirmation of an unchanged state and bounded offline batches
+  retain their existing recovery behavior.
+
 ## 1.5.21 — 2026-09-24
 
 ### Added
