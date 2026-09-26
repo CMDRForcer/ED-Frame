@@ -1862,6 +1862,64 @@ class ReleaseContractTests(unittest.TestCase):
         self.assertEqual(required_materials([saved]), {"manganese": 12})
         self.assertTrue(material_roll_estimates_reliable([saved]))
 
+    def test_stale_inaccessible_selection_moves_to_reachable_engineer(self):
+        with TemporaryDirectory() as directory:
+            data_dir = Path(directory)
+            plan = build_engineering_plan(
+                [{
+                    "Type": "Fragment Cannon", "Name": "High Capacity Magazine",
+                    "Grade": grade, "Engineers": ["Marsha Hicks", "Zacariah Nemo"],
+                    "Ingredients": [{"Name": "Manganese", "Size": 1}],
+                } for grade in range(1, 6)],
+                0, 5, ship_id=77, slot="MediumHardpoint2",
+                module_id="hpt_slugshot_fixed_medium", engineer_rank=0,
+            )
+            plan[0]["_SelectedEngineer"] = {"name": "Marsha Hicks"}
+            (data_dir / "ship_blueprints.json").write_text(
+                json.dumps({"Python Mk II": [plan]}), encoding="utf-8"
+            )
+            events = [{
+                "timestamp": "2026-09-26T08:40:53Z",
+                "event": "EngineerProgress", "Engineer": "Marsha Hicks",
+                "Progress": "Invited",
+            }, {
+                "timestamp": "2026-09-26T08:40:53Z",
+                "event": "EngineerProgress", "Engineer": "Zacariah Nemo",
+                "Rank": 1, "Progress": "Unlocked",
+            }]
+
+            migrate_wishlist_bindings(
+                data_dir,
+                {"ships": [{"label": "Python Mk II", "id": "77"}]},
+                events,
+            )
+            saved = json.loads(
+                (data_dir / "ship_blueprints.json").read_text(encoding="utf-8")
+            )["Python Mk II"][0]
+
+        planner = saved[0]["_Planner"]
+        self.assertEqual(saved[0]["_SelectedEngineer"]["name"], "Zacariah Nemo")
+        self.assertEqual(planner["engineer_rank_at_plan"], 1)
+        self.assertEqual(
+            set(planner["roll_estimate_sources"].values()), {"engineer_rank"}
+        )
+
+    def test_trade_action_identifies_trader_instead_of_plan_engineer(self):
+        action = select_operation_action({
+            "blueprints": [],
+            "materials": [{"key": "tin", "name": "Tin", "missing": 1}],
+            "trades": [{
+                "targetKey": "tin", "receiveAmount": 1,
+                "category": "Raw", "system": "Ngobe", "station": "Hinz Hub",
+            }],
+        }, [])
+
+        self.assertEqual(action["kind"], "TRADE")
+        self.assertEqual(action["destinationKind"], "trader")
+        self.assertEqual(action["destinationName"], "RAW MATERIAL TRADER")
+        self.assertEqual(action["system"], "Ngobe")
+        self.assertEqual(action["station"], "Hinz Hub")
+
     def test_pending_first_craft_is_not_seeded_before_journal_replay(self):
         with TemporaryDirectory() as directory:
             data_dir = Path(directory)

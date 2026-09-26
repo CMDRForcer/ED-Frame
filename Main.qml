@@ -1296,14 +1296,15 @@ ApplicationWindow {
             property var engineerOptions: cockpit.operationAction.engineerOptions || []
             property bool showEngineerOptions: engineerOptions.length > 1
                                                || (engineerUnlockRequired && engineerOptions.length > 0)
-            property string engineerPortrait: cockpit.operationAction.portraitUrl
-                                                || cockpit.nextEngineerStop.portraitUrl || ""
-            property string engineerName: cockpit.operationAction.engineerName
-                                             || cockpit.nextEngineerStop.name || ""
-            property string engineerStation: cockpit.operationAction.station
-                                                || cockpit.nextEngineerStop.station || ""
-            property string engineerSystem: cockpit.operationAction.system
-                                               || cockpit.nextEngineerStop.system || ""
+            property bool engineerDestination: cockpit.operationAction.destinationKind === "engineer"
+            property string engineerPortrait: engineerDestination
+                                                ? cockpit.operationAction.portraitUrl || "" : ""
+            property string destinationName: engineerDestination
+                                                ? cockpit.operationAction.engineerName || ""
+                                                : cockpit.operationAction.destinationName
+                                                  || cockpit.operationAction.title || ""
+            property string destinationStation: cockpit.operationAction.station || ""
+            property string destinationSystem: cockpit.operationAction.system || ""
             property int focusHeight: showEngineerOptions ? 455 : 350
             function effectSummary() {
                 var effects = cockpit.operationAction.experimentalEffects || []
@@ -1460,14 +1461,14 @@ ApplicationWindow {
                                             Layout.fillWidth: true
                                             text: nbaLayout.modulePrerequisiteBlocked
                                                   ? (nbaLayout.loadoutBlocked ? "CONFIRM LOADOUT" : "OUTFITTING FIRST")
-                                                  : String(nbaLayout.engineerName || "NO ENGINEER REQUIRED").toUpperCase()
+                                                  : String(nbaLayout.destinationName || "NEXT ACTION").toUpperCase()
                                             color: textPrimary; font.pixelSize: 20; font.bold: true; elide: Text.ElideRight
                                         }
                                         Label {
                                             Layout.fillWidth: true
                                             text: nbaLayout.modulePrerequisiteBlocked
                                                   ? String(cockpit.operationAction.detail || "INSTALL THE PLANNED MODULE BEFORE ENGINEERING").toUpperCase()
-                                                  : [nbaLayout.engineerStation, nbaLayout.engineerSystem]
+                                                  : [nbaLayout.destinationStation, nbaLayout.destinationSystem]
                                                     .filter(function(value) { return !!value }).join(" · ").toUpperCase()
                                             color: nbaLayout.modulePrerequisiteBlocked ? orange : cyan
                                             font.pixelSize: 12; font.bold: true; elide: Text.ElideRight
@@ -1478,15 +1479,17 @@ ApplicationWindow {
                                                 Layout.fillWidth: true
                                                 text: nbaLayout.modulePrerequisiteBlocked
                                                       ? cockpit.operationAction.buttonLabel
-                                                      : nbaLayout.engineerSystem
-                                                      ? window.t("operations.copy_system", "COPY SYSTEM")
-                                                      : window.t("wishlist.open_engineering", "OPEN ENGINEERING")
+                                                      : !nbaLayout.engineerDestination
+                                                      ? (cockpit.operationAction.buttonLabel || window.t("wishlist.open_engineering", "OPEN ENGINEERING"))
+                                                      : nbaLayout.destinationSystem
+                                                        ? window.t("operations.copy_system", "COPY SYSTEM")
+                                                        : window.t("wishlist.open_engineering", "OPEN ENGINEERING")
                                                 selected: true; enabled: cockpit.operationAction.executable !== false
                                                 onClicked: {
                                                     if (nbaLayout.modulePrerequisiteBlocked)
                                                         window.currentPage = cockpit.operationAction.targetPage
-                                                    else if (!!nbaLayout.engineerSystem)
-                                                        cockpit.copySystem(nbaLayout.engineerSystem)
+                                                    else if (!!nbaLayout.destinationSystem)
+                                                        cockpit.copySystem(nbaLayout.destinationSystem)
                                                     else
                                                         window.currentPage = cockpit.operationAction.targetPage >= 0
                                                                              ? cockpit.operationAction.targetPage : 4
@@ -1494,6 +1497,8 @@ ApplicationWindow {
                                             }
                                             CockpitButton {
                                                 visible: !nbaLayout.modulePrerequisiteBlocked
+                                                         && (nbaLayout.engineerDestination
+                                                             || nbaLayout.engineerOptions.length > 0)
                                                 Layout.fillWidth: true
                                                 text: window.t("operations.open_engineers", "OPEN ENGINEERS")
                                                 onClicked: window.currentPage = 4
@@ -1503,6 +1508,7 @@ ApplicationWindow {
                                 }
                                 Rectangle {
                                     visible: !nbaLayout.modulePrerequisiteBlocked
+                                             && nbaLayout.engineerDestination
                                     Layout.preferredWidth: 235; Layout.fillHeight: true
                                     color: "#050b10"; border.width: 1; border.color: borderTone
                                     Image {

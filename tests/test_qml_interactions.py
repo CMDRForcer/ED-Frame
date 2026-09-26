@@ -90,6 +90,20 @@ class QmlInteractionContractTests(unittest.TestCase):
             'cockpit.operationAction.kind === "ENGINEER_VERIFY"', source
         )
 
+    def test_material_action_does_not_mix_trader_with_engineer_identity(self):
+        source = (ROOT / "Main.qml").read_text(encoding="utf-8-sig")
+
+        self.assertIn(
+            'cockpit.operationAction.destinationKind === "engineer"', source
+        )
+        self.assertIn("cockpit.operationAction.destinationName", source)
+        self.assertIn("&& nbaLayout.engineerDestination", source)
+        self.assertNotIn(
+            "cockpit.operationAction.engineerName\n"
+            "                                             || cockpit.nextEngineerStop.name",
+            source,
+        )
+
     def test_engineer_cards_preserve_exact_journal_access_status(self):
         source = (ROOT / "Main.qml").read_text(encoding="utf-8-sig")
 

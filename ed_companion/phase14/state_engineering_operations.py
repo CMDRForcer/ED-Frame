@@ -647,6 +647,10 @@ def attach_operation_plan_context(
     identity = operation_plan_identity(plan)
     options = engineer_options_for_plan(plan, engineer_rows, blueprint_records)
     engineer = options[0] if options else {}
+    engineer_action_kinds = {
+        "GRADE_CRAFT", "EXPERIMENTAL_CRAFT", "ENGINEER_PREPARE",
+        "ENGINEER_UNLOCK", "ENGINEER_VERIFY", "ENGINEER_TRAVEL",
+    }
     result.update({
         "moduleName": str(result.get("moduleName") or identity["moduleName"]),
         "blueprintName": str(result.get("blueprintName") or identity["blueprintName"]),
@@ -659,11 +663,23 @@ def attach_operation_plan_context(
             result.get("physicalSlotLabel") or identity["physicalSlotLabel"]
         ),
         "engineerOptions": options,
-        "portraitUrl": str(result.get("portraitUrl") or engineer.get("portraitUrl") or ""),
-        "engineerName": str(result.get("engineerName") or engineer.get("name") or ""),
-        "system": str(result.get("system") or engineer.get("system") or ""),
-        "station": str(result.get("station") or engineer.get("station") or ""),
+        "planEngineerName": str(engineer.get("name") or ""),
+        "planEngineerPortraitUrl": str(engineer.get("portraitUrl") or ""),
+        "planEngineerSystem": str(engineer.get("system") or ""),
+        "planEngineerStation": str(engineer.get("station") or ""),
     })
+    if kind in engineer_action_kinds:
+        result.update({
+            "destinationKind": "engineer",
+            "portraitUrl": str(
+                result.get("portraitUrl") or engineer.get("portraitUrl") or ""
+            ),
+            "engineerName": str(
+                result.get("engineerName") or engineer.get("name") or ""
+            ),
+            "system": str(result.get("system") or engineer.get("system") or ""),
+            "station": str(result.get("station") or engineer.get("station") or ""),
+        })
     return result
 
 
@@ -1208,6 +1224,11 @@ def select_operation_action(
         station = str(trade.get("station") or "")
         return {
             "kind": "TRADE",
+            "destinationKind": "trader",
+            "destinationName": (
+                str(trade.get("category") or "Material").upper()
+                + " MATERIAL TRADER"
+            ),
             "materialKey": str(trade.get("targetKey") or ""),
             "title": str(trade.get("instruction") or "Complete material trade"),
             "detail": " · ".join(value for value in (
@@ -1231,6 +1252,8 @@ def select_operation_action(
         name = str(material.get("name") or material.get("key") or "material")
         return {
             "kind": "COLLECT",
+            "destinationKind": "material",
+            "destinationName": f"MATERIAL SOURCE · {name}",
             "materialKey": str(material.get("key") or ""),
             "title": f"Collect {amount} × {name}",
             "detail": "Open Material Details for verified acquisition methods.",

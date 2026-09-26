@@ -97,7 +97,7 @@ class PriorityWorkflowTests(unittest.TestCase):
         self.assertEqual(action["moduleName"], "Sensors")
         self.assertEqual(action["physicalSlotLabel"], "CORE · SENSORS")
 
-    def test_collect_action_inherits_owning_plan_engineer_portrait(self):
+    def test_collect_action_keeps_plan_engineer_separate_from_material_target(self):
         action = {"kind": "COLLECT", "materialKey": "vanadium"}
         state = {"blueprints": [{
             "module": "Detailed Surface Scanner",
@@ -117,9 +117,12 @@ class PriorityWorkflowTests(unittest.TestCase):
         }]
         result = attach_operation_plan_context(action, state, engineers, records)
         self.assertEqual(result["moduleName"], "Detailed Surface Scanner")
-        self.assertEqual(result["engineerName"], "Lei Cheung")
-        self.assertEqual(result["portraitUrl"], "file:///lei.png")
-        self.assertEqual(result["system"], "Laksak")
+        self.assertNotIn("engineerName", result)
+        self.assertNotIn("portraitUrl", result)
+        self.assertNotIn("system", result)
+        self.assertEqual(result["planEngineerName"], "Lei Cheung")
+        self.assertEqual(result["planEngineerPortraitUrl"], "file:///lei.png")
+        self.assertEqual(result["planEngineerSystem"], "Laksak")
 
     def test_experimental_effect_details_use_global_catalog_identity(self):
         records = [{

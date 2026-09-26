@@ -1,5 +1,25 @@
 # Changelog
 
+## 1.5.24 — 2026-09-26
+
+### Fixed
+
+- **One Engineer for route and materials**: when a saved plan still points to
+  an invited, locked or otherwise unreachable Engineer while a suitable
+  Engineer is now unlocked, the plan adopts the reachable Journal-confirmed
+  Engineer. Its known rank then drives the material budget and removes a stale
+  unknown-rank reserve notice.
+- **Truthful action destinations**: material-trader and collection actions no
+  longer combine an Engineer's name or portrait with a trader's station and
+  system. Operations now identifies the active destination explicitly while
+  retaining every suitable Engineer as plan context below it.
+
+### Tests
+
+- **Cross-layer consistency contracts**: saved-plan migration, material-budget
+  rank selection, trader identity and QML destination rendering are covered by
+  regression tests in addition to the full application and QML smoke suite.
+
 ## 1.5.23 — 2026-09-26
 
 ### Fixed

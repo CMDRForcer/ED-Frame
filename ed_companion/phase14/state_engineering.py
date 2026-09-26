@@ -250,12 +250,50 @@ def migrate_wishlist_bindings(
                     (engineer_progress.get(engineer) or {}).get("rank", 0) or 0
                 ) > 0
             ]
-            if not selected_engineer and unlocked_engineers:
+            open_grades = [
+                int(record.get("Grade", 0) or 0)
+                for record in task
+                if isinstance(record, dict)
+                and record.get("Grade") is not None
+                and remaining_grade_rolls(planner, record) > 0
+            ]
+            next_grade = min(open_grades) if open_grades else 0
+            immediately_usable_engineers = [
+                row for row in unlocked_engineers
+                if not next_grade or row[0] >= next_grade
+            ]
+            replacement_engineers = (
+                immediately_usable_engineers or unlocked_engineers
+            )
+            selected_progress = engineer_progress.get(selected_engineer) or {}
+            selected_rank = int(selected_progress.get("rank", 0) or 0)
+            selected_is_reachable = (
+                selected_engineer in eligible_engineers
+                and str(selected_progress.get("progress") or "").casefold()
+                == "unlocked"
+                and selected_rank > 0
+                and (
+                    not immediately_usable_engineers
+                    or not next_grade
+                    or selected_rank >= next_grade
+                )
+            )
+            # A persisted choice can outlive the Journal state that made it
+            # sensible (for example, an invited Engineer was selected before
+            # another eligible Engineer became unlocked).  Routing already
+            # prefers an executable Engineer in that situation.  Move the
+            # persisted plan to the same reachable Engineer so the material
+            # budget, rank notice and route can never describe three different
+            # destinations.
+            if replacement_engineers and not selected_is_reachable:
                 _rank, selected_engineer = min(
-                    unlocked_engineers,
+                    replacement_engineers,
                     key=lambda row: (-row[0], row[1].casefold()),
                 )
-                first["_SelectedEngineer"] = {"name": selected_engineer}
+                first["_SelectedEngineer"] = {
+                    "name": selected_engineer,
+                    "selectionSource": "reachable_journal_engineer",
+                }
                 changed = True
             selected_rank = int(
                 (engineer_progress.get(selected_engineer) or {}).get("rank", 0)
