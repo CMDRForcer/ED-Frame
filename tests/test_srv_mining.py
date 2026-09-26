@@ -113,10 +113,9 @@ class SrvMiningTests(unittest.TestCase):
             if row["eventName"] == "setCommanderInventoryCargo"
         ]
 
-        self.assertEqual(cargo[-2]["eventData"], [{
-            "itemName": "haematite", "itemCount": 1, "isStolen": False,
-        }])
-        self.assertEqual(cargo[-1]["eventData"], [])
+        self.assertEqual(len(cargo), 1)
+        self.assertEqual(cargo[0]["eventTimestamp"], sold_at)
+        self.assertEqual(cargo[0]["eventData"], [])
 
     def test_later_empty_cargo_snapshot_is_not_deduped_by_old_empty_state(self):
         now = datetime.now(timezone.utc).replace(microsecond=0)
@@ -131,16 +130,94 @@ class SrvMiningTests(unittest.TestCase):
             {"timestamp": later, "event": "Cargo", "Vessel": "Ship", "Inventory": []},
         ]
 
+        _identity, initial, known = prepare_journal_batch(
+            events[:3], now=now, max_events=None
+        )
+        _identity, prepared, _fingerprints = prepare_journal_batch(
+            events, known, now=now, max_events=None
+        )
+        initial_cargo = [
+            row for row in initial
+            if row["eventName"] == "setCommanderInventoryCargo"
+        ]
+        cargo = [row for row in prepared
+                 if row["eventName"] == "setCommanderInventoryCargo"]
+
+        self.assertEqual(len(initial_cargo), 1)
+        self.assertEqual(len(cargo), 1)
+        self.assertNotEqual(
+            initial_cargo[0]["eventTimestamp"], cargo[0]["eventTimestamp"]
+        )
+
+    def test_market_buy_and_authoritative_cargo_coalesce_to_latest_snapshot(self):
+        now = datetime.now(timezone.utc).replace(microsecond=0)
+        timestamp = now.isoformat().replace("+00:00", "Z")
+        bought_at = (now + timedelta(seconds=1)).isoformat().replace(
+            "+00:00", "Z"
+        )
+        cargo_at = (now + timedelta(seconds=4)).isoformat().replace(
+            "+00:00", "Z"
+        )
+        events = [
+            {"timestamp": timestamp, "event": "Fileheader",
+             "gameversion": "4.2.0.0", "Odyssey": True},
+            {"timestamp": timestamp, "event": "LoadGame",
+             "Commander": "Test", "FID": "F0000000"},
+            {"timestamp": timestamp, "event": "Cargo", "Vessel": "Ship",
+             "Inventory": [{"Name": "drones", "Count": 29}]},
+            {"timestamp": bought_at, "event": "MarketBuy",
+             "Type": "xihecompanions", "Count": 25},
+            {"timestamp": cargo_at, "event": "Cargo", "Vessel": "Ship",
+             "Inventory": [
+                 {"Name": "xihecompanions", "Count": 25},
+                 {"Name": "drones", "Count": 29},
+             ]},
+        ]
+
         _identity, prepared, _fingerprints = prepare_journal_batch(
             events, now=now, max_events=None
         )
-        cargo = [
-            row for row in prepared
-            if row["eventName"] == "setCommanderInventoryCargo"
+        cargo = [row for row in prepared
+                 if row["eventName"] == "setCommanderInventoryCargo"]
+
+        self.assertEqual(len(cargo), 1)
+        self.assertEqual(cargo[0]["eventTimestamp"], cargo_at)
+        self.assertEqual(cargo[0]["eventData"], [
+            {"itemName": "drones", "itemCount": 29,
+             "isStolen": False},
+            {"itemName": "xihecompanions", "itemCount": 25,
+             "isStolen": False},
+        ])
+
+    def test_market_buy_without_later_cargo_still_updates_inventory(self):
+        now = datetime.now(timezone.utc).replace(microsecond=0)
+        timestamp = now.isoformat().replace("+00:00", "Z")
+        bought_at = (now + timedelta(seconds=1)).isoformat().replace(
+            "+00:00", "Z"
+        )
+        events = [
+            {"timestamp": timestamp, "event": "Fileheader",
+             "gameversion": "4.2.0.0", "Odyssey": True},
+            {"timestamp": timestamp, "event": "LoadGame",
+             "Commander": "Test", "FID": "F0000000"},
+            {"timestamp": timestamp, "event": "Cargo", "Vessel": "Ship",
+             "Inventory": []},
+            {"timestamp": bought_at, "event": "MarketBuy",
+             "Type": "xihecompanions", "Count": 25},
         ]
 
-        self.assertEqual(len(cargo), 2)
-        self.assertNotEqual(cargo[0]["eventTimestamp"], cargo[1]["eventTimestamp"])
+        _identity, prepared, _fingerprints = prepare_journal_batch(
+            events, now=now, max_events=None
+        )
+        cargo = [row for row in prepared
+                 if row["eventName"] == "setCommanderInventoryCargo"]
+
+        self.assertEqual(len(cargo), 1)
+        self.assertEqual(cargo[0]["eventTimestamp"], bought_at)
+        self.assertEqual(cargo[0]["eventData"], [{
+            "itemName": "xihecompanions", "itemCount": 25,
+            "isStolen": False,
+        }])
 
     def test_authoritative_itemized_cargo_replaces_mining_delta_replay(self):
         now = datetime.now(timezone.utc).replace(microsecond=0)

@@ -576,6 +576,7 @@ def prepare_journal_batch(events, known_fingerprints=(), expected_identity="",
     material_inventory = None
     latest_material_snapshot = None
     cargo_inventory = None
+    latest_cargo_snapshot = None
     fleet_state = {}
     fleet_initialized = False
     pending_ship_purchase = None
@@ -601,7 +602,7 @@ def prepare_journal_batch(events, known_fingerprints=(), expected_identity="",
                         known_ship_types.add(str(ship["ShipType"]).casefold())
 
     def append(name, data, timestamp, allow_empty=False, fingerprint_data=None):
-        nonlocal latest_material_snapshot
+        nonlocal latest_material_snapshot, latest_cargo_snapshot
         if name not in AUTO_UPLOAD_EVENT_NAMES:
             return
         if not timestamp or (not data and not allow_empty):
@@ -622,6 +623,22 @@ def prepare_journal_batch(events, known_fingerprints=(), expected_identity="",
             if (latest_material_snapshot is None or
                     timestamp >= latest_material_snapshot[0]["eventTimestamp"]):
                 latest_material_snapshot = (event, fingerprint)
+            return
+        if name == "setCommanderInventoryCargo":
+            # Cargo is a replacement snapshot, not a transaction log. Keep
+            # only the newest state reconstructed during this scan so a
+            # MarketBuy/MarketSell delta is not followed by an equivalent
+            # authoritative Cargo.json snapshot in the same API batch.
+            fingerprint_value = (
+                fingerprint_data if fingerprint_data is not None
+                else {"eventName": name, "eventData": data}
+            )
+            fingerprint = hashlib.sha256(json.dumps(
+                fingerprint_value, sort_keys=True, separators=(",", ":")
+            ).encode("utf-8")).hexdigest()
+            if (latest_cargo_snapshot is None or
+                    timestamp >= latest_cargo_snapshot[0]["eventTimestamp"]):
+                latest_cargo_snapshot = (event, fingerprint)
             return
         if max_events is not None and len(prepared) >= max_events:
             return
@@ -1439,6 +1456,16 @@ def prepare_journal_batch(events, known_fingerprints=(), expected_identity="",
         if fingerprint not in known:
             prepared.insert(0, event)
             fingerprints.insert(0, fingerprint)
+    if latest_cargo_snapshot is not None:
+        event, fingerprint = latest_cargo_snapshot
+        if fingerprint not in known:
+            insert_at = 1 if (
+                prepared
+                and prepared[0].get("eventName")
+                == "setCommanderInventoryMaterials"
+            ) else 0
+            prepared.insert(insert_at, event)
+            fingerprints.insert(insert_at, fingerprint)
     if max_events is not None:
         del prepared[max_events:]
         del fingerprints[max_events:]
