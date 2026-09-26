@@ -68,6 +68,7 @@ def compare_ingredient_costs(
 
 def material_monitor_snapshot(
     rows: object, ship_id: object = "", ship: object = "",
+    active_plans: object = None,
 ) -> dict[str, Any]:
     """Summarize local craft observations for one selected physical ship.
 
@@ -88,6 +89,30 @@ def material_monitor_snapshot(
             )
         )
     ]
+    if active_plans is not None:
+        contexts = [
+            dict(plan) for plan in (active_plans or [])
+            if isinstance(plan, dict)
+        ]
+
+        def belongs_to_active_plan(row: dict[str, Any]) -> bool:
+            row_plan_id = str(row.get("planId") or "")
+            row_slot = str(row.get("slot") or "")
+            row_timestamp = str(row.get("timestamp") or "")
+            for context in contexts:
+                plan_id = str(context.get("planId") or "")
+                if row_plan_id:
+                    if plan_id and row_plan_id == plan_id:
+                        return True
+                    continue
+                if row_slot != str(context.get("slot") or ""):
+                    continue
+                baseline = str(context.get("baselineTimestamp") or "")
+                if not baseline or row_timestamp > baseline:
+                    return True
+            return False
+
+        selected = [row for row in selected if belongs_to_active_plan(row)]
     adaptations = [
         row for row in selected
         if row.get("recipeChanged") or row.get("rollBudgetExtended")

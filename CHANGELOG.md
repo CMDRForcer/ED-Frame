@@ -1,5 +1,31 @@
 # Changelog
 
+## 1.5.26 — 2026-09-26
+
+### Fixed
+
+- **Material-safe Engineer rank-up runs**: a conservative five-roll reserve
+  is no longer reduced while exact crafts for that physical module are
+  pending or already being processed. A later `EngineerProgress` rank can
+  still tighten untouched plans, but can no longer underfund the module that
+  is currently ranking the Engineer up.
+- **Planned Experimental Effects stay attached to their plan**: a matching
+  `EngineerCraft` is replayed before a newer Loadout snapshot may mark the
+  effect complete. Legitimate planned effects therefore no longer remain as
+  `NO PLAN / UNRELATED CRAFT` notices.
+- **Current-run material monitor**: monitor observations now carry their plan
+  identity, and the Wishlist summary shows adaptations only for still-open
+  plans after their immutable Journal boundary. Completed runs no longer
+  leave a permanent warning banner on later builds.
+
+### Tests
+
+- **Real rank-up and Experimental replay contracts**: regression tests cover
+  the unknown-rank reserve, later Rank 5 discovery, Loadout-versus-craft
+  ordering and plan-scoped monitor history. A replay against a copy of the
+  reported Commander profile assigned and acknowledged all eight affected
+  Experimental Effects without modifying live data.
+
 ## 1.5.25 — 2026-09-26
 
 ### Fixed

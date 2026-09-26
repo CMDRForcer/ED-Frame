@@ -321,6 +321,20 @@ def migrate_wishlist_bindings(
                 not in processed_crafts | acknowledged_crafts
                 for event in craft_rows
             )
+            pending_exact_experimental = any(
+                str(event.get("_ResolvedShipID") or "") == ship_id
+                and str(event.get("timestamp") or "") > baseline_timestamp
+                and str(event.get("Slot") or "")
+                == str(planner.get("slot") or "")
+                and same_module_identity(
+                    event.get("Module"), planner.get("module_id")
+                )
+                and bool(event.get("ApplyExperimentalEffect"))
+                and _experimental_craft_matches(planner, event)
+                and engineer_craft_fingerprint(event, ship_id)
+                not in processed_crafts | acknowledged_crafts
+                for event in craft_rows
+            )
             estimates_changed = False
             for grade_record in task:
                 if not isinstance(grade_record, dict) or grade_record.get("Grade") is None:
@@ -333,6 +347,19 @@ def migrate_wishlist_bindings(
                     "conservative_max"
                 )
                 sources = planner.setdefault("roll_estimate_sources", {})
+                # Never remove material that was safely reserved once an
+                # exact craft for this physical module is already pending or
+                # processed.  EngineerProgress contains the *latest* rank,
+                # even while older crafts are replayed.  Shrinking an
+                # unknown-rank five-roll budget to that later rank would make
+                # the first rank-up module underfunded.  Fresh, untouched
+                # plans are still tightened to the now-known rank.
+                if (processed_crafts or pending_exact_craft) and existing:
+                    if existing > budgeted:
+                        budgeted = existing
+                        source = str(
+                            sources.get(str(level)) or "conservative_max"
+                        )
                 if (
                     existing != budgeted
                     or int((planner.get("rolls", {}) or {}).get(str(level), 0) or 0)
@@ -433,7 +460,16 @@ def migrate_wishlist_bindings(
                             )
                         },
                     )
-                    if bool(planner.get("experimental_complete")) != effect_matches:
+                    # A matching EngineerCraft after the plan boundary must
+                    # be replayed before Loadout may mark the effect complete.
+                    # Otherwise the matcher sees an already-complete plan and
+                    # reports the legitimate experimental as an unrelated
+                    # craft forever.
+                    if pending_exact_experimental and effect_matches:
+                        if planner.get("experimental_complete"):
+                            planner["experimental_complete"] = False
+                            changed = True
+                    elif bool(planner.get("experimental_complete")) != effect_matches:
                         planner["experimental_complete"] = effect_matches
                         changed = True
             if (
@@ -2217,6 +2253,7 @@ def apply_engineer_craft(
         monitor_kind = "verified"
     _record_material_monitor_observation(path, {
         "fingerprint": event_key,
+        "planId": str(planner.get("plan_id") or ""),
         "timestamp": str(event.get("timestamp") or ""),
         "ship": str(ship or ""),
         "shipId": str(ship_id or event.get("ShipID") or ""),

@@ -192,6 +192,43 @@ class MaterialMonitorTests(unittest.TestCase):
         self.assertTrue(snapshot["latest"]["requirementReduced"])
         self.assertFalse(snapshot["blocking"])
 
+    def test_snapshot_shows_only_current_open_plan_observations(self):
+        rows = [{
+            "shipId": "45", "slot": "LargeHardpoint1",
+            "planId": "completed-plan", "timestamp": "2026-09-26T12:00:00Z",
+            "kind": "roll_budget_extended", "rollBudgetExtended": True,
+        }, {
+            "shipId": "45", "slot": "LargeHardpoint2",
+            "planId": "open-plan", "timestamp": "2026-09-26T12:10:00Z",
+            "kind": "verified",
+        }, {
+            # Legacy rows did not yet persist planId.  The immutable Journal
+            # boundary keeps an old same-slot run out of a newly pinned plan.
+            "shipId": "45", "slot": "LargeHardpoint2",
+            "timestamp": "2026-09-26T11:50:00Z", "kind": "recipe_adapted",
+            "recipeChanged": True,
+        }]
+
+        snapshot = material_monitor_snapshot(rows, 45, "Python Mk II", [{
+            "planId": "open-plan", "slot": "LargeHardpoint2",
+            "baselineTimestamp": "2026-09-26T12:05:00Z",
+        }])
+
+        self.assertEqual(snapshot["status"], "VERIFIED")
+        self.assertEqual(snapshot["observedCount"], 1)
+        self.assertEqual(snapshot["adaptationCount"], 0)
+
+    def test_snapshot_with_no_open_plans_drops_completed_run_warning(self):
+        snapshot = material_monitor_snapshot([{
+            "shipId": "45", "slot": "LargeHardpoint1",
+            "planId": "completed-plan", "timestamp": "2026-09-26T12:00:00Z",
+            "kind": "roll_budget_extended", "rollBudgetExtended": True,
+        }], 45, "Python Mk II", [])
+
+        self.assertEqual(snapshot["status"], "WAITING")
+        self.assertEqual(snapshot["observedCount"], 0)
+        self.assertEqual(snapshot["adaptationCount"], 0)
+
 
 if __name__ == "__main__":
     unittest.main()

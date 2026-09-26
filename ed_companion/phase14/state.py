@@ -631,9 +631,26 @@ def build_state(
         (str(row.get("type") or "") for row in fleet_state.get("ships", [])
          if row.get("label") == ship), "",
     )
+    active_monitor_plans = []
+    for task in tasks or []:
+        if not isinstance(task, list) or not task or not isinstance(task[0], dict):
+            continue
+        planner = task[0].get("_Planner", {}) or {}
+        if (
+            not isinstance(planner, dict)
+            or wishlist_target_status(planner)["code"] == "completed"
+        ):
+            continue
+        active_monitor_plans.append({
+            "planId": str(planner.get("plan_id") or ""),
+            "slot": str(planner.get("slot") or ""),
+            "baselineTimestamp": str(
+                (planner.get("journal_baseline") or {}).get("timestamp") or ""
+            ),
+        })
     material_monitor = material_monitor_snapshot(
         read_json(data_dir / "engineering_material_monitor.json", []),
-        selected_ship_id, ship,
+        selected_ship_id, ship, active_monitor_plans,
     )
     # Physical module state starts with fleet/loadout events but must also see
     # later EngineerCraft events, which ship_journal_events deliberately omits.

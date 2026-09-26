@@ -2024,6 +2024,144 @@ class ReleaseContractTests(unittest.TestCase):
         self.assertEqual(result["status"], "applied")
         self.assertEqual(replayed["crafts_completed"], {"1": 1})
 
+    def test_pending_rank_up_craft_cannot_shrink_safe_roll_reserve(self):
+        with TemporaryDirectory() as directory:
+            data_dir = Path(directory)
+            plan = build_engineering_plan(
+                [{
+                    "Type": "Fragment Cannon", "Name": "Overcharged Weapon",
+                    "Grade": grade, "Engineers": ["Zacariah Nemo"],
+                    "Ingredients": [{"Name": f"Material {grade}", "Size": 1}],
+                } for grade in range(1, 6)],
+                0, 5, ship_id=45, slot="LargeHardpoint1",
+                module_id="hpt_slugshot_gimbal_large", engineer_rank=0,
+                journal_baseline={
+                    "fingerprint": "prior-craft",
+                    "timestamp": "2026-09-26T12:00:00Z",
+                },
+            )
+            plan[0]["_SelectedEngineer"] = {"name": "Zacariah Nemo"}
+            (data_dir / "ship_blueprints.json").write_text(
+                json.dumps({"Python Mk II": [plan]}), encoding="utf-8"
+            )
+            craft = {
+                "timestamp": "2026-09-26T12:03:43Z",
+                "event": "EngineerCraft", "ShipID": 45,
+                "Slot": "LargeHardpoint1",
+                "Module": "hpt_slugshot_gimbal_large",
+                "Engineer": "Zacariah Nemo", "BlueprintID": 128673455,
+                "BlueprintName": "Weapon_Overcharged", "Level": 1,
+                "Quality": 0.2,
+                "Ingredients": [{"Name": "material1", "Count": 1}],
+            }
+            events = [{
+                "timestamp": "2026-09-26T12:04:30Z",
+                "event": "EngineerProgress", "Engineer": "Zacariah Nemo",
+                "Rank": 5, "Progress": "Unlocked",
+            }, craft]
+
+            migrate_wishlist_bindings(
+                data_dir,
+                {"ships": [{"label": "Python Mk II", "id": "45"}]},
+                events,
+            )
+            migrated = json.loads(
+                (data_dir / "ship_blueprints.json").read_text(encoding="utf-8")
+            )["Python Mk II"][0]
+            result = apply_engineer_craft(
+                data_dir / "ship_blueprints.json", "Python Mk II", craft,
+                ship_id=45,
+            )
+            replayed = json.loads(
+                (data_dir / "ship_blueprints.json").read_text(encoding="utf-8")
+            )["Python Mk II"][0]
+
+        self.assertEqual([row["_Rolls"] for row in migrated], [5, 5, 5, 5, 5])
+        sources = migrated[0]["_Planner"]["roll_estimate_sources"]
+        self.assertEqual(
+            {sources[str(grade)] for grade in range(1, 5)},
+            {"conservative_max"},
+        )
+        self.assertEqual(sources["5"], "engineer_rank")
+        self.assertEqual(result["status"], "applied")
+        self.assertEqual(remaining_grade_rolls(replayed[0]["_Planner"], replayed[0]), 4)
+
+    def test_pending_experimental_is_replayed_before_loadout_completion(self):
+        with TemporaryDirectory() as directory:
+            data_dir = Path(directory)
+            plan = build_engineering_plan(
+                [{
+                    "Type": "Fragment Cannon", "Name": "Overcharged Weapon",
+                    "Grade": 5, "Engineers": ["Zacariah Nemo"],
+                    "Ingredients": [{"Name": "Zirconium", "Size": 1}],
+                }],
+                4, 5, ship_id=45, slot="LargeHardpoint1",
+                module_id="hpt_slugshot_gimbal_large", engineer_rank=5,
+                experimental_id="fragment_cannon::incendiary_rounds",
+                experimental_name="Incendiary Rounds", plan_mode="combined",
+                grade_progress={"5": 1.0}, crafts_completed={"5": 5},
+                journal_baseline={
+                    "fingerprint": "prior-craft",
+                    "timestamp": "2026-09-26T12:00:00Z",
+                },
+            )
+            plan[0]["_Planner"].update({
+                "current_grade": 5,
+                "current_label": "G5",
+                "grade_progress": {"5": 1.0},
+                "crafts_completed": {"5": 5},
+            })
+            (data_dir / "ship_blueprints.json").write_text(
+                json.dumps({"Python Mk II": [plan]}), encoding="utf-8"
+            )
+            craft = {
+                "timestamp": "2026-09-26T12:05:17Z",
+                "event": "EngineerCraft", "ShipID": 45,
+                "Slot": "LargeHardpoint1",
+                "Module": "hpt_slugshot_gimbal_large",
+                "Engineer": "Zacariah Nemo", "BlueprintID": 128673459,
+                "BlueprintName": "Weapon_Overcharged", "Level": 5,
+                "Quality": 1.0,
+                "ApplyExperimentalEffect": "special_incendiary_rounds",
+                "ExperimentalEffect": "special_incendiary_rounds",
+                "Ingredients": [{"Name": "phosphorus", "Count": 5}],
+            }
+            loadout = {
+                "timestamp": "2026-09-26T12:05:20Z", "event": "Loadout",
+                "ShipID": 45, "Modules": [{
+                    "Slot": "LargeHardpoint1",
+                    "Item": "hpt_slugshot_gimbal_large",
+                    "Engineering": {
+                        "BlueprintName": "Weapon_Overcharged", "Level": 5,
+                        "Quality": 1.0,
+                        "ExperimentalEffect": "special_incendiary_rounds",
+                    },
+                }],
+            }
+
+            migrate_wishlist_bindings(
+                data_dir,
+                {"ships": [{"label": "Python Mk II", "id": "45"}]},
+                [craft, loadout],
+            )
+            migrated = json.loads(
+                (data_dir / "ship_blueprints.json").read_text(encoding="utf-8")
+            )["Python Mk II"][0][0]["_Planner"]
+            result = apply_engineer_craft(
+                data_dir / "ship_blueprints.json", "Python Mk II", craft,
+                ship_id=45,
+            )
+            replayed = json.loads(
+                (data_dir / "ship_blueprints.json").read_text(encoding="utf-8")
+            )["Python Mk II"][0][0]["_Planner"]
+
+        self.assertFalse(migrated.get("experimental_complete"))
+        self.assertEqual(result["status"], "applied")
+        self.assertTrue(replayed["experimental_complete"])
+        self.assertIn(
+            "special_incendiary_rounds", replayed["processed_crafts"][-1]
+        )
+
     def test_unknown_engineer_uses_safe_ceiling_for_every_blueprint(self):
         with TemporaryDirectory() as directory:
             data_dir = Path(directory)
