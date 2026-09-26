@@ -288,7 +288,12 @@ class PriorityWorkflowTests(unittest.TestCase):
                              "receiveName": "Iron"}]}
         action = select_operation_action(state, [])
         self.assertEqual(action["kind"], "TRADE")
-        self.assertEqual(action["title"], "WANTED · 6 Iron · GIVE · 1 Source")
+        self.assertEqual(
+            action["title"],
+            "WANTED · 6 Iron (+4 SURPLUS) · GIVE · 1 Source",
+        )
+        self.assertIn("covers 2 required units", action["reason"])
+        self.assertIn("adds 4 surplus units", action["reason"])
 
     def test_priority_collect_craft_experimental_then_resume(self):
         pp = {"module": "Power Plant", "blueprint": "Overcharged",

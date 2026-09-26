@@ -57,12 +57,61 @@ from ed_companion.phase14.state import (
 )
 from ed_companion.phase14.state_engineering import minimum_remaining_grade_rolls
 from ed_companion.loadout_export import build_loadout_export
-from ed_companion.navigation import find_nearest_catalog_trader
+from ed_companion.navigation import find_nearest_catalog_trader, plan_material_trades
 from ed_companion.navigation.trader_search import _spansh_json
 from ed_companion.services import latest_delivery_proof
 
 
 class ReleaseContractTests(unittest.TestCase):
+    def test_material_trade_prefers_exact_same_family_batch(self):
+        metadata = {
+            "manganese": {
+                "Name": "Manganese", "Category": "Raw",
+                "TraderGroup": "Category2", "Grade": 2,
+            },
+            "cadmium": {
+                "Name": "Cadmium", "Category": "Raw",
+                "TraderGroup": "Category2", "Grade": 3,
+            },
+            "ruthenium": {
+                "Name": "Ruthenium", "Category": "Raw",
+                "TraderGroup": "Category2", "Grade": 4,
+            },
+        }
+
+        trades = plan_material_trades(
+            {"manganese": 3},
+            {"manganese": 3, "cadmium": 5, "ruthenium": 7},
+            {"manganese": 0, "cadmium": 7, "ruthenium": 29},
+            metadata,
+        )
+
+        self.assertEqual(trades[0]["source"], "cadmium")
+        self.assertEqual(trades[0]["source_spent"], 1)
+        self.assertEqual(trades[0]["target_received"], 3)
+        self.assertEqual(trades[0]["excess_received"], 0)
+
+    def test_unavoidable_material_trade_surplus_is_explicit(self):
+        metadata = {
+            "manganese": {
+                "Name": "Manganese", "Category": "Raw",
+                "TraderGroup": "Category2", "Grade": 2,
+            },
+            "ruthenium": {
+                "Name": "Ruthenium", "Category": "Raw",
+                "TraderGroup": "Category2", "Grade": 4,
+            },
+        }
+
+        trades = plan_material_trades(
+            {"manganese": 3}, {"manganese": 3, "ruthenium": 7},
+            {"manganese": 0, "ruthenium": 29}, metadata,
+        )
+
+        self.assertEqual(trades[0]["target_received"], 9)
+        self.assertEqual(trades[0]["useful_received"], 3)
+        self.assertEqual(trades[0]["excess_received"], 6)
+
     def test_blueprint_ids_are_scoped_by_module_family(self):
         with TemporaryDirectory() as directory:
             path = Path(directory) / "blueprint_id_catalog_learned.json"

@@ -184,9 +184,20 @@ def plan_material_trades(missing, required, inventory, metadata, max_steps=None)
             if possible_batches <= 0:
                 continue
             potential = possible_batches * batch_out
+            covering_batches = min(
+                possible_batches, math.ceil(deficits[target] / batch_out)
+            )
+            covering_received = covering_batches * batch_out
+            fully_covers = potential >= deficits[target]
+            overfill = (
+                max(0, covering_received - deficits[target])
+                if fully_covers else 0
+            )
             candidates.append((
                 0 if same_group else 1,
                 0 if source_grade >= target_grade else 1,
+                0 if fully_covers and overfill == 0 else 1 if fully_covers else 2,
+                overfill,
                 -(batch_out / batch_in),
                 -min(deficits[target], potential),
                 source,
@@ -195,7 +206,8 @@ def plan_material_trades(missing, required, inventory, metadata, max_steps=None)
             ))
 
         for (
-            _cross_group, _trade_up, _efficiency, _coverage,
+            _cross_group, _trade_up, _exactness, _overfill,
+            _efficiency, _coverage,
             source, batch_in, batch_out,
         ) in sorted(candidates):
             if (
@@ -222,6 +234,7 @@ def plan_material_trades(missing, required, inventory, metadata, max_steps=None)
                 "source_spent": source_spent,
                 "target_received": target_received,
                 "useful_received": useful_received,
+                "excess_received": max(0, target_received - useful_received),
                 "remaining": deficits[target],
                 "category": target_category,
                 "same_group": (

@@ -1,5 +1,24 @@
 # Changelog
 
+## 1.5.25 — 2026-09-26
+
+### Fixed
+
+- **Exact Material Trader batches**: safe trades within the same material
+  family and direction now prefer a batch that matches the open requirement
+  exactly before a higher-yield batch that would create unnecessary surplus.
+  For example, a requirement of three Manganese uses one surplus Cadmium
+  instead of converting one Ruthenium into nine Manganese.
+- **Truthful unavoidable surplus**: when Elite's fixed exchange batch cannot
+  match the required amount, the trade card and action explanation distinguish
+  required units from received units and label the resulting surplus instead
+  of presenting every received unit as required.
+
+### Tests
+
+- **Trader precision contracts**: exact same-family donor selection and
+  unavoidable fixed-batch surplus reporting are now regression-tested.
+
 ## 1.5.24 — 2026-09-26
 
 ### Fixed

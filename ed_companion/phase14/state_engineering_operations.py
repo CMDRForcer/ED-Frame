@@ -889,13 +889,22 @@ def select_operation_action(
             receive_step, give_step = receive // divisor, give // divisor
             needed = priority_missing[str(trade["targetKey"])]["missing"]
             batches = min(divisor, math.ceil(needed / receive_step))
+            scoped_receive = batches * receive_step
+            scoped_useful = min(needed, scoped_receive)
+            scoped_surplus = max(0, scoped_receive - scoped_useful)
             scoped_trades.append({
                 **trade, "giveAmount": batches * give_step,
-                "receiveAmount": batches * receive_step,
-                "remaining": max(0, needed - batches * receive_step),
+                "receiveAmount": scoped_receive,
+                "usefulAmount": scoped_useful,
+                "surplusAmount": scoped_surplus,
+                "remaining": max(0, needed - scoped_receive),
                 "instruction": (
-                    f"WANTED · {batches * receive_step} {trade.get('receiveName', '')}"
-                    f" · GIVE · {batches * give_step} {trade.get('giveName', '')}"
+                    f"WANTED · {scoped_receive} {trade.get('receiveName', '')}"
+                    + (
+                        f" (+{scoped_surplus} SURPLUS)"
+                        if scoped_surplus else ""
+                    )
+                    + f" · GIVE · {batches * give_step} {trade.get('giveName', '')}"
                 ),
             })
         trades = scoped_trades
@@ -1222,6 +1231,11 @@ def select_operation_action(
         trade = trades[0]
         system = str(trade.get("system") or "")
         station = str(trade.get("station") or "")
+        received = int(trade.get("receiveAmount", 0) or 0)
+        useful = int(trade.get("usefulAmount", received) or 0)
+        surplus = int(
+            trade.get("surplusAmount", max(0, received - useful)) or 0
+        )
         return {
             "kind": "TRADE",
             "destinationKind": "trader",
@@ -1236,8 +1250,12 @@ def select_operation_action(
                 station, system,
             ) if value),
             "reason": (
-                f"This safe trade covers {int(trade.get('receiveAmount', 0) or 0)} "
-                f"required units while protected build stock remains reserved."
+                f"This safe trade covers {useful} required units while protected "
+                "build stock remains reserved."
+                + (
+                    f" Elite's fixed batch also adds {surplus} surplus units."
+                    if surplus else ""
+                )
             ),
             "after": "After the Journal confirms it, continue with the next highlighted trade or craft.",
             "system": system,

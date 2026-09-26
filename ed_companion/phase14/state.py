@@ -1042,6 +1042,15 @@ def build_state(
         receive_name = metadata.get(
             trade["target"], {}
         ).get("Name", trade["target"])
+        receive_amount = int(trade.get("target_received", 0) or 0)
+        useful_amount = int(
+            trade.get("useful_received", receive_amount) or 0
+        )
+        surplus_amount = int(
+            trade.get(
+                "excess_received", max(0, receive_amount - useful_amount)
+            ) or 0
+        )
         cards.append({
             "id": f"{trade['source']}->{trade['target']}",
             "targetKey": trade["target"],
@@ -1049,11 +1058,17 @@ def build_state(
             "giveName": give_name,
             "giveAmount": int(trade.get("source_spent", 0) or 0),
             "receiveName": receive_name,
-            "receiveAmount": int(trade.get("target_received", 0) or 0),
+            "receiveAmount": receive_amount,
+            "usefulAmount": useful_amount,
+            "surplusAmount": surplus_amount,
             "remaining": int(trade.get("remaining", 0) or 0),
             "instruction": (
-                f"WANTED · {int(trade.get('target_received', 0) or 0)} "
-                f"{receive_name} · GIVE · "
+                f"WANTED · {receive_amount} {receive_name}"
+                + (
+                    f" (+{surplus_amount} SURPLUS)"
+                    if surplus_amount else ""
+                )
+                + " · GIVE · "
                 f"{int(trade.get('source_spent', 0) or 0)} {give_name}"
             ),
             "system": str(trader.get("system") or ""),
