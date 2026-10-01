@@ -9,7 +9,9 @@ ColumnLayout {
     required property real sidebarWidth
     readonly property var missions: cockpit.activeMissions || []
     readonly property var summary: cockpit.missionsSummary || ({})
+    readonly property var stacks: cockpit.massacreStacks || []
     readonly property var goals: cockpit.communityGoals || []
+    property bool showMassacreStacks: stacks.length > 0
     readonly property color cyan: appWindow.cyan
     readonly property color green: appWindow.green
     readonly property color orange: appWindow.orange
@@ -30,6 +32,9 @@ ColumnLayout {
         if (isNaN(parsed))
             return false
         return (parsed - sessionClock) < 6 * 3600 * 1000
+    }
+    function formatCr(value) {
+        return Number(value || 0).toLocaleString(Qt.locale(), "f", 0) + " CR"
     }
     function missionKind(m) {
         if (m.killCount) return "combat"
@@ -134,9 +139,9 @@ ColumnLayout {
                     "warn": !!summary.nearestExpiry && missionsPage.isUrgent(summary.nearestExpiry),
                 },
                 {
-                    "label": appWindow.t("missions.stat_cgs", "COMMUNITY GOALS"),
-                    "value": String(goals.length),
-                    "unit": appWindow.t("missions.joined_unit", "joined"),
+                    "label": appWindow.t("missions.stat_massacre_stacks", "MASSACRE STACKS"),
+                    "value": String(stacks.length),
+                    "unit": "",
                     "warn": false,
                 },
             ]
@@ -194,12 +199,60 @@ ColumnLayout {
                     Layout.fillWidth: true
                     Label {
                         Layout.fillWidth: true
-                        text: appWindow.t("missions.active_missions", "ACTIVE MISSIONS")
-                        color: cyan; font.pixelSize: 11; font.bold: true
+                        text: showMassacreStacks
+                              ? appWindow.t("missions.massacre_stacks", "MASSACRE STACKS")
+                              : appWindow.t("missions.active_missions", "ACTIVE MISSIONS")
+                        color: showMassacreStacks ? danger : cyan
+                        font.pixelSize: 11; font.bold: true
                     }
                     Label {
-                        text: appWindow.tf("missions.tracked_count", "%1 TRACKED", [missions.length])
+                        text: showMassacreStacks
+                              ? appWindow.tf("missions.stack_count", "%1 TARGET FACTION(S)", [stacks.length])
+                              : appWindow.tf("missions.tracked_count", "%1 TRACKED", [missions.length])
                         color: muted; font.family: monoFont; font.pixelSize: 10
+                    }
+                }
+                RowLayout {
+                    Layout.fillWidth: true
+                    spacing: 6
+                    Rectangle {
+                        visible: stacks.length > 0
+                        Layout.fillWidth: true
+                        Layout.preferredHeight: 28
+                        radius: 6
+                        color: showMassacreStacks ? dangerBackground : panelRaised
+                        border.width: 1
+                        border.color: showMassacreStacks ? danger : borderTone
+                        Label {
+                            anchors.centerIn: parent
+                            text: appWindow.t("missions.view_stacks", "STACKED KILLS")
+                            color: showMassacreStacks ? danger : muted
+                            font.pixelSize: 9; font.bold: true
+                        }
+                        MouseArea {
+                            anchors.fill: parent; cursorShape: Qt.PointingHandCursor
+                            onClicked: showMassacreStacks = true
+                            Accessible.name: appWindow.t("missions.show_stacks", "Show massacre stacks")
+                        }
+                    }
+                    Rectangle {
+                        Layout.fillWidth: true
+                        Layout.preferredHeight: 28
+                        radius: 6
+                        color: !showMassacreStacks ? inputBackground : panelRaised
+                        border.width: 1
+                        border.color: !showMassacreStacks ? cyan : borderTone
+                        Label {
+                            anchors.centerIn: parent
+                            text: appWindow.t("missions.view_all", "ALL MISSIONS")
+                            color: !showMassacreStacks ? cyan : muted
+                            font.pixelSize: 9; font.bold: true
+                        }
+                        MouseArea {
+                            anchors.fill: parent; cursorShape: Qt.PointingHandCursor
+                            onClicked: showMassacreStacks = false
+                            Accessible.name: appWindow.t("missions.show_all", "Show all active missions")
+                        }
                     }
                 }
                 Rectangle { Layout.fillWidth: true; height: 1; color: borderTone }
@@ -217,7 +270,142 @@ ColumnLayout {
                 ScrollView {
                     Layout.fillWidth: true
                     Layout.fillHeight: true
-                    visible: missions.length > 0
+                    visible: showMassacreStacks && stacks.length > 0
+                    clip: true
+                    contentWidth: availableWidth
+                    ScrollBar.horizontal.policy: ScrollBar.AlwaysOff
+
+                    ColumnLayout {
+                        width: parent.width
+                        spacing: 8
+                        Repeater {
+                            model: stacks
+                            delegate: Rectangle {
+                                id: stackRow
+                                required property var modelData
+                                readonly property bool urgent: modelData.deadlineStatus === "expired"
+                                                               || modelData.deadlineStatus === "critical"
+                                                               || modelData.deadlineStatus === "soon"
+                                Layout.fillWidth: true
+                                implicitHeight: stackColumn.implicitHeight + 24
+                                radius: 10
+                                color: panelRaised
+                                border.width: urgent ? 1.6 : 1
+                                border.color: urgent ? danger : borderTone
+                                ColumnLayout {
+                                    id: stackColumn
+                                    anchors.left: parent.left; anchors.right: parent.right
+                                    anchors.top: parent.top; anchors.margins: 12; spacing: 8
+                                    RowLayout {
+                                        Layout.fillWidth: true; spacing: 10
+                                        ColumnLayout {
+                                            Layout.fillWidth: true; spacing: 2
+                                            Label {
+                                                Layout.fillWidth: true
+                                                text: stackRow.modelData.targetFaction
+                                                      || appWindow.t("missions.unknown_target_faction", "UNKNOWN TARGET FACTION")
+                                                color: danger; font.pixelSize: 14; font.bold: true
+                                                elide: Text.ElideRight
+                                            }
+                                            Label {
+                                                text: appWindow.tf("missions.stack_summary", "%1 MISSIONS · %2 ISSUERS",
+                                                                   [stackRow.modelData.missionCount || 0,
+                                                                    stackRow.modelData.issuerCount || 0])
+                                                color: muted; font.pixelSize: 9
+                                            }
+                                        }
+                                        ColumnLayout {
+                                            spacing: 1
+                                            Label {
+                                                Layout.alignment: Qt.AlignRight
+                                                text: appWindow.t("missions.effective_kills", "EFFECTIVE KILLS")
+                                                color: muted; font.pixelSize: 8; font.bold: true
+                                            }
+                                            Label {
+                                                Layout.alignment: Qt.AlignRight
+                                                text: stackRow.modelData.effectiveKills === null
+                                                      || stackRow.modelData.effectiveKills === undefined
+                                                      ? "—" : String(stackRow.modelData.effectiveKills)
+                                                color: stackRow.modelData.stackEvidenceComplete ? textPrimary : orange
+                                                font.family: monoFont; font.pixelSize: 19; font.bold: true
+                                            }
+                                        }
+                                    }
+                                    RowLayout {
+                                        Layout.fillWidth: true; spacing: 8
+                                        Label {
+                                            text: appWindow.tf("missions.nominal_kills", "%1 NOMINAL",
+                                                               [stackRow.modelData.nominalKills === null
+                                                                || stackRow.modelData.nominalKills === undefined
+                                                                ? "—" : stackRow.modelData.nominalKills])
+                                            color: textSecondary; font.family: monoFont; font.pixelSize: 10; font.bold: true
+                                        }
+                                        Label {
+                                            visible: stackRow.modelData.killsSavedByStacking > 0
+                                            text: appWindow.tf("missions.kills_saved", "%1 KILLS SAVED BY STACKING",
+                                                               [stackRow.modelData.killsSavedByStacking || 0])
+                                            color: green; font.pixelSize: 9; font.bold: true
+                                        }
+                                        Item { Layout.fillWidth: true }
+                                        Label {
+                                            text: missionsPage.formatCr(stackRow.modelData.totalReward)
+                                            color: orange; font.family: monoFont; font.pixelSize: 11; font.bold: true
+                                        }
+                                    }
+                                    Rectangle { Layout.fillWidth: true; height: 1; color: borderTone }
+                                    Label {
+                                        text: appWindow.t("missions.issuer_lanes", "KILLS REQUIRED PER ISSUING FACTION")
+                                        color: muted; font.pixelSize: 8; font.bold: true
+                                    }
+                                    Repeater {
+                                        model: stackRow.modelData.issuerLanes || []
+                                        delegate: RowLayout {
+                                            required property var modelData
+                                            Layout.fillWidth: true; spacing: 8
+                                            Label {
+                                                Layout.fillWidth: true
+                                                text: modelData.issuerFaction
+                                                color: textSecondary; font.pixelSize: 10; font.bold: true
+                                                elide: Text.ElideRight
+                                            }
+                                            Label {
+                                                text: appWindow.tf("missions.issuer_lane_kills", "%1 KILLS · %2 MISSION(S)",
+                                                                   [modelData.requiredKills || 0,
+                                                                    modelData.missionCount || 0])
+                                                color: cyan; font.family: monoFont; font.pixelSize: 10; font.bold: true
+                                            }
+                                        }
+                                    }
+                                    Label {
+                                        Layout.fillWidth: true
+                                        visible: !stackRow.modelData.stackEvidenceComplete
+                                        text: appWindow.t("missions.stack_incomplete", "Issuer or kill-count evidence is incomplete; no exact effective total is claimed.")
+                                        color: orange; font.pixelSize: 9; wrapMode: Text.WordWrap
+                                    }
+                                    RowLayout {
+                                        Layout.fillWidth: true
+                                        Label {
+                                            Layout.fillWidth: true
+                                            text: appWindow.t("missions.no_live_kill_progress", "Elite does not journal live massacre kill progress.")
+                                            color: muted; font.pixelSize: 9; wrapMode: Text.WordWrap
+                                        }
+                                        Label {
+                                            text: stackRow.modelData.nearestExpiry
+                                                  ? appWindow.timeUntil(stackRow.modelData.nearestExpiry) : "—"
+                                            color: stackRow.urgent ? danger : textSecondary
+                                            font.family: monoFont; font.pixelSize: 11; font.bold: true
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+
+                ScrollView {
+                    Layout.fillWidth: true
+                    Layout.fillHeight: true
+                    visible: missions.length > 0 && !showMassacreStacks
                     clip: true
                     contentWidth: availableWidth
                     ScrollBar.horizontal.policy: ScrollBar.AlwaysOff
@@ -230,7 +418,9 @@ ColumnLayout {
                             delegate: Rectangle {
                                 id: missionRow
                                 required property var modelData
-                                readonly property bool urgent: missionsPage.isUrgent(modelData.expiry)
+                                readonly property bool urgent: modelData.deadlineStatus === "expired"
+                                                               || modelData.deadlineStatus === "critical"
+                                                               || modelData.deadlineStatus === "soon"
                                 readonly property string kind: missionsPage.missionKind(modelData)
                                 readonly property color kindColor: missionsPage.missionKindColor(kind)
                                 Layout.fillWidth: true

@@ -189,11 +189,13 @@ class QmlInteractionContractTests(unittest.TestCase):
         self.assertIn("radius: 9; color: errorBackground", source)
 
     def test_mining_filters_run_only_after_user_activation(self):
-        source = (ROOT / "Main.qml").read_text(encoding="utf-8-sig")
+        source = (ROOT / "qml" / "pages" / "MiningFinderPage.qml").read_text(
+            encoding="utf-8-sig"
+        )
         for control_id, target in (
             ("commodityBox", "commodityFilter"),
-            ("evidenceBox", "evidenceFilter"),
             ("reserveBox", "reserveFilter"),
+            ("optimizationBox", "optimization"),
         ):
             block = next(
                 block for _offset, block in qml_blocks(
@@ -201,8 +203,10 @@ class QmlInteractionContractTests(unittest.TestCase):
                 )
                 if f"id: {control_id}" in block
             )
-            self.assertIn(
-                f"onActivated: miningFinderPage.{target} = currentText", block
+            self.assertRegex(
+                block,
+                rf"onActivated:\s*(?:\{{\s*)?miningFinderPage\."
+                rf"{target}\s*=\s*currentText",
             )
             self.assertNotIn("onCurrentTextChanged:", block)
 

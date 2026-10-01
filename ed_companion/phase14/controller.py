@@ -146,9 +146,14 @@ COMMANDER_CARD_IDS = (
 NAVIGATION_IDS = (
     "operations", "engineering", "wishlist", "engineers", "materials",
     "mining-finder", "state-finds", "powerplay", "cmdr", "logbook",
-    "exobiology", "missions", "nav", "settings",
+    "exploration", "exobiology", "missions", "nav", "settings",
 )
 LEGACY_DEFAULT_NAVIGATION_ORDERS = {
+    (
+        "operations", "engineering", "wishlist", "engineers", "materials",
+        "mining-finder", "state-finds", "powerplay", "cmdr", "logbook",
+        "exploration", "exobiology", "missions", "nav", "settings",
+    ),
     (
         "operations", "engineering", "wishlist", "engineers", "materials",
         "mining-finder", "state-finds", "powerplay", "cmdr", "logbook",
@@ -176,7 +181,13 @@ def initial_navigation_order(configured):
     ))
     if not order or tuple(order) in LEGACY_DEFAULT_NAVIGATION_ORDERS:
         return list(NAVIGATION_IDS)
-    order.extend(item for item in NAVIGATION_IDS if item not in order)
+    for item in NAVIGATION_IDS:
+        if item in order:
+            continue
+        if item == "exploration" and "exobiology" in order:
+            order.insert(order.index("exobiology"), item)
+        else:
+            order.append(item)
     return order
 
 
@@ -337,6 +348,10 @@ class CockpitController(
         self.trader_catalog_file = user_trader_catalog_path(context)
         self.tech_broker_catalog_file = self.config_dir / "tech_broker_catalog_user.json"
         self.mining_catalog_file = self.config_dir / "mining_finder_catalog.json"
+        self.mining_market_cache_file = self.config_dir / "mining_market_cache.json"
+        self.mining_powerplay_catalog_file = (
+            self.config_dir / "mining_powerplay_catalog.json"
+        )
         self.mining_pins_file = self.config_dir / "mining_finder_pins.json"
         self.history_archive_file = self.config_dir / "data_history.sqlite3"
         self.fleet_images_file = self.config_dir / "fleet_images.json"
@@ -399,6 +414,17 @@ class CockpitController(
             self._onboarding_complete = True
         self._debug_mode = bool(ui_config.get("debug_mode", False))
         self._journal_auto = bool(ui_config.get("journal_auto", True))
+        self._spansh_auto_refresh = bool(
+            ui_config.get("spansh_auto_refresh", False)
+        )
+        self._spansh_auto_refresh_hours = int(
+            ui_config.get("spansh_auto_refresh_hours", 24) or 24
+        )
+        if self._spansh_auto_refresh_hours not in {6, 12, 24, 48}:
+            self._spansh_auto_refresh_hours = 24
+        self._spansh_last_refresh = str(
+            ui_config.get("spansh_last_refresh") or ""
+        )
         self._background_mode = bool(ui_config.get("background_mode", False))
         self._autostart_enabled = bool(ui_config.get("autostart_enabled", False))
         self._trader_preference = str(
@@ -411,7 +437,7 @@ class CockpitController(
         self._shutdown_complete = False
         self._network_threads = set()
         self._network_threads_lock = threading.Lock()
-        self._last_page = max(0, min(15, int(ui_config.get("last_page", 0) or 0)))
+        self._last_page = max(0, min(16, int(ui_config.get("last_page", 0) or 0)))
         configured_cards = ui_config.get("commander_card_order", [])
         configured_cards = configured_cards if isinstance(configured_cards, list) else []
         self._commander_card_order = list(dict.fromkeys(
@@ -502,6 +528,33 @@ class CockpitController(
         self._mining_sync_status = "Ready"
         self._active_mining_request = None
         self.miningSyncFinished.connect(self._finish_mining_sync)
+        self._mining_market_cache = self._read_local_json(
+            self.mining_market_cache_file, {}
+        )
+        if not isinstance(self._mining_market_cache, dict):
+            self._mining_market_cache = {}
+        self._mining_market_busy = False
+        self._mining_market_status = self._mining_market_cache_status()
+        self._mining_market_revision = 0
+        self._active_mining_market_request = None
+        self.miningMarketFinished.connect(self._finish_mining_market_sync)
+        self._mining_powerplay_catalog = self._read_local_json(
+            self.mining_powerplay_catalog_file, {}
+        )
+        if not isinstance(self._mining_powerplay_catalog, dict):
+            self._mining_powerplay_catalog = {}
+        self._mining_powerplay_busy = False
+        powerplay_count = len(
+            self._mining_powerplay_catalog.get("systems", [])
+        )
+        self._mining_powerplay_status = (
+            f"Cached · {powerplay_count} Powerplay system links"
+            if powerplay_count else "Ready · loads with community catalogs"
+        )
+        self._active_mining_powerplay_request = None
+        self.miningPowerplayFinished.connect(
+            self._finish_mining_powerplay_sync
+        )
         self._mining_pins = set(
             str(item) for item in self._read_local_json(self.mining_pins_file, [])
             if isinstance(item, str)
@@ -629,6 +682,11 @@ class CockpitController(
         self.hgeBatchTimer.setInterval(3000)
         self.hgeBatchTimer.timeout.connect(self.flushHgeObservationBatch)
         self.hgeBatchTimer.start()
+        self.spanshAutoRefreshTimer = QTimer(self)
+        self.spanshAutoRefreshTimer.setInterval(5 * 60 * 1000)
+        self.spanshAutoRefreshTimer.timeout.connect(self._maybe_auto_refresh_spansh)
+        self.spanshAutoRefreshTimer.start()
+        QTimer.singleShot(30_000, self._maybe_auto_refresh_spansh)
         self._ensure_eddn_listener()
 
     def _start_initial_state_load(self):
@@ -2229,6 +2287,9 @@ class CockpitController(
         self._active_mining_request = None
         self._mining_sync_busy = False
         self._mining_sync_status = "Ready"
+        self._active_mining_market_request = None
+        self._mining_market_busy = False
+        self._mining_market_status = "Ready · market data loads when a route is searched"
         self._pending_mining_candidates = []
         self._last_commander_status_stamp = None
         self._last_bgs_batch_monotonic = time.monotonic()
@@ -2246,6 +2307,27 @@ class CockpitController(
         if getattr(self, "_frontier_watchdog", None) is not None:
             self._frontier_watchdog.stop()
         self._bind_profile_paths(context)
+        self._mining_market_cache = self._read_local_json(
+            self.mining_market_cache_file, {}
+        )
+        if not isinstance(self._mining_market_cache, dict):
+            self._mining_market_cache = {}
+        self._mining_market_status = self._mining_market_cache_status()
+        self._mining_powerplay_catalog = self._read_local_json(
+            self.mining_powerplay_catalog_file, {}
+        )
+        if not isinstance(self._mining_powerplay_catalog, dict):
+            self._mining_powerplay_catalog = {}
+        powerplay_count = len(
+            self._mining_powerplay_catalog.get("systems", [])
+        )
+        self._mining_powerplay_status = (
+            f"Cached · {powerplay_count} Powerplay system links"
+            if powerplay_count else "Ready · loads with community catalogs"
+        )
+        self._mining_market_revision = getattr(
+            self, "_mining_market_revision", 0
+        ) + 1
         self._init_surface_nav()
         self._frontier_credential_store = FrontierCredentialStore(
             self.frontier_credentials_file
@@ -2541,7 +2623,7 @@ class CockpitController(
 
     @Slot(int)
     def setLastPage(self, page):
-        page = max(0, min(15, int(page)))
+        page = max(0, min(16, int(page)))
         if page != self._last_page:
             if self._last_page == 3 and page != 3:
                 self.clearCraftConfirmation()

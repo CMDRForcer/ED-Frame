@@ -364,6 +364,15 @@ class UiSettingsMixin:
             "last_page": self._last_page,
             "debug_mode": self._debug_mode,
             "journal_auto": self._journal_auto,
+            "spansh_auto_refresh": getattr(
+                self, "_spansh_auto_refresh", False
+            ),
+            "spansh_auto_refresh_hours": getattr(
+                self, "_spansh_auto_refresh_hours", 24
+            ),
+            "spansh_last_refresh": getattr(
+                self, "_spansh_last_refresh", ""
+            ),
             "background_mode": self._background_mode,
             "autostart_enabled": self._autostart_enabled,
             "trader_preference": self._trader_preference,

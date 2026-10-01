@@ -117,15 +117,38 @@ def parse_single_instance_message(message):
 
 
 def register_windows_url_protocol(
-    *, executable=None, frozen=None, winreg_module=None
+    *, executable=None, frozen=None, winreg_module=None, script=None,
+    source_launcher=None, command_processor=None,
 ):
     """Register edec:// for the current Windows user without admin rights."""
     frozen = getattr(sys, "frozen", False) if frozen is None else bool(frozen)
-    if os.name != "nt" or not frozen:
+    if os.name != "nt":
         return False
     if winreg_module is None:
         import winreg as winreg_module
     executable = str(Path(executable or sys.executable).resolve())
+    if frozen:
+        open_command = f'"{executable}" "%1"'
+    else:
+        script_path = Path(script or __file__).resolve()
+        launcher = Path(
+            source_launcher or script_path.with_name("START_APP.bat")
+        ).resolve()
+        if launcher.is_file():
+            processor = str(Path(
+                command_processor
+                or os.environ.get("ComSpec")
+                or r"C:\Windows\System32\cmd.exe"
+            ).resolve())
+            open_command = (
+                f'"{processor}" /d /s /c ""{launcher}" "%1""'
+            )
+        else:
+            python_path = Path(executable)
+            pythonw = python_path.with_name("pythonw.exe")
+            if pythonw.is_file():
+                python_path = pythonw
+            open_command = f'"{python_path}" "{script_path}" "%1"'
     values = {
         rf"Software\Classes\{OAUTH_SCHEME}": {
             "": "URL:ED-Frame OAuth Callback",
@@ -135,7 +158,7 @@ def register_windows_url_protocol(
             "": f'"{executable}",0',
         },
         rf"Software\Classes\{OAUTH_SCHEME}\shell\open\command": {
-            "": f'"{executable}" "%1"',
+            "": open_command,
         },
     }
     try:
@@ -352,7 +375,9 @@ class SmokeTestRunner(QObject):
         ("powerplay", 11, "qa-page-powerplay"),
         ("mining-finder", 12, "qa-page-mining-finder"),
         ("exobiology", 13, "qa-page-exobiology"),
+        ("missions", 14, "qa-page-missions"),
         ("nav", 15, "qa-page-nav"),
+        ("exploration", 16, "qa-page-exploration"),
     ]
     DIALOG_STEPS = [
         ("dialog-build-import", "qa-dialog-build-import"),
@@ -407,7 +432,38 @@ class SmokeTestRunner(QObject):
     def _page(self, page, object_name):
         self.window.setProperty("currentPage", page)
         target = self._find(object_name)
-        return bool(target and target.property("visible"))
+        if not target or not target.property("visible"):
+            return False
+        if page != 12:
+            return True
+
+        content = target.findChild(QObject, "qa-mining-content")
+        header = target.findChild(QObject, "qa-mining-header")
+        config = target.findChild(QObject, "qa-mining-config")
+        empty = target.findChild(QObject, "qa-mining-empty")
+        if not content or not header or not config or not empty:
+            return False
+        right_edge = float(content.property("x")) + float(
+            content.property("width")
+        )
+        content_fits = (
+            float(content.property("x")) >= 0
+            and right_edge <= float(target.property("width")) + 0.5
+        )
+        header_gap = float(config.property("y")) - (
+            float(header.property("y")) + float(header.property("height"))
+        )
+        empty_gap = float(empty.property("y")) - (
+            float(config.property("y")) + float(config.property("height"))
+        )
+        return bool(
+            content_fits
+            and -0.5 <= header_gap <= 20
+            and (
+                not bool(empty.property("visible"))
+                or -0.5 <= empty_gap <= 70
+            )
+        )
 
     def _materials_state(self):
         self.window.setProperty("currentPage", 2)
@@ -435,7 +491,7 @@ class SmokeTestRunner(QObject):
         target = self._find("qa-page-connections")
         if not target or not target.property("visible"):
             return False
-        for mode in (0, 1, 2):
+        for mode in (0, 1, 2, 3):
             self.window.setProperty("connectionPreviewMode", mode)
             if int(self.window.property("connectionPreviewMode")) != mode:
                 return False

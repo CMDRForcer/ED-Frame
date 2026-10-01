@@ -91,6 +91,38 @@ class FrontierOAuthCallbackTests(unittest.TestCase):
             command_values[""], f'"{executable.resolve()}" "%1"'
         )
 
+    def test_windows_source_registration_uses_normal_app_launcher(self):
+        registry = FakeWinreg()
+        executable = ROOT / ".venv" / "Scripts" / "python.exe"
+        script = ROOT / "phase14_main.py"
+        launcher = ROOT / "START_APP.bat"
+        command_processor = Path(r"C:\Windows\System32\cmd.exe")
+
+        registered = register_windows_url_protocol(
+            executable=executable,
+            frozen=False,
+            winreg_module=registry,
+            script=script,
+            source_launcher=launcher,
+            command_processor=command_processor,
+        )
+
+        self.assertTrue(registered)
+        command_values = next(
+            values for (root, path), values in registry.values.items()
+            if path.endswith(r"shell\open\command")
+        )
+        self.assertEqual(
+            command_values[""],
+            f'"{command_processor.resolve()}" /d /s /c '
+            f'""{launcher.resolve()}" "%1""',
+        )
+
+    def test_source_launcher_forwards_callback_arguments(self):
+        source = (ROOT / "START_APP.bat").read_text(encoding="utf-8")
+
+        self.assertIn("phase14_main.py %*", source)
+
     def test_https_callback_page_forwards_only_oauth_parameters(self):
         source = (ROOT / "docs" / "oauth" / "callback.html").read_text(
             encoding="utf-8"

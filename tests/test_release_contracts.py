@@ -389,6 +389,7 @@ class ReleaseContractTests(unittest.TestCase):
 
         identity, prepared, _ = prepare_journal_batch(
             events, expected_identity="F207773", max_events=None,
+            now=datetime(2026, 8, 30, tzinfo=timezone.utc),
         )
 
         materials = [

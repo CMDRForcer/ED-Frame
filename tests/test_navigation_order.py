@@ -13,7 +13,7 @@ class NavigationOrderTests(unittest.TestCase):
             (
                 "operations", "engineering", "wishlist", "engineers", "materials",
                 "mining-finder", "state-finds", "powerplay", "cmdr", "logbook",
-                "exobiology", "missions", "nav", "settings",
+                "exploration", "exobiology", "missions", "nav", "settings",
             ),
         )
 
@@ -37,6 +37,18 @@ class NavigationOrderTests(unittest.TestCase):
         custom = list(reversed(NAVIGATION_IDS))
         self.assertEqual(initial_navigation_order(custom), custom)
 
+    def test_new_exploration_page_is_inserted_next_to_exobiology(self):
+        custom = [
+            "operations", "engineering", "wishlist", "engineers", "materials",
+            "exobiology", "missions", "settings",
+        ]
+        migrated = initial_navigation_order(custom)
+        self.assertEqual(
+            migrated.index("exploration"), migrated.index("exobiology") - 1
+        )
+        self.assertEqual(
+            [item for item in migrated if item in custom], custom
+        )
 
 if __name__ == "__main__":
     unittest.main()

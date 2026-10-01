@@ -480,6 +480,61 @@ class MiningFinderProjectionTests(unittest.TestCase):
         self.assertEqual(rows[0]["distanceLy"], 0.0)
         self.assertEqual(rows[0]["hotspotNames"], "Platinum")
 
+    def test_custom_start_system_recalculates_candidate_distances(self):
+        controller = CockpitController.__new__(CockpitController)
+        controller._state = {
+            "system": "Journal System", "currentPosition": [100, 100, 100]
+        }
+        controller._mining_rows_cache_key = ("custom-origin",)
+        controller._system_coordinate_index = Mock(return_value={})
+        common = {
+            "observedAt": datetime.now(timezone.utc).isoformat(),
+            "reserveLevel": "PristineResources",
+            "evidence": "LIVE_REPORTED",
+            "ringTypeName": "Metallic",
+            "hotspots": [{"commodity": "platinum", "count": 1}],
+        }
+        controller._mining_rows = Mock(return_value=[
+            {**common, "system": "Origin", "ring": "Origin A Ring",
+             "coordinates": [0, 0, 0], "distanceLy": 999},
+            {**common, "system": "Near", "ring": "Near A Ring",
+             "coordinates": [3, 4, 0], "distanceLy": 999},
+            {**common, "system": "Far", "ring": "Far A Ring",
+             "coordinates": [30, 0, 0], "distanceLy": 1},
+        ])
+
+        rows = controller._mining_find_page(
+            "Platinum", 15, "ALL EVIDENCE", "ALL RESERVES", "LASER",
+            "Origin",
+        )
+
+        self.assertEqual([row["system"] for row in rows], ["Origin", "Near"])
+        self.assertEqual([row["distanceLy"] for row in rows], [0.0, 5.0])
+        self.assertTrue(all(row["routeOriginKnown"] for row in rows))
+
+    def test_unknown_custom_start_system_keeps_candidates_without_fake_distance(self):
+        controller = CockpitController.__new__(CockpitController)
+        controller._state = {"system": "Journal System"}
+        controller._mining_rows_cache_key = ("unknown-origin",)
+        controller._system_coordinate_index = Mock(return_value={})
+        controller._mining_rows = Mock(return_value=[{
+            "system": "Candidate", "ring": "Candidate A Ring",
+            "coordinates": [30, 0, 0], "distanceLy": 1,
+            "observedAt": datetime.now(timezone.utc).isoformat(),
+            "reserveLevel": "PristineResources",
+            "evidence": "LIVE_REPORTED", "ringTypeName": "Metallic",
+            "hotspots": [{"commodity": "platinum", "count": 1}],
+        }])
+
+        rows = controller._mining_find_page(
+            "Platinum", 15, "ALL EVIDENCE", "ALL RESERVES", "LASER",
+            "Completely Unknown",
+        )
+
+        self.assertEqual(len(rows), 1)
+        self.assertIsNone(rows[0]["distanceLy"])
+        self.assertFalse(rows[0]["routeOriginKnown"])
+
     def test_controller_ranks_observed_yield_before_hotspot_and_ring_type(self):
         controller = CockpitController.__new__(CockpitController)
         controller._mining_rows_cache_key = ("rank",)
@@ -678,6 +733,42 @@ class MiningFinderProjectionTests(unittest.TestCase):
         self.assertEqual(candidate["hotspots"], [
             {"commodity": "platinum", "count": 1},
         ])
+
+    def test_spansh_dump_retains_verified_market_demand_for_route_scoring(self):
+        payload = json.loads(json.dumps(FIXTURE["spansh_dump"]))
+        payload["system"]["controllingPower"] = "Aisling Duval"
+        payload["system"]["powerState"] = "Reinforcement"
+        payload["system"]["stations"] = [{
+            "name": "Synthetic Mining Exchange",
+            "distanceToArrival": 412.5,
+            "landingPadSize": "L",
+            "updateTime": "2026-09-02T13:05:00Z",
+            "commodities": [{
+                "name": "Platinum",
+                "sellPrice": 287321,
+                "demand": 15420,
+            }],
+        }]
+
+        candidate = project_spansh_mining_candidates(payload)[0]
+
+        self.assertEqual(candidate["controllingPower"], "Aisling Duval")
+        self.assertEqual(candidate["powerState"], "Reinforcement")
+        self.assertEqual(candidate["markets"], [{
+            "commodity": "platinum",
+            "station": "Synthetic Mining Exchange",
+            "system": payload["system"]["name"],
+            "sellPrice": 287321,
+            "demand": 15420,
+            "observedAt": "2026-09-02T13:05:00Z",
+            "landingPadSize": "L",
+            "distanceToArrivalLs": 412.5,
+            "controllingPower": "Aisling Duval",
+            "powerState": "Reinforcement",
+            "powers": [],
+            "systemState": "",
+            "source": "Spansh system dump market",
+        }])
 
     def test_invalid_or_partial_spansh_payload_stays_empty_or_unknown(self):
         self.assertEqual(project_spansh_mining_candidates({}), [])

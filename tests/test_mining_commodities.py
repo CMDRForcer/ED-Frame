@@ -93,6 +93,32 @@ class MiningCommodityCatalogTests(unittest.TestCase):
         self.assertEqual(len(rows), 1)
         self.assertEqual(rows[0]["targetMatch"], "RING_TYPE")
 
+    def test_controller_limits_ring_filters_to_selected_commodity(self):
+        controller = CockpitController.__new__(CockpitController)
+
+        self.assertEqual(
+            controller.miningRingFiltersForCommodity("Platinum", "LASER"),
+            ["METAL RICH", "METALLIC", "ANY RING"],
+        )
+        self.assertEqual(
+            controller.miningRingFiltersForCommodity("Tritium", "LASER"),
+            ["ICY", "ANY RING"],
+        )
+        self.assertEqual(
+            controller.miningRingFiltersForCommodity(
+                "Thortveitite", "RHINO SURFACE"
+            ),
+            ["ANY RING"],
+        )
+
+    def test_unknown_commodity_keeps_safe_any_ring_fallback(self):
+        controller = CockpitController.__new__(CockpitController)
+
+        self.assertEqual(
+            controller.miningRingFiltersForCommodity("Future Ore", "LASER"),
+            ["ANY RING"],
+        )
+
     def test_controller_presents_only_reported_planetary_rhino_destinations(self):
         controller = CockpitController.__new__(CockpitController)
         controller._state = {"system": "Test", "localMiningEvidence": {}}

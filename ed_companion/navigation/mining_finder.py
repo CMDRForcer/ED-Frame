@@ -190,6 +190,7 @@ def merge_mining_candidates(
     fill_fields = (
         "system", "systemAddress", "coordinates", "distanceLy", "body",
         "bodyId", "ring", "ringType", "reserveLevel", "distanceToArrivalLs",
+        "controllingPower", "powerState", "powers", "systemState",
     )
     for observations in groups.values():
         observations.sort(key=lambda row: (
@@ -674,6 +675,76 @@ def project_eddn_mining_candidates(
     return rows
 
 
+def _spansh_mining_markets(system: dict[str, Any]) -> list[dict[str, Any]]:
+    """Retain only mineable commodity demand from an optional dump market."""
+    rows = []
+    for station in system.get("stations") or []:
+        if not isinstance(station, dict):
+            continue
+        commodities = station.get("commodities") or station.get("market") or []
+        if isinstance(commodities, dict):
+            commodities = commodities.get("commodities") or []
+        for commodity in commodities if isinstance(commodities, list) else []:
+            if not isinstance(commodity, dict):
+                continue
+            identifier = mining_commodity_id(
+                commodity.get("name") or commodity.get("commodity")
+                or commodity.get("symbol")
+            )
+            if not identifier:
+                continue
+            try:
+                sell_price = max(0, int(
+                    commodity.get("sellPrice")
+                    or commodity.get("sell_price") or 0
+                ))
+                demand = max(0, int(commodity.get("demand") or 0))
+            except (TypeError, ValueError):
+                continue
+            if sell_price <= 0 or demand <= 0:
+                continue
+            landing_pad_size = _text(station.get("landingPadSize"))
+            landing_pads = station.get("landingPads")
+            if not landing_pad_size and isinstance(landing_pads, dict):
+                for key, label in (
+                    ("large", "L"), ("medium", "M"), ("small", "S"),
+                ):
+                    try:
+                        available = int(landing_pads.get(key, 0) or 0)
+                    except (TypeError, ValueError):
+                        available = 0
+                    if available > 0:
+                        landing_pad_size = label
+                        break
+            rows.append({
+                "commodity": identifier,
+                "station": _text(station.get("name")),
+                "system": _text(system.get("name")),
+                "sellPrice": sell_price,
+                "demand": demand,
+                "observedAt": _text(
+                    commodity.get("updateTime") or station.get("updateTime")
+                    or system.get("date")
+                ),
+                "landingPadSize": landing_pad_size,
+                "distanceToArrivalLs": station.get("distanceToArrival"),
+                "controllingPower": _text(
+                    station.get("controllingPower")
+                    or system.get("controllingPower")
+                ),
+                "powerState": _text(
+                    station.get("powerState") or system.get("powerState")
+                ),
+                "powers": [
+                    _text(item) for item in system.get("powers") or []
+                    if _text(item)
+                ],
+                "systemState": _text(system.get("state")),
+                "source": "Spansh system dump market",
+            })
+    return rows
+
+
 def project_spansh_mining_candidates(
     payload: dict[str, Any], origin: Any = None,
 ) -> list[dict[str, Any]]:
@@ -688,6 +759,7 @@ def project_spansh_mining_candidates(
         coordinates_object.get("z"),
     ]) if isinstance(coordinates_object, dict) else []
     rows = []
+    markets = _spansh_mining_markets(system)
     for body in system.get("bodies") or []:
         if not isinstance(body, dict):
             continue
@@ -714,5 +786,13 @@ def project_spansh_mining_candidates(
                     or body.get("updateTime") or system.get("date")
                 ),
                 "source": "Spansh dump catalog",
+                "markets": [dict(row) for row in markets],
+                "controllingPower": _text(system.get("controllingPower")),
+                "powerState": _text(system.get("powerState")),
+                "powers": [
+                    _text(item) for item in system.get("powers") or []
+                    if _text(item)
+                ],
+                "systemState": _text(system.get("state")),
             })
     return rows

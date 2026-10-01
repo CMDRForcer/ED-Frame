@@ -6,6 +6,7 @@ answers "what is currently outstanding", never acts on it.
 """
 from __future__ import annotations
 
+from datetime import datetime, timezone
 from typing import Any
 
 _CLOSING_EVENTS = frozenset({"MissionCompleted", "MissionFailed", "MissionAbandoned"})
@@ -74,10 +75,13 @@ def active_missions(events: list[dict[str, Any]] | None) -> list[dict[str, Any]]
                 continue
             missions[mission_id] = {
                 "missionId": mission_id,
+                "acceptedAt": str(event.get("timestamp") or ""),
+                "nameSymbol": str(event.get("Name") or ""),
                 "name": str(
                     event.get("LocalisedName") or event.get("Name") or ""
                 ),
                 "faction": str(event.get("Faction") or ""),
+                "issuerFaction": str(event.get("Faction") or ""),
                 "destinationSystem": str(event.get("DestinationSystem") or ""),
                 "destinationStation": str(event.get("DestinationStation") or ""),
                 "expiry": str(event.get("Expiry") or ""),
@@ -88,8 +92,13 @@ def active_missions(events: list[dict[str, Any]] | None) -> list[dict[str, Any]]
                 "target": str(
                     event.get("Target_Localised") or event.get("Target") or ""
                 ),
+                "targetSymbol": str(event.get("Target") or ""),
                 "targetFaction": str(event.get("TargetFaction") or ""),
-                "targetType": str(event.get("TargetType_Localised") or ""),
+                "targetType": str(
+                    event.get("TargetType_Localised")
+                    or event.get("TargetType") or ""
+                ),
+                "targetTypeSymbol": str(event.get("TargetType") or ""),
                 "killCount": _as_int(event.get("KillCount")),
                 "wing": bool(event.get("Wing")),
                 "progressKnown": False,
@@ -146,6 +155,175 @@ def missions_summary(missions: list[dict[str, Any]] | None) -> dict[str, Any]:
         "missionsWithKnownReward": len(known_rewards),
         "nearestExpiry": expiries[0] if expiries else "",
     }
+
+
+def _utc_datetime(value: object) -> datetime | None:
+    """Parse a Journal timestamp without ever assuming local time."""
+    text = str(value or "").strip()
+    if not text:
+        return None
+    try:
+        parsed = datetime.fromisoformat(text.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone(timezone.utc)
+
+
+def prioritized_missions(
+    missions: list[dict[str, Any]] | None,
+    *,
+    now: datetime | None = None,
+) -> list[dict[str, Any]]:
+    """Decorate and sort active missions by actionable deadline.
+
+    Frontier may keep an overdue mission in the local journal until its
+    eventual failure event arrives.  Such a mission remains visible, but is
+    labelled ``expired`` rather than silently discarded.  Missing or invalid
+    expiries sort last and are explicitly labelled ``none``.
+    """
+    instant = now or datetime.now(timezone.utc)
+    if instant.tzinfo is None:
+        instant = instant.replace(tzinfo=timezone.utc)
+    else:
+        instant = instant.astimezone(timezone.utc)
+    rows: list[dict[str, Any]] = []
+    for mission in missions or []:
+        if not isinstance(mission, dict):
+            continue
+        row = dict(mission)
+        expiry = _utc_datetime(row.get("expiry"))
+        seconds = int((expiry - instant).total_seconds()) if expiry else None
+        if seconds is None:
+            status = "none"
+        elif seconds <= 0:
+            status = "expired"
+        elif seconds <= 60 * 60:
+            status = "critical"
+        elif seconds <= 24 * 60 * 60:
+            status = "soon"
+        else:
+            status = "active"
+        row.update({
+            "deadlineStatus": status,
+            "secondsRemaining": seconds,
+            "isMassacre": bool(
+                _as_int(row.get("killCount")) is not None
+                or "massacre" in str(row.get("nameSymbol") or "").casefold()
+            ),
+        })
+        rows.append(row)
+    priority = {"expired": 0, "critical": 1, "soon": 2, "active": 3, "none": 4}
+    return sorted(
+        rows,
+        key=lambda row: (
+            priority.get(str(row.get("deadlineStatus")), 4),
+            row.get("secondsRemaining") is None,
+            row.get("secondsRemaining") or 0,
+            str(row.get("targetFaction") or "").casefold(),
+            int(row.get("missionId") or 0),
+        ),
+    )
+
+
+def massacre_stacks(
+    missions: list[dict[str, Any]] | None,
+    *,
+    now: datetime | None = None,
+) -> list[dict[str, Any]]:
+    """Group massacre missions using Elite's actual stacking rule.
+
+    Against one target faction, missions from different issuing factions can
+    advance with the same kill.  Multiple missions from the *same* issuing
+    faction form a sequential lane.  Therefore the exact effective kill
+    requirement is the largest issuer-lane sum, not the sum of all missions.
+
+    If target, issuer, or kill count evidence is missing, the projection keeps
+    the missions visible but reports no exact effective total.  This is safer
+    than inventing progress or an optimistic stack.
+    """
+    source = [row for row in missions or [] if isinstance(row, dict)]
+    if now is None and all("deadlineStatus" in row for row in source):
+        decorated = [dict(row) for row in source]
+    else:
+        decorated = prioritized_missions(source, now=now)
+    grouped: dict[str, dict[str, Any]] = {}
+    for mission in decorated:
+        if not mission.get("isMassacre"):
+            continue
+        target = str(mission.get("targetFaction") or "").strip()
+        group_key = target.casefold() if target else f"unknown:{mission.get('missionId')}"
+        group = grouped.setdefault(group_key, {
+            "id": group_key,
+            "targetFaction": target,
+            "missions": [],
+            "issuerLanes": {},
+            "missionCount": 0,
+            "totalReward": 0,
+            "missionsWithKnownReward": 0,
+            "nearestExpiry": "",
+            "stackEvidenceComplete": True,
+        })
+        group["missions"].append(mission)
+        group["missionCount"] += 1
+        reward = _as_int(mission.get("reward"))
+        if reward is not None:
+            group["totalReward"] += reward
+            group["missionsWithKnownReward"] += 1
+        expiry = str(mission.get("expiry") or "")
+        if expiry and (not group["nearestExpiry"] or expiry < group["nearestExpiry"]):
+            group["nearestExpiry"] = expiry
+
+        issuer = str(mission.get("issuerFaction") or "").strip()
+        kills = _as_int(mission.get("killCount"))
+        if not target or not issuer or kills is None or kills <= 0:
+            group["stackEvidenceComplete"] = False
+            continue
+        issuer_key = issuer.casefold()
+        lane = group["issuerLanes"].setdefault(issuer_key, {
+            "issuerFaction": issuer,
+            "missionCount": 0,
+            "requiredKills": 0,
+            "missionIds": [],
+        })
+        lane["missionCount"] += 1
+        lane["requiredKills"] += kills
+        lane["missionIds"].append(mission.get("missionId"))
+
+    result = []
+    for group in grouped.values():
+        lanes = sorted(
+            group.pop("issuerLanes").values(),
+            key=lambda lane: (-lane["requiredKills"], lane["issuerFaction"].casefold()),
+        )
+        complete = bool(group["stackEvidenceComplete"])
+        nominal = sum(
+            int(mission["killCount"])
+            for mission in group["missions"]
+            if _as_int(mission.get("killCount")) is not None
+        )
+        effective = max((lane["requiredKills"] for lane in lanes), default=0)
+        group.update({
+            "issuerLanes": lanes,
+            "issuerCount": len(lanes),
+            "nominalKills": nominal if complete else None,
+            "effectiveKills": effective if complete else None,
+            "killsSavedByStacking": nominal - effective if complete else None,
+            "deadlineStatus": group["missions"][0].get("deadlineStatus", "none"),
+            "secondsRemaining": group["missions"][0].get("secondsRemaining"),
+        })
+        result.append(group)
+    priority = {"expired": 0, "critical": 1, "soon": 2, "active": 3, "none": 4}
+    return sorted(
+        result,
+        key=lambda group: (
+            priority.get(str(group.get("deadlineStatus")), 4),
+            group.get("secondsRemaining") is None,
+            group.get("secondsRemaining") or 0,
+            str(group.get("targetFaction") or "").casefold(),
+        ),
+    )
 
 
 def community_goals_overview(

@@ -364,8 +364,32 @@ class CommanderMixin:
     )
 
 
+    massacreStacks = Property(
+        "QVariantList", lambda self: self._get("massacreStacks", []),
+        notify=CoreControllerMixin.stateChanged,
+    )
+
+
     communityGoals = Property(
         "QVariantList", lambda self: self._get("communityGoals", []),
+        notify=CoreControllerMixin.stateChanged,
+    )
+
+
+    explorationFindings = Property(
+        "QVariantList", lambda self: self._get("explorationFindings", []),
+        notify=CoreControllerMixin.stateChanged,
+    )
+
+
+    explorationSystems = Property(
+        "QVariantList", lambda self: self._get("explorationSystems", []),
+        notify=CoreControllerMixin.stateChanged,
+    )
+
+
+    explorationSummary = Property(
+        "QVariantMap", lambda self: self._get("explorationSummary", {}),
         notify=CoreControllerMixin.stateChanged,
     )
 

@@ -1,9 +1,13 @@
 import unittest
+from datetime import datetime, timezone
+from pathlib import Path
 
 from ed_companion.missions import (
     active_missions,
     community_goals_overview,
+    massacre_stacks,
     missions_summary,
+    prioritized_missions,
 )
 
 
@@ -89,10 +93,14 @@ class ActiveMissionsTests(unittest.TestCase):
 
     def test_massacre_mission_carries_kill_count(self):
         missions = active_missions([_accepted(
-            1, TargetFaction="Some Pirates", KillCount=6,
+            1, timestamp="2026-09-19T12:00:00Z",
+            Name="Mission_Massacre", TargetFaction="Some Pirates", KillCount=6,
         )])
         self.assertEqual(missions[0]["killCount"], 6)
         self.assertEqual(missions[0]["targetFaction"], "Some Pirates")
+        self.assertEqual(missions[0]["issuerFaction"], "Test Faction")
+        self.assertEqual(missions[0]["nameSymbol"], "Mission_Massacre")
+        self.assertEqual(missions[0]["acceptedAt"], "2026-09-19T12:00:00Z")
 
     def test_permit_acquisition_mission_is_excluded(self):
         # Known Frontier bug: this mission grants its permit on acceptance
@@ -111,10 +119,16 @@ class ActiveMissionsTests(unittest.TestCase):
     def test_assassination_mission_carries_named_target(self):
         missions = active_missions([_accepted(
             1, Target="cmdr_pirate", Target_Localised="Ava May Dickinson",
+            TargetType="$MissionUtil_FactionTag_Politician;",
             TargetType_Localised="Politician",
         )])
         self.assertEqual(missions[0]["target"], "Ava May Dickinson")
+        self.assertEqual(missions[0]["targetSymbol"], "cmdr_pirate")
         self.assertEqual(missions[0]["targetType"], "Politician")
+        self.assertEqual(
+            missions[0]["targetTypeSymbol"],
+            "$MissionUtil_FactionTag_Politician;",
+        )
 
 
 class MissionProgressTests(unittest.TestCase):
@@ -217,6 +231,97 @@ class MissionsSummaryTests(unittest.TestCase):
         ])
         summary = missions_summary(missions)
         self.assertEqual(summary["nearestExpiry"], "2026-09-19T08:00:00Z")
+
+
+class MissionPriorityTests(unittest.TestCase):
+    NOW = datetime(2026, 9, 20, 12, 0, tzinfo=timezone.utc)
+
+    def test_deadline_status_and_sorting_are_actionable(self):
+        missions = active_missions([
+            _accepted(1, Expiry="2026-09-21T14:00:00Z"),
+            _accepted(2, Expiry="2026-09-20T11:00:00Z"),
+            _accepted(3, Expiry="2026-09-20T12:30:00Z"),
+            _accepted(4, Expiry="2026-09-20T20:00:00Z"),
+            _accepted(5, Expiry=""),
+        ])
+
+        rows = prioritized_missions(missions, now=self.NOW)
+
+        self.assertEqual([row["missionId"] for row in rows], [2, 3, 4, 1, 5])
+        self.assertEqual(
+            [row["deadlineStatus"] for row in rows],
+            ["expired", "critical", "soon", "active", "none"],
+        )
+        self.assertEqual(rows[1]["secondsRemaining"], 30 * 60)
+
+
+class MassacreStackTests(unittest.TestCase):
+    NOW = datetime(2026, 9, 19, 12, 0, tzinfo=timezone.utc)
+
+    @staticmethod
+    def _massacre(mission_id, issuer, kills, **overrides):
+        return _accepted(
+            mission_id, Name="Mission_Massacre", Faction=issuer,
+            TargetFaction="Test Pirates", KillCount=kills,
+            Reward=mission_id * 1000, **overrides,
+        )
+
+    def test_different_issuers_progress_in_parallel(self):
+        missions = active_missions([
+            self._massacre(1, "Faction A", 10),
+            self._massacre(2, "Faction B", 20),
+        ])
+
+        stack = massacre_stacks(missions, now=self.NOW)[0]
+
+        self.assertEqual(stack["nominalKills"], 30)
+        self.assertEqual(stack["effectiveKills"], 20)
+        self.assertEqual(stack["killsSavedByStacking"], 10)
+        self.assertEqual(stack["issuerCount"], 2)
+
+    def test_same_issuer_missions_form_one_sequential_lane(self):
+        missions = active_missions([
+            self._massacre(1, "Faction A", 10),
+            self._massacre(2, "Faction A", 20),
+            self._massacre(3, "Faction B", 15),
+        ])
+
+        stack = massacre_stacks(missions, now=self.NOW)[0]
+
+        self.assertEqual(stack["nominalKills"], 45)
+        self.assertEqual(stack["effectiveKills"], 30)
+        self.assertEqual(stack["issuerLanes"][0]["requiredKills"], 30)
+        self.assertEqual(stack["totalReward"], 6000)
+
+    def test_missing_issuer_does_not_create_false_precision(self):
+        missions = active_missions([
+            self._massacre(1, "", 10),
+            self._massacre(2, "Faction B", 20),
+        ])
+
+        stack = massacre_stacks(missions, now=self.NOW)[0]
+
+        self.assertFalse(stack["stackEvidenceComplete"])
+        self.assertIsNone(stack["nominalKills"])
+        self.assertIsNone(stack["effectiveKills"])
+
+    def test_non_massacre_missions_are_excluded(self):
+        missions = active_missions([_accepted(1, Reward=100)])
+        self.assertEqual(massacre_stacks(missions, now=self.NOW), [])
+
+
+class MissionsUiContractTests(unittest.TestCase):
+    def test_missions_page_exposes_stack_math_and_evidence_warning(self):
+        root = Path(__file__).resolve().parents[1]
+        qml = (root / "qml" / "pages" / "MissionsPage.qml").read_text(
+            encoding="utf-8-sig"
+        )
+
+        self.assertIn("cockpit.massacreStacks", qml)
+        self.assertIn("modelData.effectiveKills", qml)
+        self.assertIn("modelData.nominalKills", qml)
+        self.assertIn("modelData.issuerLanes", qml)
+        self.assertIn("missions.no_live_kill_progress", qml)
 
 
 def _cg_event(timestamp, goals):

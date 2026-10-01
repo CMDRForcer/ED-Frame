@@ -381,6 +381,7 @@ ApplicationWindow {
         {"id": "powerplay", "label": t("nav.powerplay", "POWERPLAY"), "icon": "\uE7C1", "page": 11},
         {"id": "cmdr", "label": t("nav.commander", "CMDR"), "icon": "\uE77B", "page": 10},
         {"id": "logbook", "label": t("nav.logbook", "LOGBOOK"), "icon": "\uE8FD", "page": 9},
+        {"id": "exploration", "label": t("nav.exploration", "EXPLORATION"), "icon": "\uE774", "page": 16},
         {"id": "exobiology", "label": t("nav.exobiology", "EXOBIOLOGY"), "icon": "", "iconKind": "dna", "page": 13},
         {"id": "missions", "label": t("nav.missions", "MISSIONS"), "icon": "\uE71D", "page": 14},
         {"id": "nav", "label": t("nav.nav", "NAV"), "icon": "\uE774", "page": 15},
@@ -6740,280 +6741,21 @@ ApplicationWindow {
         visible: window.currentPage === 12
         asynchronous: false
         sourceComponent: Component {
-            ColumnLayout {
-                id: miningFinderPage
-                objectName: "qa-page-mining-finder"
-                anchors.fill: parent
-                anchors.leftMargin: sidebar.width + (window.compactSidebar ? 18 : 26)
-                anchors.rightMargin: window.compactSidebar ? 18 : 26
-                anchors.topMargin: window.compactSidebar ? 18 : 26
-                anchors.bottomMargin: window.compactSidebar ? 18 : 26
-                spacing: 14
-                property string commodityFilter: "ALL COMMODITIES"
-                property int nearbyLy: 100
-                property string evidenceFilter: "ALL EVIDENCE"
-                property string reserveFilter: "ALL RESERVES"
-                property string miningMethod: "LASER"
-                property var readiness: cockpit.miningLoadoutReadiness(miningMethod)
-                // cockpit.miningRevision bumps on essentially every Journal
-                // refresh (every ~1.2s while flying), far more often than the
-                // mining catalog actually changes. Rebuilding the combo box
-                // models and result list on every one of those ticks made the
-                // dropdowns feel unresponsive - a popup can be torn down
-                // mid-interaction by its own model resetting under it. This
-                // snapshot only advances on a slower timer, and never while
-                // one of this page's own popups is open, so a rebuild can
-                // never land in the middle of a click or an open dropdown.
-                property int _miningRevisionSnapshot: cockpit.miningRevision
-                Timer {
-                    interval: 2000
-                    repeat: true
-                    running: window.currentPage === 12
-                    onTriggered: {
-                        if (commodityBox.popup.visible || rangeBox.popup.visible
-                                || evidenceBox.popup.visible || reserveBox.popup.visible
-                                || miningFinderList.moving || miningFinderList.dragging)
-                            return
-                        miningFinderPage._miningRevisionSnapshot = cockpit.miningRevision
-                    }
-                }
-                property var commodityOptions: {
-                    let revision = miningFinderPage._miningRevisionSnapshot
-                    return cockpit.miningCommodityFiltersForMethod(miningMethod)
-                }
-                property var resultRows: {
-                    let revision = miningFinderPage._miningRevisionSnapshot
-                    return cockpit.miningFindPageForMethod(commodityFilter, nearbyLy, evidenceFilter, reserveFilter, miningMethod)
-                }
-                function pinKey(row) {
-                    return String(row.systemAddress || "") + "|" + String(row.ring || row.body || "")
-                }
-                // Pinned rows (see cockpit.pinnedMiningSystems) always sort
-                // first, so a system worth remembering never gets buried
-                // again by a later background refresh - everything else
-                // keeps the existing best-evidence-then-distance order.
-                property var sortedResultRows: {
-                    let pins = cockpit.pinnedMiningSystems || []
-                    let rows = miningFinderPage.resultRows || []
-                    if (!pins.length) return rows
-                    let pinned = []
-                    let rest = []
-                    for (let i = 0; i < rows.length; i++) {
-                        if (pins.indexOf(miningFinderPage.pinKey(rows[i])) !== -1) pinned.push(rows[i])
-                        else rest.push(rows[i])
-                    }
-                    return pinned.concat(rest)
-                }
-                // A model swap otherwise resets ListView scroll to the top -
-                // exactly the "scrolling down and it jumps back up" complaint.
-                // Restore the last known position after each swap instead.
-                property real _listScrollY: 0
-                onSortedResultRowsChanged: Qt.callLater(function() {
-                    let maxY = Math.max(0, miningFinderList.contentHeight - miningFinderList.height)
-                    miningFinderList.contentY = Math.min(miningFinderPage._listScrollY, maxY)
-                })
-                onMiningMethodChanged: {
-                    commodityBox.currentIndex = 0
-                    commodityFilter = "ALL COMMODITIES"
-                }
-                function resetFilters() {
-                    commodityBox.currentIndex = 0
-                    rangeBox.currentIndex = 1
-                    evidenceBox.currentIndex = 0
-                    reserveBox.currentIndex = 0
-                    commodityFilter = "ALL COMMODITIES"
-                    nearbyLy = 100
-                    evidenceFilter = "ALL EVIDENCE"
-                    reserveFilter = "ALL RESERVES"
-                }
-
-                WorkspaceHeader {
-                    appWindow: window
-                    eyebrow: window.t("mining.eyebrow", "GALAXY INTELLIGENCE")
-                    title: window.t("mining.title", "MINING FINDER")
-                    subtitle: window.t("mining.subtitle", "Complete commodity catalog with method-aware Journal evidence")
-                }
-                Rectangle {
-                    Layout.fillWidth: true; Layout.preferredHeight: 126
-                    radius: 12; color: panelRaised; border.width: 1; border.color: border
-                    RowLayout {
-                        anchors.fill: parent; anchors.margins: 20; spacing: 18
-                        ColumnLayout {
-                            Layout.preferredWidth: 225
-                            spacing: 8
-                            Label { text: window.t("mining.target_commodity", "TARGET COMMODITY"); color: muted; font.pixelSize: 11; font.bold: true }
-                            CockpitComboBox { id: commodityBox; Layout.fillWidth: true; implicitHeight: 46; model: miningFinderPage.commodityOptions; onActivated: miningFinderPage.commodityFilter = currentText }
-                        }
-                        ColumnLayout {
-                            Layout.fillWidth: true
-                            spacing: 8
-                            Label { text: window.t("mining.method", "MINING METHOD"); color: muted; font.pixelSize: 11; font.bold: true }
-                            RowLayout {
-                                Layout.fillWidth: true; spacing: 0
-                                Repeater {
-                                    model: ["LASER", "CORE", "SUBSURFACE", "RHINO SURFACE"]
-                                    delegate: Button {
-                                        required property var modelData
-                                        Layout.fillWidth: true; implicitHeight: 46
-                                        text: modelData
-                                        onClicked: miningFinderPage.miningMethod = modelData
-                                        background: Rectangle {
-                                            color: miningFinderPage.miningMethod === modelData ? active : backgroundSecondary
-                                            border.width: 1
-                                            border.color: miningFinderPage.miningMethod === modelData ? orange : border
-                                            radius: 6
-                                        }
-                                        contentItem: Label { text: parent.text; color: textPrimary; font.pixelSize: 12; font.bold: true; horizontalAlignment: Text.AlignHCenter; verticalAlignment: Text.AlignVCenter }
-                                    }
-                                }
-                            }
-                        }
-                        ColumnLayout {
-                            Layout.preferredWidth: 140
-                            spacing: 8
-                            Label { text: window.t("mining.range", "DISTANCE"); color: muted; font.pixelSize: 11; font.bold: true }
-                            CockpitComboBox {
-                                id: rangeBox
-                                Layout.fillWidth: true
-                                implicitHeight: 46
-                                model: [
-                                    "50 LY", "100 LY", "250 LY", "500 LY", "1,000 LY",
-                                    window.t("mining.distance_unlimited", "UNLIMITED")
-                                ]
-                                currentIndex: 1
-                                onActivated: miningFinderPage.nearbyLy = [50, 100, 250, 500, 1000, 0][currentIndex]
-                            }
-                        }
-                        ColumnLayout {
-                            Layout.preferredWidth: 170
-                            spacing: 8
-                            Label { text: window.t("mining.evidence", "EVIDENCE"); color: muted; font.pixelSize: 11; font.bold: true }
-                            CockpitComboBox { id: evidenceBox; Layout.fillWidth: true; implicitHeight: 46; model: ["ALL EVIDENCE", "LOCAL_CONFIRMED", "LIVE_REPORTED", "CATALOG_CANDIDATE", "RECHECK_RECOMMENDED"]; onActivated: miningFinderPage.evidenceFilter = currentText }
-                        }
-                        ColumnLayout {
-                            Layout.preferredWidth: 170
-                            spacing: 8
-                            Label { text: window.t("mining.reserve_quality", "RESERVE QUALITY"); color: muted; font.pixelSize: 11; font.bold: true }
-                            CockpitComboBox { id: reserveBox; Layout.fillWidth: true; implicitHeight: 46; model: ["ALL RESERVES", "PRISTINE + MAJOR", "PRISTINE", "MAJOR"]; onActivated: miningFinderPage.reserveFilter = currentText }
-                        }
-                        CockpitButton { implicitHeight: 46; text: window.t("mining.reset", "RESET FILTERS"); onClicked: miningFinderPage.resetFilters() }
-                    }
-                }
-                Rectangle {
-                    Layout.fillWidth: true; Layout.preferredHeight: 78
-                    radius: 10; color: panelRaised; border.width: 1
-                    border.color: miningFinderPage.readiness.ready ? green : orange
-                    RowLayout {
-                        anchors.fill: parent; anchors.margins: 17; spacing: 14
-                        Label { text: miningFinderPage.readiness.ready ? "✓" : "!"; color: miningFinderPage.readiness.ready ? green : orange; font.pixelSize: 28; font.bold: true }
-                        ColumnLayout {
-                            Layout.fillWidth: true; spacing: 2
-                            Label { text: window.tf("mining.loadout_status", "CURRENT LOADOUT · %1 MINING %2", [miningFinderPage.miningMethod, miningFinderPage.readiness.status]); color: miningFinderPage.readiness.ready ? green : orange; font.pixelSize: 13; font.bold: true }
-                            Label { Layout.fillWidth: true; text: miningFinderPage.readiness.summary; color: textSecondary; font.pixelSize: 11; elide: Text.ElideRight }
-                        }
-                        CockpitButton { text: cockpit.miningSyncBusy ? window.t("mining.refreshing", "REFRESHING…") : window.t("mining.refresh", "REFRESH CURRENT SYSTEM"); enabled: !cockpit.miningSyncBusy; onClicked: cockpit.refreshMiningFinder() }
-                    }
-                }
-                RowLayout {
-                    Layout.fillWidth: true
-                    Label { text: window.tf("mining.matching_systems", "%1 MATCHING SYSTEMS", [miningFinderPage.resultRows.length]); color: orange; font.pixelSize: 15; font.bold: true }
-                    Item { Layout.fillWidth: true }
-                    Label { text: window.t("mining.sort_hint", "BEST EVIDENCE · THEN DISTANCE"); color: muted; font.pixelSize: 10; font.bold: true }
-                }
-                ListView {
-                    id: miningFinderList
-                    Layout.fillWidth: true
-                    Layout.fillHeight: true
-                    spacing: 9
-                    clip: true
-                    ScrollBar.vertical: CockpitScrollBar {}
-                    model: miningFinderPage.sortedResultRows
-                    onContentYChanged: miningFinderPage._listScrollY = contentY
-                    delegate: Rectangle {
-                        required property var modelData
-                        readonly property string pinKey: miningFinderPage.pinKey(modelData)
-                        readonly property bool pinned: cockpit.pinnedMiningSystems.indexOf(pinKey) !== -1
-                        width: miningFinderList.width
-                        height: Math.max(148, miningCard.implicitHeight + 34)
-                        radius: 12; color: panelRaised
-                        border.width: pinned ? 2 : 1
-                        border.color: pinned ? orange
-                                      : modelData.evidence === "LOCAL_CONFIRMED" ? green
-                                      : modelData.evidence === "LIVE_REPORTED" ? cyan
-                                      : modelData.recheckRecommended ? muted : orange
-                        RowLayout {
-                            id: miningCard
-                            anchors.left: parent.left; anchors.right: parent.right
-                            anchors.top: parent.top; anchors.margins: 17
-                            spacing: 20
-                            ColumnLayout {
-                                Layout.preferredWidth: 320; spacing: 5
-                                Label {
-                                    text: String(modelData.evidence || "CATALOG_CANDIDATE").replace("_", " ")
-                                    color: modelData.evidence === "LOCAL_CONFIRMED" ? green
-                                           : modelData.evidence === "LIVE_REPORTED" ? cyan
-                                           : modelData.recheckRecommended ? muted : orange
-                                    font.pixelSize: 10; font.bold: true
-                                }
-                                Label { text: modelData.system || "UNKNOWN SYSTEM"; color: textPrimary; font.pixelSize: 21; font.bold: true; Layout.fillWidth: true; elide: Text.ElideRight }
-                                Label { text: window.tf("mining.body", "BODY · %1", [modelData.ring || modelData.body || "Unknown"]); color: textSecondary; font.pixelSize: 11; Layout.fillWidth: true; elide: Text.ElideRight }
-                            }
-                            Rectangle { Layout.preferredWidth: 1; Layout.fillHeight: true; color: border }
-                            ColumnLayout {
-                                Layout.preferredWidth: 145
-                                Label { text: window.t("mining.distance", "DISTANCE"); color: muted; font.pixelSize: 10; font.bold: true }
-                                Label { text: modelData.distanceLy === null || modelData.distanceLy === undefined ? window.t("status.distance_unknown", "Unknown") : Number(modelData.distanceLy).toFixed(1) + " ly"; color: modelData.evidence === "CATALOG_CANDIDATE" ? orange : cyan; font.pixelSize: 19; font.bold: true }
-                            }
-                            Rectangle { Layout.preferredWidth: 1; Layout.fillHeight: true; color: border }
-                            ColumnLayout {
-                                Layout.preferredWidth: 260
-                                Label { text: miningFinderPage.miningMethod === "RHINO SURFACE" ? window.t("mining.planetary_signals", "PLANETARY SIGNALS") : window.t("mining.ring_type", "RING TYPE"); color: muted; font.pixelSize: 10; font.bold: true }
-                                Label { text: miningFinderPage.miningMethod === "RHINO SURFACE" ? window.tf("mining.planetary_location_count", "%1 PLANETARY MINING LOCATIONS", [modelData.planetaryMiningLocationCount || 0]) : (modelData.reserveName === "Unknown" && modelData.ringTypeName === "Unknown" ? window.t("mining.ring_unknown", "Ring data not reported") : modelData.reserveName + " " + modelData.ringTypeName); color: textPrimary; font.pixelSize: 13; font.bold: true; Layout.fillWidth: true; elide: Text.ElideRight }
-                                Label { text: miningFinderPage.miningMethod === "RHINO SURFACE" ? window.t("mining.planetary_surface", "Planetary surface scan") : modelData.hotspotNames; color: textSecondary; font.pixelSize: 11; Layout.fillWidth: true; elide: Text.ElideRight }
-                            }
-                            Rectangle { Layout.preferredWidth: 1; Layout.fillHeight: true; color: border }
-                            ColumnLayout {
-                                Layout.preferredWidth: 210
-                                Label { text: window.t("mining.evidence", "EVIDENCE"); color: muted; font.pixelSize: 10; font.bold: true }
-                                Label { text: String(modelData.evidence || "CATALOG_CANDIDATE").replace("_", " "); color: modelData.evidence === "LOCAL_CONFIRMED" ? green : modelData.evidence === "LIVE_REPORTED" ? cyan : orange; font.pixelSize: 12; font.bold: true }
-                                Label { visible: modelData.recheckRecommended; text: window.t("mining.recheck", "RECHECK RECOMMENDED"); color: orange; font.pixelSize: 9; font.bold: true }
-                                Label { text: modelData.observedAt ? window.tf("mining.last_confirmed", "LAST CONFIRMED · %1", [modelData.observedAt]) : window.t("mining.time_unknown", "Confirmation time unknown"); color: textSecondary; font.pixelSize: 10; Layout.fillWidth: true; elide: Text.ElideRight }
-                            }
-                            Rectangle { Layout.preferredWidth: 1; Layout.fillHeight: true; color: border }
-                            ColumnLayout {
-                                Layout.fillWidth: true
-                                Label { text: window.t("mining.details", "DETAILS"); color: muted; font.pixelSize: 10; font.bold: true }
-                                Label { text: window.tf("mining.selected_method", "SELECTED METHOD · %1", [miningFinderPage.miningMethod]); color: textSecondary; font.pixelSize: 10; font.bold: true }
-                                Label { text: modelData.targetMatch === "PLANETARY_MINING_LOCATION" ? window.t("mining.planetary_unconfirmed", "PLANETARY LOCATION · COMMODITY UNCONFIRMED") : (modelData.targetMatchName || ""); color: cyan; font.pixelSize: 9; font.bold: true; Layout.fillWidth: true; elide: Text.ElideRight }
-                                Label { text: modelData.distanceToArrivalLs === null || modelData.distanceToArrivalLs === undefined ? window.t("mining.arrival_unknown", "ARRIVAL · UNKNOWN") : window.tf("mining.arrival", "ARRIVAL · %1 LS", [Number(modelData.distanceToArrivalLs).toFixed(0)]); color: muted; font.pixelSize: 10 }
-                            }
-                            ColumnLayout {
-                                spacing: 6
-                                CockpitButton {
-                                    Layout.fillWidth: true
-                                    text: window.t("common.copy_system", "COPY SYSTEM")
-                                    enabled: Boolean(modelData.system)
-                                    onClicked: cockpit.copySystem(modelData.system || "")
-                                }
-                                CockpitButton {
-                                    Layout.fillWidth: true
-                                    text: pinned ? window.t("mining.pinned", "★ PINNED") : window.t("mining.pin", "☆ PIN")
-                                    onClicked: cockpit.toggleMiningPin(pinKey)
-                                }
-                            }
-                        }
-                    }
-                    EmptyState {
-                        anchors.centerIn: parent
-                        visible: parent.count === 0
-                        symbol: "◇"
-                        title: window.t("mining.empty", "NO MATCHING MINING EVIDENCE")
-                        detail: miningFinderPage.miningMethod === "RHINO SURFACE"
-                                ? window.t("mining.empty_rhino_help", "No recorded planetary mining locations match these filters. Scan landable bodies with the FSS or DSS to add confirmed destinations.")
-                                : window.t("mining.empty_help", "Scan rings with the DSS. Confirmed rings, hotspot signals and compatible ring types then appear here without parsing the Journal a second time.")
-                        tone: cyan
-                    }
-                }
+            MiningFinderPage {
+                appWindow: window
+                sidebarWidth: sidebar.width
+            }
+        }
+    }
+    Loader {
+        id: pageLoader16
+        anchors.fill: parent
+        active: window.currentPage === 16
+        asynchronous: false
+        sourceComponent: Component {
+            ExplorationPage {
+                appWindow: window
+                sidebarWidth: sidebar.width
             }
         }
     }
@@ -7489,6 +7231,7 @@ ApplicationWindow {
                 CockpitButton { text: "INARA"; selected: connectionsPage.connectionMode === 0; onClicked: connectionsPage.connectionMode = 0 }
                 CockpitButton { text: window.t("connections.frontier_tab", "FRONTIER CAPI"); selected: connectionsPage.connectionMode === 2; accentColor: cyan; onClicked: connectionsPage.connectionMode = 2 }
                 CockpitButton { text: window.t("connections.eddn_tab", "EDDN & STATE FINDS"); selected: connectionsPage.connectionMode === 1; accentColor: green; onClicked: connectionsPage.connectionMode = 1 }
+                CockpitButton { text: window.t("connections.spansh_tab", "SPANSH & CATALOGS"); selected: connectionsPage.connectionMode === 3; accentColor: orange; onClicked: connectionsPage.connectionMode = 3 }
             }
         }
 
@@ -7839,32 +7582,6 @@ ApplicationWindow {
                         Layout.fillWidth: true
                         onClicked: cockpit.saveEddnConfig(eddnConsentBox.checked, eddnUploadBox.checked, eddnListenerBox.checked)
                     }
-                    Rectangle { Layout.fillWidth: true; height: 1; color: borderTone }
-                    Label {
-                        text: window.t("connections.data_tools", "DATA & MAINTENANCE")
-                        color: cyan; font.pixelSize: 11; font.bold: true
-                    }
-                    CockpitButton {
-                        text: cockpit.spanshCatalogSyncBusy
-                              ? window.t("status.updating", "UPDATING…")
-                              : window.t("connections.update_spansh", "UPDATE VIA SPANSH · ALL")
-                        enabled: !cockpit.spanshCatalogSyncBusy
-                        Layout.fillWidth: true
-                        onClicked: cockpit.updateSpanshCatalogs()
-                    }
-                    Label {
-                        visible: cockpit.spanshCatalogSyncBusy
-                                 || cockpit.spanshCatalogSyncStatus.toLowerCase().indexOf("fail") >= 0
-                        text: cockpit.spanshCatalogSyncStatus
-                        color: cockpit.spanshCatalogSyncBusy ? cyan : error
-                        wrapMode: Text.WordWrap; Layout.fillWidth: true; font.pixelSize: 9
-                    }
-                    CockpitButton {
-                        text: window.t("connections.reset_mining_catalog", "RESET MINING CATALOG")
-                        accentColor: orange
-                        Layout.fillWidth: true
-                        onClicked: miningCatalogResetDialog.open()
-                    }
                     CockpitButton {
                         text: connectionsPage.eddnDetailsExpanded
                               ? window.t("connections.hide_technical", "HIDE TECHNICAL DETAILS")
@@ -8070,6 +7787,114 @@ ApplicationWindow {
                             detail: window.t("connections.no_activity_help", "Uploads and station delivery confirmations will appear here.")
                             tone: green
                         }
+                    }
+                }
+            }
+        }
+
+        Item {
+            anchors.fill: parent
+            visible: connectionsPage.connectionMode === 3
+
+            ShadowCard {
+                anchors.fill: parent
+                accent: orange
+                ScrollView {
+                    id: spanshCatalogScroll
+                    anchors.fill: parent; anchors.margins: 18
+                    clip: true
+                    contentWidth: availableWidth
+                    ScrollBar.horizontal.policy: ScrollBar.AlwaysOff
+                    ScrollBar.vertical: CockpitScrollBar {}
+                    ColumnLayout {
+                        width: spanshCatalogScroll.availableWidth
+                        spacing: 13
+                        Label {
+                            text: window.t("connections.spansh_title", "SPANSH CATALOGS & MINING DATA")
+                            color: orange; font.pixelSize: 15; font.bold: true
+                        }
+                        Label {
+                            text: window.t("connections.spansh_help", "Updates Material Traders, Human/Guardian Tech Brokers and the current system's Mining Finder rings. Existing verified data remains usable if a refresh fails.")
+                            color: textSecondary; wrapMode: Text.WordWrap; Layout.fillWidth: true
+                        }
+                        Rectangle {
+                            Layout.fillWidth: true
+                            Layout.preferredHeight: spanshStatusColumn.implicitHeight + 28
+                            radius: 10; color: panelRaised
+                            border.width: 1
+                            border.color: cockpit.spanshCatalogSyncBusy ? cyan : borderTone
+                            ColumnLayout {
+                                id: spanshStatusColumn
+                                anchors.fill: parent; anchors.margins: 14; spacing: 7
+                                RowLayout {
+                                    Layout.fillWidth: true
+                                    Label { text: window.t("connections.catalog_status", "CATALOG STATUS"); color: muted; font.pixelSize: 9; font.bold: true }
+                                    Item { Layout.fillWidth: true }
+                                    Label {
+                                        text: cockpit.spanshCatalogSyncBusy ? window.t("status.updating", "UPDATING…") : window.t("status.ready", "READY")
+                                        color: cockpit.spanshCatalogSyncBusy ? cyan : green
+                                        font.pixelSize: 10; font.bold: true
+                                    }
+                                }
+                                Label {
+                                    text: cockpit.spanshCatalogSyncStatus
+                                    color: textSecondary; wrapMode: Text.WordWrap; Layout.fillWidth: true
+                                }
+                                Label {
+                                    visible: Boolean(cockpit.spanshLastRefresh)
+                                    text: window.t("connections.spansh_last_refresh", "LAST REFRESH STARTED") + " · " + cockpit.spanshLastRefresh
+                                    color: muted; font.pixelSize: 9; font.bold: true
+                                }
+                            }
+                        }
+                        RowLayout {
+                            Layout.fillWidth: true; spacing: 12
+                            CheckBox {
+                                id: spanshAutoRefreshBox
+                                Layout.fillWidth: true
+                                text: window.t("connections.spansh_auto_refresh", "Refresh Spansh catalogs automatically")
+                                checked: cockpit.spanshAutoRefresh
+                                onToggled: cockpit.setSpanshAutoRefresh(checked, Number(spanshIntervalBox.currentValue))
+                            }
+                            Label { text: window.t("connections.every", "EVERY"); color: muted; font.pixelSize: 9; font.bold: true }
+                            ComboBox {
+                                id: spanshIntervalBox
+                                Layout.preferredWidth: 150
+                                model: [6, 12, 24, 48]
+                                currentIndex: Math.max(0, model.indexOf(cockpit.spanshAutoRefreshHours))
+                                textRole: ""
+                                displayText: currentValue + " " + window.t("connections.hours", "HOURS")
+                                onActivated: cockpit.setSpanshAutoRefresh(spanshAutoRefreshBox.checked, Number(currentValue))
+                            }
+                        }
+                        CockpitButton {
+                            text: cockpit.spanshCatalogSyncBusy
+                                  ? window.t("status.updating", "UPDATING…")
+                                  : window.t("connections.update_spansh", "UPDATE VIA SPANSH · ALL")
+                            enabled: !cockpit.spanshCatalogSyncBusy
+                            selected: true; Layout.fillWidth: true
+                            onClicked: cockpit.updateSpanshCatalogs()
+                        }
+                        Rectangle { Layout.fillWidth: true; height: 1; color: borderTone }
+                        Label {
+                            text: window.t("connections.mining_sources", "MINING FINDER DATA SOURCES")
+                            color: cyan; font.pixelSize: 11; font.bold: true
+                        }
+                        Label {
+                            text: window.t("connections.mining_sources_help", "Spansh supplies public ring and reserve observations for the current system. Sale price, demand and age are loaded on each route search from EDData's EDDN commodity index. Yield and Powerplay merits remain unknown until their own evidence exists.")
+                            color: textSecondary; wrapMode: Text.WordWrap; Layout.fillWidth: true
+                        }
+                        Label {
+                            text: cockpit.miningMarketSyncStatus
+                            color: cockpit.miningMarketSyncBusy ? cyan : muted
+                            wrapMode: Text.WordWrap; Layout.fillWidth: true; font.pixelSize: 10
+                        }
+                        CockpitButton {
+                            text: window.t("connections.reset_mining_catalog", "RESET MINING CATALOG")
+                            accentColor: orange; Layout.fillWidth: true
+                            onClicked: miningCatalogResetDialog.open()
+                        }
+                        Item { Layout.fillHeight: true }
                     }
                 }
             }

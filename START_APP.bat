@@ -25,5 +25,5 @@ if errorlevel 1 (
     call INSTALL_REQUIREMENTS.bat --automatic
     if errorlevel 1 exit /b 1
 )
-start "" /b "%APP_EXE%" %APP_ARGS% phase14_main.py
+start "" /b "%APP_EXE%" %APP_ARGS% phase14_main.py %*
 endlocal

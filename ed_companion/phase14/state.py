@@ -80,10 +80,13 @@ from ed_companion.exobiology import (
     landing_targets,
     remaining_signals_at_body,
 )
+from ed_companion.exploration import exploration_ledger
 from ed_companion.missions import (
     active_missions,
     community_goals_overview,
+    massacre_stacks,
     missions_summary,
+    prioritized_missions,
 )
 
 # Journal/profile plumbing, plus a handful of constants shared across
@@ -692,6 +695,17 @@ def build_state(
         ),
         {},
     )
+    active_ship_id = str(fleet_state.get("active_id") or "")
+    active_loadout = next(
+        (
+            event for event in reversed(ship_events)
+            if event.get("event") == "Loadout"
+            and str(event.get("ShipID") or event.get("_ResolvedShipID") or "")
+            == active_ship_id
+        ),
+        {},
+    )
+    active_cargo_capacity = active_loadout.get("CargoCapacity")
     selected_ship_stats = {
         "jumpRange": selected_loadout.get("MaxJumpRange"),
         "unladenMass": selected_loadout.get("UnladenMass"),
@@ -1222,21 +1236,29 @@ def build_state(
     )
     exobiology_status_snapshot = read_json(journal_dir() / "Status.json", {})
 
-    mission_rows = memoize_projection(
+    raw_mission_rows = memoize_projection(
         "active_missions", _projection_key,
         lambda: active_missions(profile_events),
     )
+    mission_rows = prioritized_missions(raw_mission_rows)
     community_goal_rows = memoize_projection(
         "community_goals_overview", _projection_key,
         lambda: community_goals_overview(profile_events),
     )
-
+    exploration_state = memoize_projection(
+        "exploration_ledger", _projection_key,
+        lambda: exploration_ledger(profile_events),
+    )
     return {
         "_profileContext": profile_context,
         "_craftBatch": craft_batch,
         "activeMissions": mission_rows,
         "missionsSummary": missions_summary(mission_rows),
+        "massacreStacks": massacre_stacks(mission_rows),
         "communityGoals": community_goal_rows,
+        "explorationFindings": exploration_state["findings"],
+        "explorationSystems": exploration_state["systems"],
+        "explorationSummary": exploration_state["summary"],
         "exobiologyFindings": exobiology_rows,
         "exobiologySummary": exobiology_summary(exobiology_rows),
         "exobiologySessionSummary": memoize_projection(
