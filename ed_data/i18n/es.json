@@ -109,6 +109,8 @@
   "mining.pinned": "★ FIJADO",
   "mining.refreshing": "ACTUALIZANDO…",
   "mining.empty": "SIN EVIDENCIA MINERA COINCIDENTE",
+  "mining.empty_initial": "LISTO PARA PLANIFICAR UNA RUTA MINERA",
+  "mining.empty_initial_help": "Elige arriba el objetivo y los filtros y selecciona BUSCAR LA MEJOR RUTA. Los datos de mercado y Powerplay se cargan al iniciar la búsqueda.",
   "mining.empty_help": "Escanea anillos con el DSS. Los anillos confirmados, puntos calientes y tipos de anillo compatibles aparecerán aquí sin volver a analizar el diario.",
   "mining.empty_rhino_help": "Ninguna ubicación minera planetaria registrada coincide con estos filtros. Escanea cuerpos aterrizables con FSS o DSS para añadir destinos confirmados.",
   "mining.targets": "DESTINOS EN CACHÉ",

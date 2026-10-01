@@ -369,6 +369,9 @@ class MiningFinderUiContractTests(unittest.TestCase):
         self.assertIn('onPressedChanged:', qml)
         self.assertNotIn('onMoved:', qml)
         self.assertIn('width: Math.min(parent.width, 720)', qml)
+        self.assertIn('searchRevision === 0', qml)
+        self.assertIn('"READY TO PLAN A MINING ROUTE"', qml)
+        self.assertIn('"NO MATCHING MINING EVIDENCE"', qml)
 
 
 if __name__ == "__main__":

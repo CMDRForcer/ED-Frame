@@ -109,6 +109,8 @@
   "mining.pinned": "★ ÉPINGLÉ",
   "mining.refreshing": "ACTUALISATION…",
   "mining.empty": "AUCUN INDICE MINIER CORRESPONDANT",
+  "mining.empty_initial": "PRÊT À PLANIFIER UNE ROUTE MINIÈRE",
+  "mining.empty_initial_help": "Choisissez l’objectif et les filtres ci-dessus, puis TROUVER LE MEILLEUR ITINÉRAIRE. Les données de marché et Powerplay sont chargées au lancement de la recherche.",
   "mining.empty_help": "Scannez les anneaux avec le DSS. Les anneaux confirmés, points chauds et types d’anneaux compatibles apparaîtront ici sans nouvelle analyse du journal.",
   "mining.empty_rhino_help": "Aucun site minier planétaire enregistré ne correspond à ces filtres. Analysez les corps atterrissables avec le FSS ou le DSS pour ajouter des destinations confirmées.",
   "mining.targets": "CIBLES EN CACHE",

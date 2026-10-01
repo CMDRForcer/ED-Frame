@@ -53,7 +53,10 @@ class MiningPowerplayCatalogTests(unittest.TestCase):
 
         catalog = fetch_powerplay_catalog(get=get)
 
-        self.assertEqual(calls, [(POWERPLAY_DUMP_URL, {"timeout": 45})])
+        self.assertEqual(calls[0][0], POWERPLAY_DUMP_URL)
+        self.assertEqual(calls[0][1]["timeout"], 45)
+        self.assertIn("ED-Frame/", calls[0][1]["headers"]["User-Agent"])
+        self.assertIn("github.com/CMDRForcer/ED-Frame", calls[0][1]["headers"]["User-Agent"])
         self.assertEqual(catalog["systems"][0]["system"], "Niflhel")
         self.assertNotIn("commander", str(calls).casefold())
 

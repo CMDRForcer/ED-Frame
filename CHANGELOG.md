@@ -1,5 +1,40 @@
 # Changelog
 
+## 1.5.27 — 2026-10-01
+
+### Added
+
+- **Mission operations**: active missions now expose kill progress, remaining
+  time, rewards and massacre stacking grouped by mission giver.
+- **Exploration ledger**: unsold cartographic value and the individual scan
+  discoveries behind it are available alongside the existing Exobiology data.
+- **Unified Mining Finder**: targeted mining, verified market demand and
+  selectable route alternatives now share one planner. Powerplay searches
+  distinguish Reinforce, Acquire and Undermine routes and explain the evidence
+  behind each merit recommendation.
+
+### Fixed
+
+- **Truthful Mining Finder states**: the untouched page now invites the player
+  to configure and start a search instead of claiming that no evidence exists.
+  Missing market or Powerplay evidence remains explicitly unknown and is never
+  turned into a guessed score.
+- **Reliable Powerplay catalog downloads**: anonymous EDSM catalog requests now
+  identify ED-Frame with the required application user agent, preventing the
+  live daily update from being rejected with HTTP 403.
+- **Mining Finder usability**: the responsive layout no longer overflows at
+  normal window widths, sliders track smoothly, the start system is editable,
+  and any listed alternative can become the active route.
+- **Frontier sign-in callback**: the desktop OAuth callback is registered and
+  handled by the app instead of being passed to Windows as an unknown file type.
+
+### Tests
+
+- **Live-data route audit**: real EDSM, Spansh and market data produced valid
+  Reinforce, Acquire and Undermine routes, including systems with overlapping
+  Powerplay presence. Automated tests cover the planner, evidence rules,
+  market joins, interactions, missions, exploration and release contracts.
+
 ## 1.5.26 — 2026-09-26
 
 ### Fixed

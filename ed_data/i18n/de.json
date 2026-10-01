@@ -109,6 +109,8 @@
   "mining.pinned": "★ GEMERKT",
   "mining.refreshing": "AKTUALISIERUNG…",
   "mining.empty": "KEINE PASSENDEN MINING-NACHWEISE",
+  "mining.empty_initial": "BEREIT ZUR PLANUNG EINER MINING-ROUTE",
+  "mining.empty_initial_help": "Wähle oben Ziel und Filter und dann BESTE ROUTE FINDEN. Markt- und Powerplay-Daten werden beim Start der Suche geladen.",
   "mining.empty_help": "Scanne Ringe mit dem DSS. Bestätigte Ringe, Hotspot-Signale und passende Ringtypen erscheinen hier, ohne das Journal erneut zu parsen.",
   "mining.empty_rhino_help": "Keine erfassten planetaren Abbaustellen entsprechen diesen Filtern. Scanne landbare Körper mit FSS oder DSS, um bestätigte Ziele hinzuzufügen.",
   "mining.targets": "GESPEICHERTE ZIELE",

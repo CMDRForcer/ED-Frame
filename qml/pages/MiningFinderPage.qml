@@ -856,8 +856,12 @@ Item {
             width: Math.min(parent.width, 720)
             anchors.centerIn: parent
             symbol: "◇"
-            title: appWindow.t("mining.empty", "NO MATCHING MINING EVIDENCE")
-            detail: appWindow.t("mining.empty_unified_help", "Widen the radius or relax hotspot, reserve and method filters. Unknown market data never hides a valid mining location.")
+            title: searchRevision === 0
+                   ? appWindow.t("mining.empty_initial", "READY TO PLAN A MINING ROUTE")
+                   : appWindow.t("mining.empty", "NO MATCHING MINING EVIDENCE")
+            detail: searchRevision === 0
+                    ? appWindow.t("mining.empty_initial_help", "Choose your goal and filters above, then select FIND BEST ROUTE. Market and Powerplay data load when the search starts.")
+                    : appWindow.t("mining.empty_unified_help", "Widen the radius or relax hotspot, reserve and method filters. Unknown market data never hides a valid mining location.")
             tone: cyan
         }
     }

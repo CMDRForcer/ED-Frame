@@ -13,6 +13,8 @@ import json
 from datetime import datetime, timezone
 from typing import Any, Iterable
 
+from ed_companion import APP_VERSION
+
 
 POWERPLAY_DUMP_URL = "https://www.edsm.net/dump/powerPlay.json.gz"
 POWERPLAY_CATALOG_SOURCE = "EDSM daily PowerPlay catalog"
@@ -79,7 +81,16 @@ def fetch_powerplay_catalog(
     *, get: Any, timeout: int = 45,
 ) -> dict[str, Any]:
     """Download and validate the anonymous daily Powerplay-only dump."""
-    response = get(POWERPLAY_DUMP_URL, timeout=timeout)
+    response = get(
+        POWERPLAY_DUMP_URL,
+        timeout=timeout,
+        headers={
+            "User-Agent": (
+                f"ED-Frame/{APP_VERSION} "
+                "(+https://github.com/CMDRForcer/ED-Frame)"
+            ),
+        },
+    )
     response.raise_for_status()
     body = bytes(response.content or b"")
     if not body:

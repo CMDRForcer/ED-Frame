@@ -109,6 +109,8 @@
   "mining.pinned": "★ PINNED",
   "mining.refreshing": "REFRESHING…",
   "mining.empty": "NO MATCHING MINING EVIDENCE",
+  "mining.empty_initial": "READY TO PLAN A MINING ROUTE",
+  "mining.empty_initial_help": "Choose your goal and filters above, then select FIND BEST ROUTE. Market and Powerplay data load when the search starts.",
   "mining.empty_help": "Scan rings with the DSS. Confirmed rings, hotspot signals and compatible ring types then appear here without parsing the Journal a second time.",
   "mining.empty_rhino_help": "No recorded planetary mining locations match these filters. Scan landable bodies with the FSS or DSS to add confirmed destinations.",
   "mining.targets": "CACHED TARGETS",
