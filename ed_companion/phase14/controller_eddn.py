@@ -975,6 +975,9 @@ class EddnMixin:
 
 
     def _scan_eddn_journal(self):
+        # Local market learning is private and must work independently of the
+        # optional community-upload profile and consent below.
+        self._scan_local_mining_market_file()
         if not self._sync_eddn_profile():
             return
         if not eddn_upload_allowed(self._eddn_config):
@@ -1114,7 +1117,30 @@ class EddnMixin:
             self._scan_eddn_station_files()
 
 
+    def _scan_local_mining_market_file(self):
+        path = journal_dir() / "Market.json"
+        try:
+            stat = path.stat()
+            fingerprint = f"{stat.st_mtime_ns}:{stat.st_size}"
+            if getattr(
+                self, "_local_market_snapshot_fingerprint", ""
+            ) == fingerprint:
+                return
+            snapshot = json.loads(path.read_text(
+                encoding="utf-8-sig", errors="strict"
+            ))
+            self._ingest_local_mining_market_snapshot(snapshot)
+            self._local_market_snapshot_fingerprint = fingerprint
+        except (OSError, UnicodeError, ValueError, TypeError) as exc:
+            LOGGER.debug("Local mining Market.json not retained yet: %s", exc)
+        except sqlite3.DatabaseError as exc:
+            LOGGER.warning(
+                "Local mining market snapshot was not retained: %s", exc
+            )
+
+
     def _scan_eddn_station_files(self):
+        self._scan_local_mining_market_file()
         directory = journal_dir()
         changed = False
         for kind, filename in (

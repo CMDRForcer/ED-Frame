@@ -8,13 +8,16 @@ from unittest.mock import Mock, patch
 
 from ed_companion.navigation.mining_finder import (
     fetch_spansh_system_dump,
+    is_belt_candidate,
     merge_mining_candidate_batch,
     merge_mining_candidates,
+    mining_candidate_positions,
     mining_candidate_freshness,
     project_local_mining_evidence,
     project_spansh_mining_candidates,
     project_eddn_mining_candidates,
 )
+from ed_companion.navigation.mining_market_store import MarketCatalogStore
 from ed_companion.phase14.controller import CockpitController, _eddn_relay_relevant
 
 
@@ -24,6 +27,75 @@ FIXTURE = json.loads(Path(__file__).with_name("fixtures").joinpath(
 
 
 class MiningFinderProjectionTests(unittest.TestCase):
+    def test_belt_recognition_covers_explicit_and_legacy_names(self):
+        self.assertTrue(is_belt_candidate({"miningSiteType": "BELT"}))
+        self.assertTrue(is_belt_candidate({
+            "ring": "Cubeo A Belt Cluster 2",
+        }))
+        self.assertTrue(is_belt_candidate({"ring": "Arcadian A Belt"}))
+        self.assertFalse(is_belt_candidate({"ring": "Cubeo 4 A Ring"}))
+
+    def test_route_verification_deduplicates_top_thirty_systems(self):
+        controller = CockpitController.__new__(CockpitController)
+        controller._mining_verification_busy = False
+        controller._mining_verification_cache = {}
+        controller._profile_generation = 3
+        controller.profile_context = Mock(key="alpha")
+        controller.mining_catalog_file = Path("mining.json")
+        controller._known_mining_origin = Mock(return_value={
+            "coordinates": [1, 2, 3],
+        })
+        workers = []
+        controller._start_network_worker = (
+            lambda target, _name: workers.append(target) or True
+        )
+        controller.miningVerificationChanged = Mock()
+        controller.miningVerificationProgress = Mock()
+        controller.miningVerificationFinished = Mock()
+        routes = [{
+            "system": f"System {index // 2}",
+            "systemAddress": index // 2 + 1,
+            "ring": f"Ring {index}",
+        } for index in range(40)]
+
+        controller.verifyMiningRoutes(routes, "Origin")
+
+        request = controller._active_mining_verification_request
+        self.assertEqual(request["total"], 15)
+        self.assertEqual(len(request["targets"]), 15)
+        self.assertEqual(len(workers), 1)
+        self.assertTrue(controller._mining_verification_busy)
+        with patch(
+            "ed_companion.phase14.controller_navigation.fetch_spansh_system_dump",
+            return_value=FIXTURE["spansh_dump"],
+        ) as fetch:
+            workers[0]()
+        result = controller.miningVerificationFinished.emit.call_args.args[0]
+        self.assertEqual(fetch.call_count, 15)
+        self.assertEqual(len(result["succeeded"]), 15)
+        self.assertEqual(result["failed"], [])
+        self.assertEqual(
+            controller.miningVerificationProgress.emit.call_count, 15
+        )
+
+    def test_recent_spansh_route_is_not_fetched_again(self):
+        controller = CockpitController.__new__(CockpitController)
+        controller._mining_verification_busy = False
+        controller._mining_verification_cache = {}
+        controller.miningVerificationChanged = Mock()
+        controller._start_network_worker = Mock()
+        learned_at = datetime.now(timezone.utc).isoformat(timespec="seconds")
+
+        controller.verifyMiningRoutes([{
+            "system": "Current", "systemAddress": 42,
+            "ring": "Current A Ring", "learnedAt": learned_at,
+            "observations": [{"source": "Spansh dump catalog"}],
+        }], "Origin")
+
+        controller._start_network_worker.assert_not_called()
+        self.assertEqual(controller._mining_verification_completed, 1)
+        self.assertIn("1/1 systems verified", controller._mining_verification_status)
+
     def test_mining_catalog_load_is_deferred_and_profile_scoped(self):
         with TemporaryDirectory() as directory:
             controller = CockpitController.__new__(CockpitController)
@@ -31,7 +103,9 @@ class MiningFinderProjectionTests(unittest.TestCase):
             controller.profile_context = Mock(key="alpha")
             controller.mining_catalog_file = Path(directory) / "mining.json"
             controller.mining_catalog_file.write_text(
-                json.dumps({"candidates": [{"ring": "Alpha A Ring"}]}),
+                json.dumps({"candidates": [{
+                    "system": "Alpha", "ring": "Alpha A Ring",
+                }]}),
                 encoding="utf-8",
             )
             workers = []
@@ -49,6 +123,33 @@ class MiningFinderProjectionTests(unittest.TestCase):
                 1, 4, "alpha", str(controller.mining_catalog_file),
             ))
             self.assertEqual(payload[4]["candidates"][0]["ring"], "Alpha A Ring")
+            self.assertEqual(payload[6], ["Alpha"])
+            self.assertEqual(payload[7], ["alpha"])
+
+    def test_mining_system_suggestions_are_prefix_ranked_and_keep_free_input(self):
+        controller = CockpitController.__new__(CockpitController)
+        controller._state = {"system": "HIP 6703"}
+        names, keys = controller._mining_system_name_index([
+            {"system": "HIP 100"},
+            {"system": "HIP 6703"},
+            {"system": "HIP 200"},
+            {"system": "Shinrarta Dezhra"},
+            {"system": "hip 100"},
+        ])
+        controller._mining_system_names = names
+        controller._mining_system_name_keys = keys
+
+        self.assertEqual(
+            controller.miningSystemSuggestions("hip", 3),
+            ["HIP 6703", "HIP 100", "HIP 200"],
+        )
+        self.assertEqual(
+            controller.miningSystemSuggestions("shin", 8),
+            ["Shinrarta Dezhra"],
+        )
+        self.assertEqual(
+            controller.miningSystemSuggestions("freely typed system", 8), []
+        )
 
     def test_filter_rejects_distant_rows_before_hotspot_projection_and_caches(self):
         controller = CockpitController.__new__(CockpitController)
@@ -218,6 +319,37 @@ class MiningFinderProjectionTests(unittest.TestCase):
         )
         self.assertEqual([row["ring"] for row in displaced], ["A Ring"])
 
+    def test_incremental_mining_merge_reuses_catalog_identity_index(self):
+        base = [{
+            "systemAddress": index,
+            "bodyId": index,
+            "ring": f"Ring {index}",
+            "evidence": "CATALOG_CANDIDATE",
+        } for index in range(2000)]
+        positions = mining_candidate_positions(base)
+        additions = [
+            {"systemAddress": 1200, "bodyId": 1200, "ring": "Ring 1200",
+             "evidence": "LIVE_REPORTED"},
+            {"systemAddress": 3000, "bodyId": 3000, "ring": "Ring 3000",
+             "evidence": "LIVE_REPORTED"},
+        ]
+
+        with patch(
+            "ed_companion.navigation.mining_finder._candidate_identity",
+            wraps=__import__(
+                "ed_companion.navigation.mining_finder",
+                fromlist=["_candidate_identity"],
+            )._candidate_identity,
+        ) as identity:
+            merged, displaced = merge_mining_candidate_batch(
+                base, additions, positions=positions,
+            )
+
+        self.assertLess(identity.call_count, 20)
+        self.assertEqual(len(merged), 2001)
+        self.assertEqual(displaced[0]["ring"], "Ring 1200")
+        self.assertEqual(positions[("address", 3000, "id", 3000, "ring 3000")], 2000)
+
     def test_relay_prefilter_keeps_every_consumed_schema_and_event(self):
         self.assertTrue(_eddn_relay_relevant({
             "$schemaRef": "https://eddn.edcd.io/schemas/fsssignaldiscovered/1",
@@ -248,13 +380,39 @@ class MiningFinderProjectionTests(unittest.TestCase):
             root = Path(directory)
             mining_file = root / "mining_finder_catalog.json"
             queue_file = root / "community_upload_queue.json"
+            market_cache_file = root / "mining_market_cache.json"
+            market_legacy_file = root / "mining_market_catalog.json"
+            market_database_file = root / "mining_market_catalog.sqlite3"
             mining_file.write_text(
                 json.dumps({"candidates": [{"ring": "Old ring"}]}),
                 encoding="utf-8",
             )
             queue_file.write_text('[{"status": "queued"}]', encoding="utf-8")
+            market_cache_file.write_text(
+                json.dumps({"markets": [{"station": "Old port"}]}),
+                encoding="utf-8",
+            )
+            market_legacy_file.write_text(
+                json.dumps({"markets": [{"station": "Legacy port"}]}),
+                encoding="utf-8",
+            )
             controller = CockpitController.__new__(CockpitController)
             controller.mining_catalog_file = mining_file
+            controller.mining_market_cache_file = market_cache_file
+            controller.mining_market_catalog_legacy_file = market_legacy_file
+            controller._mining_market_store = MarketCatalogStore(
+                market_database_file
+            )
+            observed_at = datetime.now(timezone.utc)
+            controller._mining_market_store.ingest([{
+                "commodity": "platinum", "station": "Old port",
+                "system": "Cubeo", "marketId": 42,
+                "sellPrice": 250000, "demand": 5000,
+                "observedAt": observed_at.isoformat(),
+            }])
+            controller._mining_market_cache = {"markets": [{
+                "station": "Old port",
+            }]}
             controller._mining_catalog = {"candidates": [{"ring": "Old ring"}]}
             controller._active_mining_request = {"id": "old"}
             controller._mining_sync_busy = True
@@ -274,6 +432,23 @@ class MiningFinderProjectionTests(unittest.TestCase):
             self.assertEqual(controller._pending_mining_candidates, [])
             self.assertTrue(controller._mining_catalog["resetAt"])
             self.assertIsNone(controller._mining_rows_cache_key)
+            self.assertEqual(controller._mining_market_store.count(), 0)
+            self.assertEqual(
+                json.loads(market_cache_file.read_text(encoding="utf-8")), {}
+            )
+            self.assertFalse(market_legacy_file.exists())
+            self.assertEqual(
+                controller._mining_market_store.metadata("legacy_migrated"),
+                "1",
+            )
+
+            controller._mining_market_store.ingest([{
+                "commodity": "platinum", "station": "New port",
+                "system": "Cubeo", "marketId": 43,
+                "sellPrice": 275000, "demand": 6000,
+                "observedAt": (observed_at + timedelta(minutes=1)).isoformat(),
+            }])
+            self.assertEqual(controller._mining_market_store.count(), 1)
 
     def test_reset_cutoff_hides_old_projected_journal_results(self):
         controller = CockpitController.__new__(CockpitController)
@@ -534,6 +709,224 @@ class MiningFinderProjectionTests(unittest.TestCase):
         self.assertEqual(len(rows), 1)
         self.assertIsNone(rows[0]["distanceLy"])
         self.assertFalse(rows[0]["routeOriginKnown"])
+
+    def test_cached_edsm_origin_resolves_free_text_route_distances(self):
+        controller = CockpitController.__new__(CockpitController)
+        controller._state = {"system": "Journal System"}
+        controller._mining_market_cache = {
+            "origin": {"system": "Cubeo", "coordinates": [10, 20, 30]},
+        }
+        controller._mining_rows_cache_key = ("cached-origin",)
+        controller._system_coordinate_index = Mock(return_value={})
+        controller._mining_rows = Mock(return_value=[{
+            "system": "Candidate", "ring": "Candidate A Ring",
+            "coordinates": [13, 24, 30], "distanceLy": 999,
+            "observedAt": datetime.now(timezone.utc).isoformat(),
+            "reserveLevel": "PristineResources",
+            "evidence": "LIVE_REPORTED", "ringTypeName": "Metallic",
+            "hotspots": [{"commodity": "platinum", "count": 1}],
+        }])
+
+        rows = controller._mining_find_page(
+            "Platinum", 15, "ALL EVIDENCE", "ALL RESERVES", "LASER",
+            "cubeo",
+        )
+
+        self.assertEqual(rows[0]["distanceLy"], 5.0)
+        self.assertTrue(rows[0]["routeOriginKnown"])
+
+    def test_accumulated_market_catalog_is_reused_for_a_new_query(self):
+        controller = CockpitController.__new__(CockpitController)
+        controller._mining_market_cache = {
+            "query": {"startSystem": "old"}, "markets": [],
+        }
+        controller._mining_market_catalog = {"markets": [{
+            "commodity": "platinum", "station": "Remembered Port",
+            "system": "Near", "coordinates": [3, 4, 0],
+            "sellPrice": 250000, "demand": 9000,
+            "observedAt": datetime.now(timezone.utc).isoformat(),
+        }]}
+        controller._known_mining_origin = Mock(return_value={
+            "system": "Origin", "coordinates": [0, 0, 0],
+        })
+
+        rows = controller._mining_market_rows_for_query({
+            "startSystem": "origin", "commodity": "platinum",
+            "nearbyLy": 10, "minDemand": 5000,
+            "maxMarketAgeHours": 1, "landingPad": "ANY",
+        })
+
+        self.assertEqual([row["station"] for row in rows], ["Remembered Port"])
+
+    def test_sqlite_market_catalog_is_reused_for_a_new_query(self):
+        with TemporaryDirectory() as directory:
+            controller = CockpitController.__new__(CockpitController)
+            controller._mining_market_cache = {
+                "query": {"startSystem": "old"}, "markets": [],
+            }
+            controller._mining_market_store = MarketCatalogStore(
+                Path(directory, "markets.sqlite3")
+            )
+            controller._mining_market_store.ingest([{
+                "commodity": "platinum", "station": "Remembered Port",
+                "system": "Near", "coordinates": [3, 4, 0],
+                "sellPrice": 250000, "demand": 9000,
+                "observedAt": datetime.now(timezone.utc).isoformat(),
+            }])
+            controller._known_mining_origin = Mock(return_value={
+                "system": "Origin", "coordinates": [0, 0, 0],
+            })
+
+            rows = controller._mining_market_rows_for_query({
+                "startSystem": "origin", "commodity": "platinum",
+                "nearbyLy": 10, "minDemand": 5000,
+                "maxMarketAgeHours": 1, "landingPad": "ANY",
+            })
+
+            self.assertEqual(
+                [row["station"] for row in rows], ["Remembered Port"]
+            )
+
+    def test_legacy_market_json_is_migrated_without_deletion(self):
+        with TemporaryDirectory() as directory:
+            controller = CockpitController.__new__(CockpitController)
+            controller.mining_market_catalog_file = Path(
+                directory, "markets.sqlite3"
+            )
+            controller.mining_market_catalog_legacy_file = Path(
+                directory, "markets.json"
+            )
+            controller.mining_market_catalog_legacy_file.write_text(
+                "legacy remains", encoding="utf-8"
+            )
+            observation = {
+                "commodity": "platinum", "station": "Legacy Port",
+                "system": "Cubeo", "coordinates": [1, 2, 3],
+                "sellPrice": 250000, "demand": 9000,
+                "observedAt": datetime.now(timezone.utc).isoformat(),
+            }
+            controller._mining_market_cache = {"markets": []}
+            controller._read_local_json = Mock(return_value={
+                "markets": [observation],
+            })
+
+            store = controller._open_mining_market_store()
+
+            self.assertEqual(store.count(), 1)
+            self.assertEqual(store.metadata("legacy_migrated"), "1")
+            self.assertEqual(
+                controller.mining_market_catalog_legacy_file.read_text(
+                    encoding="utf-8"
+                ),
+                "legacy remains",
+            )
+            controller._read_local_json.reset_mock()
+            reopened = controller._open_mining_market_store()
+            self.assertEqual(reopened.count(), 1)
+            controller._read_local_json.assert_not_called()
+
+    def test_market_lookup_failure_keeps_catalog_and_uses_staged_retry(self):
+        controller = CockpitController.__new__(CockpitController)
+        controller.profile_context = Mock(key="alpha")
+        controller._profile_generation = 3
+        controller.mining_market_cache_file = Path("market-cache.json")
+        controller._remember_mining_origin = Mock(return_value=False)
+        controller._mining_market_failure_count = 0
+        controller._shutdown_complete = False
+        controller._mining_market_retry_timer = Mock()
+        controller._mining_market_store = Mock()
+        controller.miningChanged = Mock()
+        controller.stateChanged = Mock()
+        result = {
+            "id": "request", "profileKey": "alpha", "generation": 3,
+            "path": "market-cache.json", "success": False,
+            "error": "offline",
+        }
+        for expected_delay in (120, 300, 900, 1800, 1800):
+            controller._active_mining_market_request = {"id": "request"}
+            controller._finish_mining_market_sync(result)
+            controller._mining_market_retry_timer.start.assert_called_with(
+                expected_delay * 1000
+            )
+
+        self.assertEqual(controller._mining_market_failure_count, 5)
+        self.assertEqual(controller._mining_market_store.count.call_count, 0)
+        self.assertEqual(
+            controller._mining_market_store.record_source_result.call_count, 5
+        )
+
+    def test_local_market_snapshot_is_retained_without_eddn_upload(self):
+        with TemporaryDirectory() as directory:
+            controller = CockpitController.__new__(CockpitController)
+            controller._state = {
+                "system": "Cubeo", "currentPosition": [1, 2, 3],
+            }
+            controller._mining_market_store = MarketCatalogStore(
+                Path(directory, "markets.sqlite3")
+            )
+            controller._mining_market_revision = 0
+            controller._schedule_mining_market_backup = Mock(return_value=True)
+            controller.miningChanged = Mock()
+
+            imported = controller._ingest_local_mining_market_snapshot({
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+                "StarSystem": "Cubeo", "StationName": "Medupe City",
+                "MarketID": 42,
+                "Items": [{
+                    "Name": "$Platinum_Name;", "SellPrice": 250000,
+                    "Demand": 5000, "DemandBracket": 3,
+                }],
+            })
+
+            self.assertEqual(imported, 1)
+            self.assertEqual(controller._mining_market_store.count(), 1)
+            controller._schedule_mining_market_backup.assert_called_once()
+            controller.miningChanged.emit.assert_called_once()
+
+    def test_local_market_file_is_scanned_without_eddn_profile(self):
+        controller = CockpitController.__new__(CockpitController)
+        controller._scan_local_mining_market_file = Mock()
+        controller._sync_eddn_profile = Mock(return_value=False)
+
+        controller._scan_eddn_journal()
+
+        controller._scan_local_mining_market_file.assert_called_once()
+        controller._sync_eddn_profile.assert_called_once()
+
+    def test_market_catalog_auto_refresh_reuses_the_last_query(self):
+        controller = CockpitController.__new__(CockpitController)
+        controller._mining_market_busy = False
+        controller._shutdown_complete = False
+        controller._mining_market_cache = {"query": {
+            "startSystem": "cubeo", "commodity": "platinum",
+            "nearbyLy": 250, "minDemand": 5000,
+            "maxMarketAgeHours": 1, "landingPad": "LARGE",
+        }}
+        controller.refreshMiningMarkets = Mock()
+
+        controller._maybe_auto_refresh_mining_markets()
+
+        controller.refreshMiningMarkets.assert_called_once_with(
+            "cubeo", "platinum", 250, 5000, 1, "LARGE",
+        )
+
+    def test_known_mining_origin_prefers_journal_then_cached_edsm(self):
+        controller = CockpitController.__new__(CockpitController)
+        controller._state = {
+            "system": "Current", "currentPosition": [1, 2, 3],
+        }
+        controller._mining_market_cache = {
+            "origin": {"system": "Cubeo", "coordinates": [4, 5, 6]},
+        }
+        controller._system_coordinate_index = Mock(return_value={})
+
+        self.assertEqual(
+            controller._known_mining_origin("current")["source"], "Journal",
+        )
+        self.assertEqual(
+            controller._known_mining_origin("cubeo")["coordinates"],
+            [4, 5, 6],
+        )
 
     def test_controller_ranks_observed_yield_before_hotspot_and_ring_type(self):
         controller = CockpitController.__new__(CockpitController)

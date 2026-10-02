@@ -1,5 +1,44 @@
 # Changelog
 
+## 1.5.28 — 2026-10-02
+
+### Added
+
+- **Durable local Mining market catalog**: verified public market observations
+  and opened `Market.json` snapshots are retained per Commander profile in a
+  transaction-safe SQLite catalog. The last good data remains available
+  offline, old JSON knowledge migrates once, and backups recover automatically
+  from database corruption without restoring data after an explicit reset.
+- **Continuous market maintenance**: Ardent and EDData provide anonymous EDDN
+  market fallbacks, EDSM resolves freely entered start systems, successful
+  searches refresh automatically, and failed lookups retry after 2, 5, 15 and
+  30 minutes without deleting cached routes.
+
+### Fixed
+
+- **Powerplay merit route correctness**: Reinforce and Undermine routes require
+  a verified compatible sell market in the mining system. Headquarters are
+  retained in the Powerplay catalog, same-system routes report a real zero-leg
+  distance, and unknown evidence is never promoted into a merit claim.
+- **Mining Finder responsiveness**: route rows are built incrementally off the
+  UI thread, catalog lookups use spatial SQLite indexes, backups run in the
+  background, and the alternatives scrollbar is easier to grab. Search controls
+  collapse after use, remain responsive at normal window sizes and offer system
+  suggestions while preserving free text entry.
+- **Complete Mining reset**: resetting the Finder now clears ring evidence,
+  market cache, history, retry state and legacy market data for only the active
+  profile. Journal and public observations can then rebuild a clean catalog,
+  while an old backup can no longer resurrect reset data.
+
+### Tests
+
+- **Full lifecycle matrix**: automated coverage now includes local/external
+  source ordering, restarts, stale and duplicate observations, profile
+  isolation, retention and size limits, every retry interval, reset, rebuild,
+  corruption with and without backup, and QML/EDDN integration. A live Cubeo
+  cycle confirmed 15 markets before reset, zero after reset and 15 after a
+  clean rebuild; the complete 719-test suite passes on Windows.
+
 ## 1.5.27 — 2026-10-01
 
 ### Added

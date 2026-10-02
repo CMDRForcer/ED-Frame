@@ -4,6 +4,7 @@ from datetime import datetime, timedelta, timezone
 import unittest
 
 from ed_companion.navigation.mining_powerplay import (
+    POWERPLAY_CATALOG_SCHEMA_VERSION,
     POWERPLAY_DUMP_URL,
     MiningPowerplayError,
     fetch_powerplay_catalog,
@@ -44,6 +45,14 @@ class MiningPowerplayCatalogTests(unittest.TestCase):
             "source": "EDSM daily PowerPlay catalog",
         }])
 
+    def test_headquarters_is_preserved_as_a_known_powerplay_state(self):
+        row = dict(self.payload[0], name="Cubeo", powerState="Headquarters")
+
+        projected = project_powerplay_catalog([row])
+
+        self.assertEqual(projected[0]["system"], "Cubeo")
+        self.assertEqual(projected[0]["powerState"], "Headquarters")
+
     def test_fetch_uses_anonymous_bounded_daily_dump(self):
         calls = []
 
@@ -58,6 +67,9 @@ class MiningPowerplayCatalogTests(unittest.TestCase):
         self.assertIn("ED-Frame/", calls[0][1]["headers"]["User-Agent"])
         self.assertIn("github.com/CMDRForcer/ED-Frame", calls[0][1]["headers"]["User-Agent"])
         self.assertEqual(catalog["systems"][0]["system"], "Niflhel")
+        self.assertEqual(
+            catalog["schemaVersion"], POWERPLAY_CATALOG_SCHEMA_VERSION,
+        )
         self.assertNotIn("commander", str(calls).casefold())
 
     def test_empty_or_malformed_catalog_is_rejected(self):
@@ -68,13 +80,17 @@ class MiningPowerplayCatalogTests(unittest.TestCase):
 
     def test_freshness_is_explicit_and_time_bounded(self):
         now = datetime(2026, 10, 1, 12, tzinfo=timezone.utc)
-        fresh = {"fetchedAt": (now - timedelta(hours=23)).isoformat(),
+        fresh = {"schemaVersion": POWERPLAY_CATALOG_SCHEMA_VERSION,
+                 "fetchedAt": (now - timedelta(hours=23)).isoformat(),
                  "systems": self.payload}
-        stale = {"fetchedAt": (now - timedelta(hours=25)).isoformat(),
+        stale = {"schemaVersion": POWERPLAY_CATALOG_SCHEMA_VERSION,
+                 "fetchedAt": (now - timedelta(hours=25)).isoformat(),
                  "systems": self.payload}
+        legacy = {"fetchedAt": now.isoformat(), "systems": self.payload}
 
         self.assertTrue(powerplay_catalog_is_fresh(fresh, now=now))
         self.assertFalse(powerplay_catalog_is_fresh(stale, now=now))
+        self.assertFalse(powerplay_catalog_is_fresh(legacy, now=now))
 
 
 if __name__ == "__main__":

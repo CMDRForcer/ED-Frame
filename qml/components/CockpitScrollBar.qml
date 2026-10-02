@@ -3,13 +3,15 @@ import QtQuick.Controls
 
 ScrollBar {
     id: themedScrollBar
+    property real trackThickness: 8
+    property real thumbThickness: 5
     readonly property var hostWindow: ApplicationWindow.window
-    implicitWidth: orientation === Qt.Vertical ? 8 : 100
-    implicitHeight: orientation === Qt.Horizontal ? 8 : 100
+    implicitWidth: orientation === Qt.Vertical ? trackThickness : 100
+    implicitHeight: orientation === Qt.Horizontal ? trackThickness : 100
     contentItem: Rectangle {
-        implicitWidth: 5
-        implicitHeight: 5
-        radius: 2.5
+        implicitWidth: themedScrollBar.thumbThickness
+        implicitHeight: themedScrollBar.thumbThickness
+        radius: themedScrollBar.thumbThickness / 2
         color: themedScrollBar.hovered || themedScrollBar.pressed
                ? (themedScrollBar.hostWindow ? themedScrollBar.hostWindow.accent : "#3bdcff")
                : (themedScrollBar.hostWindow ? themedScrollBar.hostWindow.textDisabled : "#587086")

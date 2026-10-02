@@ -7180,6 +7180,20 @@ ApplicationWindow {
                     "retryable": false
                 })
             }
+            var edsmStatus = String(cockpit.miningPowerplaySyncStatus || "")
+            if (edsmStatus && edsmStatus.toLowerCase() !== "ready") {
+                rows.push({
+                    "id": "",
+                    "title": window.t("connections.edsm_title", "EDSM POWERPLAY CATALOG"),
+                    "status": cockpit.miningPowerplaySyncBusy
+                              ? "UPDATING"
+                              : (cockpit.miningPowerplaySystemCount > 0
+                                 ? "READY" : "NOT LOADED"),
+                    "detail": edsmStatus,
+                    "meta": window.t("connections.catalog_status", "CATALOG STATUS"),
+                    "retryable": false
+                })
+            }
             var queue = cockpit.eddnQueue || []
             for (var index = 0; index < queue.length; index++) {
                 var job = queue[index]
@@ -7231,7 +7245,7 @@ ApplicationWindow {
                 CockpitButton { text: "INARA"; selected: connectionsPage.connectionMode === 0; onClicked: connectionsPage.connectionMode = 0 }
                 CockpitButton { text: window.t("connections.frontier_tab", "FRONTIER CAPI"); selected: connectionsPage.connectionMode === 2; accentColor: cyan; onClicked: connectionsPage.connectionMode = 2 }
                 CockpitButton { text: window.t("connections.eddn_tab", "EDDN & STATE FINDS"); selected: connectionsPage.connectionMode === 1; accentColor: green; onClicked: connectionsPage.connectionMode = 1 }
-                CockpitButton { text: window.t("connections.spansh_tab", "SPANSH & CATALOGS"); selected: connectionsPage.connectionMode === 3; accentColor: orange; onClicked: connectionsPage.connectionMode = 3 }
+                CockpitButton { text: window.t("connections.spansh_tab", "SPANSH & EDSM"); selected: connectionsPage.connectionMode === 3; accentColor: orange; onClicked: connectionsPage.connectionMode = 3 }
             }
         }
 
@@ -7810,7 +7824,7 @@ ApplicationWindow {
                         width: spanshCatalogScroll.availableWidth
                         spacing: 13
                         Label {
-                            text: window.t("connections.spansh_title", "SPANSH CATALOGS & MINING DATA")
+                            text: window.t("connections.spansh_title", "SPANSH, EDSM & MINING DATA")
                             color: orange; font.pixelSize: 15; font.bold: true
                         }
                         Label {
@@ -7840,6 +7854,49 @@ ApplicationWindow {
                                     text: cockpit.spanshCatalogSyncStatus
                                     color: textSecondary; wrapMode: Text.WordWrap; Layout.fillWidth: true
                                 }
+                                Rectangle { Layout.fillWidth: true; height: 1; color: borderTone }
+                                RowLayout {
+                                    Layout.fillWidth: true
+                                    Label {
+                                        text: window.t("connections.edsm_title", "EDSM POWERPLAY CATALOG")
+                                        color: cyan; font.pixelSize: 10; font.bold: true
+                                    }
+                                    Item { Layout.fillWidth: true }
+                                    Label {
+                                        text: cockpit.miningPowerplaySyncBusy
+                                              ? window.t("status.updating", "UPDATING…")
+                                              : (cockpit.miningPowerplaySystemCount > 0
+                                                 ? window.t("status.ready", "READY")
+                                                 : window.t("connections.not_loaded", "NOT LOADED"))
+                                        color: cockpit.miningPowerplaySyncBusy
+                                               ? cyan
+                                               : (cockpit.miningPowerplaySystemCount > 0
+                                                  ? green : orange)
+                                        font.pixelSize: 10; font.bold: true
+                                    }
+                                }
+                                Label {
+                                    text: cockpit.miningPowerplaySyncStatus
+                                    color: textSecondary; wrapMode: Text.WordWrap; Layout.fillWidth: true
+                                }
+                                RowLayout {
+                                    Layout.fillWidth: true
+                                    Label {
+                                        text: window.tf(
+                                            "connections.edsm_system_links",
+                                            "%1 POWERPLAY SYSTEM LINKS",
+                                            [cockpit.miningPowerplaySystemCount]
+                                        )
+                                        color: textPrimary; font.pixelSize: 9; font.bold: true
+                                    }
+                                    Item { Layout.fillWidth: true }
+                                    Label {
+                                        visible: Boolean(cockpit.miningPowerplayLastRefresh)
+                                        text: window.t("connections.edsm_last_refresh", "LAST SUCCESS")
+                                              + " · " + cockpit.miningPowerplayLastRefresh
+                                        color: muted; font.pixelSize: 9; font.bold: true
+                                    }
+                                }
                                 Label {
                                     visible: Boolean(cockpit.spanshLastRefresh)
                                     text: window.t("connections.spansh_last_refresh", "LAST REFRESH STARTED") + " · " + cockpit.spanshLastRefresh
@@ -7852,7 +7909,7 @@ ApplicationWindow {
                             CheckBox {
                                 id: spanshAutoRefreshBox
                                 Layout.fillWidth: true
-                                text: window.t("connections.spansh_auto_refresh", "Refresh Spansh catalogs automatically")
+                                text: window.t("connections.spansh_auto_refresh", "Refresh community catalogs automatically")
                                 checked: cockpit.spanshAutoRefresh
                                 onToggled: cockpit.setSpanshAutoRefresh(checked, Number(spanshIntervalBox.currentValue))
                             }
@@ -7870,7 +7927,7 @@ ApplicationWindow {
                         CockpitButton {
                             text: cockpit.spanshCatalogSyncBusy
                                   ? window.t("status.updating", "UPDATING…")
-                                  : window.t("connections.update_spansh", "UPDATE VIA SPANSH · ALL")
+                                  : window.t("connections.update_spansh", "UPDATE ALL COMMUNITY CATALOGS")
                             enabled: !cockpit.spanshCatalogSyncBusy
                             selected: true; Layout.fillWidth: true
                             onClicked: cockpit.updateSpanshCatalogs()

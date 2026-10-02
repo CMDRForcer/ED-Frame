@@ -116,17 +116,49 @@ def _candidate_identity(candidate: dict[str, Any]) -> tuple[Any, ...]:
     )
 
 
+def is_belt_candidate(candidate: dict[str, Any]) -> bool:
+    """Recognize belt clusters across Journal, EDDN and catalog shapes."""
+    if not isinstance(candidate, dict):
+        return False
+    if _text(candidate.get("miningSiteType")).casefold() == "belt":
+        return True
+    ring_name = _text(candidate.get("ring")).casefold()
+    body_name = _text(candidate.get("body")).casefold()
+    return (
+        "belt cluster" in ring_name
+        or ring_name.endswith(" belt")
+        or "belt cluster" in body_name
+    )
+
+
+def mining_candidate_positions(
+    candidates: Iterable[dict[str, Any]],
+) -> dict[tuple[Any, ...], int]:
+    """Build the stable ring identity index used by incremental merges."""
+    positions = {}
+    row_index = 0
+    for row in candidates or []:
+        if not isinstance(row, dict):
+            continue
+        if _text(row.get("ring")):
+            positions[_candidate_identity(row)] = row_index
+        row_index += 1
+    return positions
+
+
 def merge_mining_candidate_batch(
     existing: Iterable[dict[str, Any]],
     additions: Iterable[dict[str, Any]],
     now: datetime | None = None,
+    positions: dict[tuple[Any, ...], int] | None = None,
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
     """Merge a relay batch without rebuilding every unaffected ring."""
     rows = [row for row in existing or [] if isinstance(row, dict)]
-    positions = {
-        _candidate_identity(row): index for index, row in enumerate(rows)
-        if _text(row.get("ring"))
-    }
+    positions = (
+        positions
+        if positions is not None
+        else mining_candidate_positions(rows)
+    )
     displaced = []
     for incoming in merge_mining_candidates(additions, now=now):
         key = _candidate_identity(incoming)
@@ -190,7 +222,8 @@ def merge_mining_candidates(
     fill_fields = (
         "system", "systemAddress", "coordinates", "distanceLy", "body",
         "bodyId", "ring", "ringType", "reserveLevel", "distanceToArrivalLs",
-        "controllingPower", "powerState", "powers", "systemState",
+        "miningSiteType", "controllingPower", "powerState", "powers",
+        "systemState",
     )
     for observations in groups.values():
         observations.sort(key=lambda row: (
@@ -776,6 +809,11 @@ def project_spansh_mining_candidates(
                 "body": _text(body.get("name")),
                 "bodyId": body.get("bodyId"),
                 "ring": _text(ring.get("name")),
+                "miningSiteType": (
+                    "BELT" if "belt cluster" in _text(
+                        ring.get("name")
+                    ).casefold() else "RING"
+                ),
                 "ringType": _text(ring.get("type")),
                 "reserveLevel": _text(body.get("reserveLevel")),
                 "distanceToArrivalLs": body.get("distanceToArrival"),

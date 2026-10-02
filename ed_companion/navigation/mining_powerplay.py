@@ -18,8 +18,9 @@ from ed_companion import APP_VERSION
 
 POWERPLAY_DUMP_URL = "https://www.edsm.net/dump/powerPlay.json.gz"
 POWERPLAY_CATALOG_SOURCE = "EDSM daily PowerPlay catalog"
+POWERPLAY_CATALOG_SCHEMA_VERSION = 2
 POWERPLAY_STATES = frozenset({
-    "Unoccupied", "Exploited", "Fortified", "Stronghold",
+    "Unoccupied", "Exploited", "Fortified", "Stronghold", "Headquarters",
 })
 
 
@@ -105,6 +106,7 @@ def fetch_powerplay_catalog(
         raise MiningPowerplayError("Powerplay catalog could not be decoded") from exc
     rows = project_powerplay_catalog(payload)
     return {
+        "schemaVersion": POWERPLAY_CATALOG_SCHEMA_VERSION,
         "fetchedAt": datetime.now(timezone.utc).isoformat(timespec="seconds"),
         "source": POWERPLAY_CATALOG_SOURCE,
         "sourceUrl": POWERPLAY_DUMP_URL,
@@ -115,7 +117,11 @@ def fetch_powerplay_catalog(
 def powerplay_catalog_is_fresh(
     catalog: Any, *, now: datetime | None = None, max_age_hours: int = 24,
 ) -> bool:
-    if not isinstance(catalog, dict) or not catalog.get("systems"):
+    if (
+        not isinstance(catalog, dict)
+        or catalog.get("schemaVersion") != POWERPLAY_CATALOG_SCHEMA_VERSION
+        or not catalog.get("systems")
+    ):
         return False
     text = str(catalog.get("fetchedAt") or "").strip()
     try:

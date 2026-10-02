@@ -15,8 +15,10 @@ import threading
 import time
 import uuid
 import requests
+from bisect import bisect_left
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from copy import deepcopy
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Callable
 
@@ -118,8 +120,10 @@ from ed_companion.navigation.hge import (
 from ed_companion.navigation.mining_finder import (
     MINING_EVIDENCE_RANK,
     fetch_spansh_system_dump,
+    is_belt_candidate,
     is_mining_commodity_signal,
     merge_mining_candidate_batch,
+    mining_candidate_positions,
     mining_candidate_freshness,
     project_eddn_mining_candidates,
     project_spansh_mining_candidates,
@@ -131,8 +135,17 @@ from ed_companion.navigation.mining_commodities import (
     mining_commodity_id,
     mining_commodities_for_method,
 )
-from ed_companion.navigation.mining_planner import plan_mining_routes
-from ed_companion.navigation.mining_market import fetch_market_imports
+from ed_companion.navigation.mining_planner import (
+    market_filter_diagnostics,
+    plan_mining_routes,
+)
+from ed_companion.navigation.mining_market import (
+    fetch_edsm_system_coordinates,
+    fetch_market_imports,
+    latest_market_rows,
+    nearby_catalog_markets,
+    project_local_market_snapshot,
+)
 from ed_companion.navigation.mining_powerplay import (
     catalog_rows,
     fetch_powerplay_catalog,
@@ -158,6 +171,9 @@ from ed_companion.services import (
 )
 from ed_companion.diagnostics import filtered_log_lines
 from ed_companion.exobiology import exobiology_distance_check
+
+
+MINING_MARKET_RETRY_SECONDS = (120, 300, 900, 1800)
 
 from .dashboard_views import (
     build_commander_cards,
@@ -254,6 +270,9 @@ class NavigationMixin:
     miningChanged = Signal()
 
 
+    miningVerificationChanged = Signal()
+
+
     miningSyncFinished = Signal(object)
 
 
@@ -269,17 +288,40 @@ class NavigationMixin:
     miningRowsReady = Signal(object)
 
 
+    miningVerificationProgress = Signal(object)
+
+
+    miningVerificationFinished = Signal(object)
+
+
     traderSyncFinished = Signal(bool, str)
 
 
     def _mining_market_cache_status(self):
         cache = getattr(self, "_mining_market_cache", {})
         markets = cache.get("markets", []) if isinstance(cache, dict) else []
+        store = getattr(self, "_mining_market_store", None)
+        try:
+            retained = store.count() if store is not None else 0
+        except (OSError, sqlite3.DatabaseError):
+            retained = 0
+        if not retained:
+            catalog = getattr(self, "_mining_market_catalog", {})
+            retained = (
+                len(catalog.get("markets", []))
+                if isinstance(catalog, dict)
+                and isinstance(catalog.get("markets", []), list) else 0
+            )
         fetched = str(cache.get("fetchedAt") or "") if isinstance(cache, dict) else ""
         if not isinstance(markets, list) or not markets:
-            return "Ready · market data loads when a route is searched"
+            return (
+                f"Ready · {retained} retained market observations"
+                if retained else
+                "Ready · market data loads when a route is searched"
+            )
         return (
             f"Cached EDDN market data · {len(markets)} sell markets"
+            + (f" · {retained} retained" if retained else "")
             + (f" · {fetched}" if fetched else "")
         )
 
@@ -452,8 +494,14 @@ class NavigationMixin:
             if not isinstance(catalog, dict):
                 catalog = {"candidates": []}
             self._compact_mining_catalog_rows(catalog.get("candidates", []))
+            candidates = catalog.get("candidates", [])
+            positions = mining_candidate_positions(candidates)
+            system_names, system_keys = self._mining_system_name_index(
+                candidates
+            )
             self.miningCatalogLoaded.emit((
-                token, generation, profile_key, str(path), catalog,
+                token, generation, profile_key, str(path), catalog, positions,
+                system_names, system_keys,
             ))
 
         return self._start_network_worker(worker, "mining-catalog-load")
@@ -472,7 +520,10 @@ class NavigationMixin:
 
     @Slot(object)
     def _finish_mining_catalog_load(self, payload):
-        token, generation, profile_key, path, catalog = payload
+        token, generation, profile_key, path, catalog, *extra = payload
+        positions = extra[0] if extra and isinstance(extra[0], dict) else None
+        system_names = extra[1] if len(extra) > 1 else None
+        system_keys = extra[2] if len(extra) > 2 else None
         if (
             token != self._mining_catalog_load_token
             or generation != self._profile_generation
@@ -485,8 +536,11 @@ class NavigationMixin:
         current = self._mining_catalog.get("candidates", [])
         loaded = loaded if isinstance(loaded, list) else []
         current = current if isinstance(current, list) else []
+        positions = positions or mining_candidate_positions(loaded)
         if current:
-            merged, _displaced = merge_mining_candidate_batch(loaded, current)
+            merged, _displaced = merge_mining_candidate_batch(
+                loaded, current, positions=positions,
+            )
         else:
             merged = loaded
         self._compact_mining_catalog_rows(merged)
@@ -494,9 +548,69 @@ class NavigationMixin:
             **catalog,
             "candidates": merged,
         }
+        self._mining_catalog_revision = getattr(
+            self, "_mining_catalog_revision", 0
+        ) + 1
+        self._mining_catalog_positions = positions
+        self._mining_catalog_positions_identity = id(merged)
+        if not isinstance(system_names, list) or not isinstance(system_keys, list):
+            system_names, system_keys = self._mining_system_name_index(loaded)
+        self._mining_system_names = system_names
+        self._mining_system_name_keys = system_keys
+        self._add_mining_system_names(current)
         self._mining_rows_cache_key = None
         self._mining_rows_cache = []
         self.miningChanged.emit()
+
+
+    def _mining_positions_for(self, candidates):
+        if (
+            getattr(self, "_mining_catalog_positions_identity", None)
+            == id(candidates)
+            and isinstance(getattr(self, "_mining_catalog_positions", None), dict)
+        ):
+            return self._mining_catalog_positions
+        positions = mining_candidate_positions(candidates)
+        self._mining_catalog_positions = positions
+        self._mining_catalog_positions_identity = id(candidates)
+        return positions
+
+
+    @staticmethod
+    def _mining_system_name_index(candidates):
+        canonical = {}
+        for row in candidates if isinstance(candidates, list) else []:
+            if not isinstance(row, dict):
+                continue
+            name = str(row.get("system") or "").strip()
+            if name:
+                canonical.setdefault(name.casefold(), name)
+        pairs = sorted(canonical.items())
+        return (
+            [name for _key, name in pairs],
+            [key for key, _name in pairs],
+        )
+
+
+    def _add_mining_system_names(self, candidates):
+        names = getattr(self, "_mining_system_names", [])
+        keys = getattr(self, "_mining_system_name_keys", [])
+        if not isinstance(names, list) or not isinstance(keys, list):
+            names, keys = [], []
+        for row in candidates if isinstance(candidates, list) else []:
+            if not isinstance(row, dict):
+                continue
+            name = str(row.get("system") or "").strip()
+            key = name.casefold()
+            if not key:
+                continue
+            index = bisect_left(keys, key)
+            if index < len(keys) and keys[index] == key:
+                continue
+            keys.insert(index, key)
+            names.insert(index, name)
+        self._mining_system_names = names
+        self._mining_system_name_keys = keys
 
 
     def _save_mining_catalog(self):
@@ -918,20 +1032,136 @@ class NavigationMixin:
         )
 
 
+    @Slot(str, int, result="QStringList")
+    def miningSystemSuggestions(self, query, limit=8):
+        """Return fast local prefix matches while preserving free text input."""
+        key = str(query or "").strip().casefold()
+        if not key:
+            return []
+        limit = max(1, min(20, int(limit or 8)))
+        names = getattr(self, "_mining_system_names", [])
+        keys = getattr(self, "_mining_system_name_keys", [])
+        result = []
+        seen = set()
+
+        current = str(getattr(self, "_state", {}).get("system") or "").strip()
+        if current and current.casefold().startswith(key):
+            result.append(current)
+            seen.add(current.casefold())
+
+        if not isinstance(names, list) or not isinstance(keys, list):
+            return result
+        index = bisect_left(keys, key)
+        while index < len(keys) and len(result) < limit:
+            candidate_key = keys[index]
+            if not candidate_key.startswith(key):
+                break
+            if candidate_key not in seen:
+                result.append(names[index])
+                seen.add(candidate_key)
+            index += 1
+        return result
+
+
+    def _mining_market_rows_for_query(self, query):
+        """Reuse accumulated observations while a fresh query is loading."""
+        market_cache = getattr(self, "_mining_market_cache", {})
+        cached_query = (
+            market_cache.get("query", {})
+            if isinstance(market_cache, dict) else {}
+        )
+        current_rows = (
+            market_cache.get("markets", [])
+            if isinstance(cached_query, dict) and cached_query == query else []
+        )
+        origin = self._known_mining_origin(query.get("startSystem"))
+        store = getattr(self, "_mining_market_store", None)
+        if store is not None:
+            retained_rows = store.nearby(
+                query.get("commodity"),
+                origin_system=query.get("startSystem"),
+                origin_coordinates=(origin or {}).get("coordinates"),
+                max_distance=query.get("nearbyLy", 0),
+            )
+        else:
+            # Compatibility for lightweight controller doubles in unit tests.
+            retained_rows = nearby_catalog_markets(
+                getattr(self, "_mining_market_catalog", {}),
+                query.get("commodity"),
+                origin_system=query.get("startSystem"),
+                origin_coordinates=(origin or {}).get("coordinates"),
+                max_distance=query.get("nearbyLy", 0),
+            )
+        return latest_market_rows(retained_rows, current_rows)
+
+
+    def _maybe_auto_refresh_mining_markets(self):
+        """Refresh the last market search in the background for this profile."""
+        if getattr(self, "_mining_market_busy", False) or getattr(
+            self, "_shutdown_complete", False
+        ):
+            return
+        retry_timer = getattr(self, "_mining_market_retry_timer", None)
+        if retry_timer is not None and retry_timer.isActive():
+            return
+        cache = getattr(self, "_mining_market_cache", {})
+        query = cache.get("query", {}) if isinstance(cache, dict) else {}
+        if not isinstance(query, dict) or not query.get("startSystem") \
+                or not query.get("commodity"):
+            return
+        self.refreshMiningMarkets(
+            query.get("startSystem"), query.get("commodity"),
+            int(query.get("nearbyLy", 0) or 0),
+            int(query.get("minDemand", 0) or 0),
+            int(query.get("maxMarketAgeHours", 0) or 0),
+            str(query.get("landingPad") or "ANY"),
+        )
+
+
+    @Slot(str, str, int, int, int, int, str, result="QVariantMap")
+    def miningMarketDiagnostics(
+        self, start_system, commodity, nearby_ly, min_demand, max_demand,
+        max_market_age_hours, landing_pad,
+    ):
+        query = {
+            "startSystem": str(start_system or "").strip().casefold(),
+            "commodity": mining_commodity_id(commodity),
+            "nearbyLy": int(nearby_ly or 0),
+            "minDemand": int(min_demand or 0),
+            "maxMarketAgeHours": int(max_market_age_hours or 0),
+            "landingPad": str(landing_pad or "ANY").upper(),
+        }
+        cache = getattr(self, "_mining_market_cache", {})
+        cached_query = cache.get("query", {}) if isinstance(cache, dict) else {}
+        cache_matches = isinstance(cached_query, dict) and cached_query == query
+        markets = self._mining_market_rows_for_query(query)
+        diagnostics = market_filter_diagnostics(
+            markets, commodity,
+            landing_pad=landing_pad,
+            min_demand=min_demand,
+            max_demand=max_demand,
+            max_market_age_hours=max_market_age_hours,
+        )
+        diagnostics["cacheMatches"] = cache_matches
+        diagnostics["catalogMarkets"] = len(markets)
+        return diagnostics
+
+
     @Slot(
-        str, str, int, str, str, str, str, int, int, int, int, bool, bool,
-        bool, bool, str, str, str, str, str,
+        str, str, int, str, str, bool, str, str, int, int, int, int, bool,
+        bool, bool, bool, str, str, str, str, str,
         result="QVariantList",
     )
     def miningPlanRoutes(
-        self, start_system, commodity, nearby_ly, reserve_filter, ring_filter, method,
-        optimization, min_demand, max_demand, max_market_age_hours, result_limit,
-        require_hotspot, prefer_res, prefer_secondary, require_system_state,
-        landing_pad, power, power_goal, opposing_power, system_state,
+        self, start_system, commodity, nearby_ly, reserve_filter, ring_filter,
+        rings_only, method, optimization, min_demand, max_demand,
+        max_market_age_hours, result_limit, require_hotspot, prefer_res,
+        prefer_secondary, require_system_state, landing_pad, power,
+        power_goal, opposing_power, system_state,
     ):
         candidates = self._mining_find_page(
             commodity, nearby_ly, "ALL EVIDENCE", reserve_filter, method,
-            start_system,
+            start_system, rings_only,
         )
         query = {
             "startSystem": str(start_system or "").strip().casefold(),
@@ -941,12 +1171,7 @@ class NavigationMixin:
             "maxMarketAgeHours": int(max_market_age_hours or 0),
             "landingPad": str(landing_pad or "ANY").upper(),
         }
-        market_cache = getattr(self, "_mining_market_cache", {})
-        cached_query = market_cache.get("query", {})
-        markets = (
-            market_cache.get("markets", [])
-            if isinstance(cached_query, dict) and cached_query == query else []
-        )
+        markets = self._mining_market_rows_for_query(query)
         return plan_mining_routes(
             candidates, commodity, optimization,
             min_demand=min_demand,
@@ -955,6 +1180,7 @@ class NavigationMixin:
             require_hotspot=require_hotspot,
             prefer_res=prefer_res,
             ring_filter=ring_filter,
+            rings_only=rings_only,
             prefer_secondary=prefer_secondary,
             require_system_state=require_system_state,
             landing_pad=landing_pad,
@@ -972,7 +1198,7 @@ class NavigationMixin:
 
     def _mining_find_page(
         self, commodity, nearby_ly, evidence, reserve_filter, method,
-        start_system="",
+        start_system="", rings_only=False,
     ):
         commodity = normalize(str(commodity or "ALL COMMODITIES"))
         commodity_id = mining_commodity_id(commodity)
@@ -1002,6 +1228,18 @@ class NavigationMixin:
                     if origin_coordinates is not None:
                         break
             if origin_coordinates is None:
+                market_origin = getattr(
+                    self, "_mining_market_cache", {},
+                ).get("origin", {})
+                if (
+                    isinstance(market_origin, dict)
+                    and str(market_origin.get("system") or "").strip().casefold()
+                    == requested_origin.casefold()
+                ):
+                    origin_coordinates = self._valid_star_position(
+                        market_origin.get("coordinates")
+                    )
+            if origin_coordinates is None:
                 try:
                     coordinate_index = self._system_coordinate_index()
                 except (AttributeError, OSError):
@@ -1014,12 +1252,15 @@ class NavigationMixin:
             nearby_limit, evidence, reserve_filter, method,
             requested_origin.casefold(),
             tuple(origin_coordinates) if origin_coordinates is not None else None,
+            bool(rings_only),
         )
         if getattr(self, "_mining_find_cache_key", None) == cache_key:
             return self._mining_find_cache
         all_commodities = commodity == normalize("ALL COMMODITIES")
         result = []
         for source_row in source_rows:
+            if rings_only and is_belt_candidate(source_row):
+                continue
             # Reject on scalar/index-like fields before allocating a dict or
             # walking hotspot lists. Most large catalogs fail distance first.
             distance = source_row.get("distanceLy")
@@ -1346,7 +1587,8 @@ class NavigationMixin:
         lambda self: self._state_revision + len(
             self._mining_catalog.get("candidates", [])
             if isinstance(self._mining_catalog, dict) else []
-        ) + int(getattr(self, "_mining_market_revision", 0)),
+        ) + int(getattr(self, "_mining_market_revision", 0))
+        + int(getattr(self, "_mining_catalog_revision", 0)),
         notify=CoreControllerMixin.stateChanged,
     )
 
@@ -1401,6 +1643,41 @@ class NavigationMixin:
     )
 
 
+    miningVerificationBusy = Property(
+        bool,
+        lambda self: getattr(self, "_mining_verification_busy", False),
+        notify=miningVerificationChanged,
+    )
+
+
+    miningVerificationStatus = Property(
+        str,
+        lambda self: getattr(
+            self, "_mining_verification_status",
+            "Ready · verifies top routes after search",
+        ),
+        notify=miningVerificationChanged,
+    )
+
+
+    miningVerificationCompleted = Property(
+        int,
+        lambda self: int(getattr(
+            self, "_mining_verification_completed", 0
+        ) or 0),
+        notify=miningVerificationChanged,
+    )
+
+
+    miningVerificationTotal = Property(
+        int,
+        lambda self: int(getattr(
+            self, "_mining_verification_total", 0
+        ) or 0),
+        notify=miningVerificationChanged,
+    )
+
+
     edmcParallelStatus = Property(
         "QVariantMap", lambda self: self._edmc_parallel_status(),
         notify=CoreControllerMixin.connectionChanged,
@@ -1434,8 +1711,39 @@ class NavigationMixin:
         lambda self: (
             f"MATERIAL TRADERS · {self._trader_sync_status}\n"
             f"TECH BROKERS · {self._tech_broker_sync_status}\n"
-            f"MINING RINGS · {getattr(self, '_mining_sync_status', 'Ready')}\n"
-            f"POWERPLAY SYSTEMS · {getattr(self, '_mining_powerplay_status', 'Ready')}"
+            f"MINING RINGS · {getattr(self, '_mining_sync_status', 'Ready')}"
+        ),
+        notify=CoreControllerMixin.connectionChanged,
+    )
+
+
+    miningPowerplaySyncBusy = Property(
+        bool,
+        lambda self: getattr(self, "_mining_powerplay_busy", False),
+        notify=CoreControllerMixin.connectionChanged,
+    )
+
+
+    miningPowerplaySyncStatus = Property(
+        str,
+        lambda self: getattr(self, "_mining_powerplay_status", "Ready"),
+        notify=CoreControllerMixin.connectionChanged,
+    )
+
+
+    miningPowerplayLastRefresh = Property(
+        str,
+        lambda self: str(
+            getattr(self, "_mining_powerplay_catalog", {}).get("fetchedAt") or ""
+        ),
+        notify=CoreControllerMixin.connectionChanged,
+    )
+
+
+    miningPowerplaySystemCount = Property(
+        int,
+        lambda self: len(
+            getattr(self, "_mining_powerplay_catalog", {}).get("systems") or []
         ),
         notify=CoreControllerMixin.connectionChanged,
     )
@@ -1647,6 +1955,9 @@ class NavigationMixin:
             self.refreshMiningPowerplayCatalog()
         if self._mining_market_busy:
             return
+        retry_timer = getattr(self, "_mining_market_retry_timer", None)
+        if retry_timer is not None:
+            retry_timer.stop()
         query = {
             "startSystem": str(start_system or "").strip().casefold(),
             "commodity": mining_commodity_id(commodity),
@@ -1666,6 +1977,9 @@ class NavigationMixin:
             "path": str(self.mining_market_cache_file),
             "query": query,
         }
+        known_origin = self._known_mining_origin(start_system)
+        if known_origin:
+            request["origin"] = known_origin
         self._active_mining_market_request = request
         self._mining_market_busy = True
         self._mining_market_status = "Checking fresh EDDN market data…"
@@ -1673,6 +1987,13 @@ class NavigationMixin:
 
         def worker():
             result = dict(request)
+            if not result.get("origin"):
+                try:
+                    result["origin"] = fetch_edsm_system_coordinates(
+                        str(start_system or "").strip(), get=requests.get,
+                    )
+                except Exception as exc:
+                    result["originError"] = str(exc)
             try:
                 hours = max(1, query["maxMarketAgeHours"])
                 result["markets"] = fetch_market_imports(
@@ -1693,6 +2014,113 @@ class NavigationMixin:
             self.miningChanged.emit()
 
 
+    def _known_mining_origin(self, system):
+        name = str(system or "").strip()
+        key = name.casefold()
+        if not key:
+            return {}
+        state = getattr(self, "_state", {})
+        if str(state.get("system") or "").strip().casefold() == key:
+            coordinates = self._valid_star_position(
+                state.get("currentPosition")
+            )
+            if coordinates is not None:
+                return {
+                    "system": str(state.get("system") or name).strip(),
+                    "coordinates": coordinates,
+                    "source": "Journal",
+                }
+        market_origin = getattr(self, "_mining_market_cache", {}).get(
+            "origin", {}
+        )
+        if (
+            isinstance(market_origin, dict)
+            and str(market_origin.get("system") or "").strip().casefold() == key
+            and self._valid_star_position(market_origin.get("coordinates"))
+            is not None
+        ):
+            return dict(market_origin)
+        try:
+            coordinates = self._valid_star_position(
+                self._system_coordinate_index().get(key)
+            )
+        except (AttributeError, OSError):
+            coordinates = None
+        return ({
+            "system": name,
+            "coordinates": coordinates,
+            "source": "Local coordinate cache",
+        } if coordinates is not None else {})
+
+
+    def _remember_mining_origin(self, origin):
+        if not isinstance(origin, dict):
+            return False
+        system = str(origin.get("system") or "").strip()
+        coordinates = self._valid_star_position(origin.get("coordinates"))
+        if not system or coordinates is None:
+            return False
+        path = self._data_dir / "system_coordinates.json"
+        saved_coordinates = load_json_file(path, {}, encoding="utf-8")
+        if not isinstance(saved_coordinates, dict):
+            saved_coordinates = {}
+        existing_key = next((
+            key for key in saved_coordinates
+            if str(key).strip().casefold() == system.casefold()
+        ), None)
+        key = existing_key or system
+        if self._valid_star_position(saved_coordinates.get(key)) == coordinates:
+            self._add_mining_system_names([{"system": system}])
+            return False
+        saved_coordinates[key] = coordinates
+        persisted = self._persist_json(
+            path, saved_coordinates, "Mining Finder system coordinates",
+        )
+        if persisted:
+            self._add_mining_system_names([{"system": system}])
+        return bool(persisted)
+
+
+    def _ingest_local_mining_market_snapshot(self, snapshot):
+        """Learn opened station markets immediately, independently of EDDN."""
+        if not isinstance(snapshot, dict):
+            return 0
+        system = str(snapshot.get("StarSystem") or "").strip().casefold()
+        state = getattr(self, "_state", {})
+        coordinates = None
+        if str(state.get("system") or "").strip().casefold() == system:
+            coordinates = self._valid_star_position(
+                state.get("currentPosition")
+            )
+        rows = project_local_market_snapshot(
+            snapshot, coordinates=coordinates,
+        )
+        store = getattr(self, "_mining_market_store", None)
+        if not rows or store is None:
+            return 0
+        imported = store.ingest(rows, create_backup=False)
+        if imported:
+            self._schedule_mining_market_backup()
+            self._mining_market_revision += 1
+            self._mining_market_status = (
+                f"Local market observed · {len(rows)} mining commodities"
+                f" · {store.count()} retained"
+            )
+            self.miningChanged.emit()
+        return imported
+
+
+    def _schedule_mining_market_backup(self):
+        """Snapshot SQLite off the GUI thread after a successful commit."""
+        store = getattr(self, "_mining_market_store", None)
+        if store is None:
+            return False
+        starter = getattr(self, "_start_network_worker", None)
+        if callable(starter):
+            return bool(starter(store.backup, "mining-market-backup"))
+        return store.backup()
+
+
     @Slot(object)
     def _finish_mining_market_sync(self, result):
         request = self._active_mining_market_request
@@ -1708,11 +2136,38 @@ class NavigationMixin:
             self._mining_market_status = "Discarded stale profile market response"
             self.miningChanged.emit()
             return
+        origin_updated = self._remember_mining_origin(result.get("origin"))
         if not result.get("success"):
-            self._mining_market_status = "Market lookup failed · cached data unchanged · " + str(
-                result.get("error") or "unknown error"
+            failure_count = int(getattr(
+                self, "_mining_market_failure_count", 0
+            ))
+            delay = MINING_MARKET_RETRY_SECONDS[min(
+                failure_count, len(MINING_MARKET_RETRY_SECONDS) - 1
+            )]
+            self._mining_market_failure_count = failure_count + 1
+            retry_at = datetime.now(timezone.utc) + timedelta(seconds=delay)
+            retry_timer = getattr(self, "_mining_market_retry_timer", None)
+            if retry_timer is not None and not getattr(
+                self, "_shutdown_complete", False
+            ):
+                retry_timer.start(delay * 1000)
+            store = getattr(self, "_mining_market_store", None)
+            if store is not None:
+                store.record_source_result(
+                    "EDDN market indexes", success=False,
+                    error=str(result.get("error") or "unknown error"),
+                    next_retry_at=retry_at.isoformat(timespec="seconds"),
+                )
+            self._mining_market_status = (
+                "Market lookup failed · retained data unchanged"
+                f" · retry in {delay // 60} min · "
+                + str(result.get("error") or "unknown error")
             )
+            if origin_updated:
+                self._mining_market_revision += 1
             self.miningChanged.emit()
+            if origin_updated:
+                self.stateChanged.emit()
             return
         markets = [
             row for row in result.get("markets", []) if isinstance(row, dict)
@@ -1721,14 +2176,30 @@ class NavigationMixin:
             "fetchedAt": datetime.now(timezone.utc).isoformat(timespec="seconds"),
             "query": dict(result.get("query") or {}),
             "markets": markets,
+            "origin": result.get("origin") or {},
         }
+        store = getattr(self, "_mining_market_store", None)
+        retained = 0
+        if store is not None:
+            store.ingest(
+                markets, fetched_at=self._mining_market_cache["fetchedAt"],
+                create_backup=False,
+            )
+            store.record_source_result("EDDN market indexes", success=True)
+            retained = store.count()
+            self._schedule_mining_market_backup()
+        self._mining_market_failure_count = 0
+        retry_timer = getattr(self, "_mining_market_retry_timer", None)
+        if retry_timer is not None:
+            retry_timer.stop()
         self._persist_json(
             self.mining_market_cache_file, self._mining_market_cache,
             "Mining market cache",
         )
         self._mining_market_revision += 1
         self._mining_market_status = (
-            f"EDDN market data updated · {len(markets)} verified sell markets"
+            f"EDDN market data updated · {len(markets)} nearby"
+            f" · {retained} retained"
         )
         self.miningChanged.emit()
         self.stateChanged.emit()
@@ -1891,6 +2362,292 @@ class NavigationMixin:
             self.selectMaterial(key)
 
 
+    @staticmethod
+    def _recently_verified_mining_route(row, now=None):
+        """Return whether a route already contains a recent Spansh merge."""
+        if not isinstance(row, dict):
+            return False
+        observations = row.get("observations") or []
+        has_spansh = any(
+            "spansh" in str(item.get("source") or "").casefold()
+            for item in observations if isinstance(item, dict)
+        ) or "spansh" in str(row.get("source") or "").casefold()
+        if not has_spansh:
+            return False
+        try:
+            learned_at = datetime.fromisoformat(
+                str(row.get("learnedAt") or "").replace("Z", "+00:00")
+            )
+            if learned_at.tzinfo is None:
+                learned_at = learned_at.replace(tzinfo=timezone.utc)
+        except (TypeError, ValueError):
+            return False
+        now = now or datetime.now(timezone.utc)
+        return (now - learned_at.astimezone(timezone.utc)).total_seconds() < 21600
+
+
+    @Slot(object, str)
+    def verifyMiningRoutes(self, routes, start_system):
+        """Refresh public evidence for at most the first 30 displayed routes."""
+        route_rows = [
+            dict(row) for row in list(routes or [])[:30]
+            if isinstance(row, dict)
+        ]
+        if getattr(self, "_mining_verification_busy", False):
+            self._pending_mining_verification = {
+                "routes": route_rows,
+                "startSystem": str(start_system or ""),
+            }
+            self._mining_verification_status = (
+                "Current verification continues · newest search queued"
+            )
+            self.miningVerificationChanged.emit()
+            return
+
+        now = datetime.now(timezone.utc)
+        now_epoch = time.time()
+        cache = getattr(self, "_mining_verification_cache", {})
+        targets = []
+        seen = set()
+        cached = 0
+        for row in route_rows:
+            try:
+                address = int(row.get("systemAddress"))
+            except (TypeError, ValueError):
+                continue
+            if address <= 0 or address in seen:
+                continue
+            seen.add(address)
+            retry_after = float(
+                (cache.get(address) or {}).get("retryAfter", 0.0) or 0.0
+            )
+            if retry_after > now_epoch or self._recently_verified_mining_route(
+                row, now=now,
+            ):
+                cached += 1
+                continue
+            targets.append({
+                "systemAddress": address,
+                "system": str(row.get("system") or ""),
+            })
+
+        total = len(seen)
+        self._mining_verification_total = total
+        self._mining_verification_completed = cached
+        self._mining_verification_failures = 0
+        if not total:
+            self._mining_verification_status = (
+                "No displayed route has a verifiable system address"
+            )
+            self.miningVerificationChanged.emit()
+            return
+        if not targets:
+            self._mining_verification_status = (
+                f"Top routes current · {cached}/{total} systems verified"
+            )
+            self.miningVerificationChanged.emit()
+            return
+
+        origin = self._known_mining_origin(start_system)
+        request = {
+            "id": uuid.uuid4().hex,
+            "profileKey": self.profile_context.key,
+            "generation": self._profile_generation,
+            "path": str(self.mining_catalog_file),
+            "origin": list(origin.get("coordinates") or []),
+            "targets": targets,
+            "total": total,
+            "completed": cached,
+        }
+        self._active_mining_verification_request = request
+        self._mining_verification_busy = True
+        self._mining_verification_status = (
+            f"Verifying top routes · {cached}/{total} systems"
+        )
+        self.miningVerificationChanged.emit()
+
+        def fetch_target(target):
+            address = target["systemAddress"]
+            payload = fetch_spansh_system_dump(address, requests.get)
+            candidates = project_spansh_mining_candidates(
+                payload, request["origin"]
+            )
+            if not candidates:
+                raise LookupError("Spansh returned no mining rings")
+            learned_at = datetime.now(timezone.utc).isoformat(
+                timespec="seconds"
+            )
+            for candidate in candidates:
+                candidate["learnedAt"] = learned_at
+            return address, candidates
+
+        def worker():
+            incoming = []
+            succeeded = []
+            failed = []
+            completed = int(request["completed"])
+            with ThreadPoolExecutor(
+                max_workers=min(2, len(targets)),
+                thread_name_prefix="mining-verify",
+            ) as pool:
+                futures = {
+                    pool.submit(fetch_target, target): target
+                    for target in targets
+                }
+                for future in as_completed(futures):
+                    target = futures[future]
+                    try:
+                        address, candidates = future.result()
+                        succeeded.append(address)
+                        incoming.extend(candidates)
+                    except Exception as exc:
+                        failed.append({
+                            "systemAddress": target["systemAddress"],
+                            "system": target["system"],
+                            "error": f"{type(exc).__name__}: {exc}",
+                        })
+                    completed += 1
+                    self.miningVerificationProgress.emit({
+                        "id": request["id"],
+                        "completed": completed,
+                        "total": total,
+                        "failures": len(failed),
+                    })
+            result = dict(request)
+            result.update({
+                "candidates": incoming,
+                "succeeded": succeeded,
+                "failed": failed,
+            })
+            self.miningVerificationFinished.emit(result)
+
+        if not self._start_network_worker(worker, "mining-route-verification"):
+            self._active_mining_verification_request = None
+            self._mining_verification_busy = False
+            self._mining_verification_status = (
+                "Route verification unavailable during shutdown"
+            )
+            self.miningVerificationChanged.emit()
+
+
+    @Slot(object)
+    def _finish_mining_verification_progress(self, progress):
+        request = getattr(self, "_active_mining_verification_request", None)
+        if not request or progress.get("id") != request.get("id"):
+            return
+        self._mining_verification_completed = int(
+            progress.get("completed", 0) or 0
+        )
+        self._mining_verification_total = int(
+            progress.get("total", 0) or 0
+        )
+        self._mining_verification_failures = int(
+            progress.get("failures", 0) or 0
+        )
+        self._mining_verification_status = (
+            f"Verifying top routes · {self._mining_verification_completed}/"
+            f"{self._mining_verification_total} systems"
+        )
+        self.miningVerificationChanged.emit()
+
+
+    @Slot(object)
+    def _finish_mining_verification(self, result):
+        request = getattr(self, "_active_mining_verification_request", None)
+        if not request or result.get("id") != request.get("id"):
+            return
+        self._active_mining_verification_request = None
+        self._mining_verification_busy = False
+        context_matches = (
+            result.get("profileKey") == self.profile_context.key
+            and result.get("generation") == self._profile_generation
+            and result.get("path") == str(self.mining_catalog_file)
+        )
+        failed = list(result.get("failed") or [])
+        succeeded = list(result.get("succeeded") or [])
+        now_epoch = time.time()
+        cache = getattr(self, "_mining_verification_cache", {})
+        for address in succeeded:
+            cache[int(address)] = {"retryAfter": now_epoch + 21600}
+        for failure in failed:
+            try:
+                address = int(failure.get("systemAddress"))
+            except (TypeError, ValueError):
+                continue
+            cache[address] = {"retryAfter": now_epoch + 600}
+        self._mining_verification_cache = cache
+        changed = False
+        incoming = [
+            row for row in result.get("candidates", [])
+            if isinstance(row, dict)
+        ]
+        if context_matches and incoming:
+            old = self._mining_catalog.get("candidates", [])
+            old = old if isinstance(old, list) else []
+            positions = self._mining_positions_for(old)
+            merged, displaced = merge_mining_candidate_batch(
+                old, incoming, positions=positions,
+            )
+            preserved = self._archive_history(
+                "mining_observations", incoming
+            )
+            preserved = self._archive_history(
+                "mining_catalog", displaced
+            ) and preserved
+            candidates = merged if preserved else [*old, *incoming]
+            self._compact_mining_catalog_rows(candidates)
+            self._mining_catalog = {
+                "updatedAt": datetime.now(timezone.utc).isoformat(
+                    timespec="seconds"
+                ),
+                "resetAt": str(self._mining_catalog.get("resetAt") or ""),
+                "candidates": candidates,
+            }
+            self._mining_catalog_revision = getattr(
+                self, "_mining_catalog_revision", 0
+            ) + 1
+            self._mining_catalog_positions = (
+                positions if candidates is merged
+                else mining_candidate_positions(candidates)
+            )
+            self._mining_catalog_positions_identity = id(candidates)
+            self._add_mining_system_names(incoming)
+            self._mining_rows_cache_key = None
+            self._mining_find_cache_key = None
+            self._mining_find_cache = []
+            self._save_mining_catalog()
+            changed = True
+
+        total = int(result.get("total", 0) or 0)
+        self._mining_verification_completed = total
+        self._mining_verification_total = total
+        self._mining_verification_failures = len(failed)
+        if not context_matches:
+            self._mining_verification_status = (
+                "Discarded stale profile verification"
+            )
+        elif failed:
+            self._mining_verification_status = (
+                f"Top routes checked · {total - len(failed)}/{total} verified · "
+                f"{len(failed)} temporarily unavailable"
+            )
+        else:
+            self._mining_verification_status = (
+                f"Top routes current · {total}/{total} systems verified"
+            )
+        self.miningVerificationChanged.emit()
+        if changed:
+            self.miningChanged.emit()
+            self.stateChanged.emit()
+
+        pending = getattr(self, "_pending_mining_verification", None)
+        self._pending_mining_verification = None
+        if pending and context_matches:
+            self.verifyMiningRoutes(
+                pending.get("routes", []), pending.get("startSystem", "")
+            )
+
+
     @Slot()
     def refreshMiningFinder(self):
         if self._mining_sync_busy:
@@ -1935,7 +2692,7 @@ class NavigationMixin:
 
     @Slot()
     def resetMiningCatalog(self):
-        """Explicitly replace only the active profile's learned mining cache."""
+        """Reset and safely rebuild the active profile's Mining Finder data."""
         existing = self._mining_catalog.get("candidates", [])
         if isinstance(existing, list) and not self._archive_history(
             "mining_catalog", existing
@@ -1947,7 +2704,24 @@ class NavigationMixin:
             return
         self._active_mining_request = None
         self._mining_sync_busy = False
+        self._active_mining_verification_request = None
+        self._pending_mining_verification = None
+        self._mining_verification_busy = False
+        self._mining_verification_completed = 0
+        self._mining_verification_total = 0
+        self._mining_verification_failures = 0
+        self._mining_verification_cache = {}
+        self._mining_verification_status = (
+            "Ready · verifies top routes after search"
+        )
         self._pending_mining_candidates = []
+        self._active_mining_market_request = None
+        self._mining_market_busy = False
+        self._mining_market_failure_count = 0
+        self._local_market_snapshot_fingerprint = ""
+        retry_timer = getattr(self, "_mining_market_retry_timer", None)
+        if retry_timer is not None:
+            retry_timer.stop()
         if not hasattr(self, "_mining_catalog_load_token"):
             self._mining_catalog_load_token = 0
         self._mining_catalog_load_token += 1
@@ -1956,6 +2730,15 @@ class NavigationMixin:
             "resetAt": datetime.now(timezone.utc).isoformat(timespec="seconds"),
             "candidates": [],
         }
+        self._mining_catalog_revision = getattr(
+            self, "_mining_catalog_revision", 0
+        ) + 1
+        self._mining_catalog_positions = {}
+        self._mining_catalog_positions_identity = id(
+            self._mining_catalog["candidates"]
+        )
+        self._mining_system_names = []
+        self._mining_system_name_keys = []
         self._mining_rows_build_token = getattr(
             self, "_mining_rows_build_token", 0
         ) + 1
@@ -1987,11 +2770,30 @@ class NavigationMixin:
                     self.mining_catalog_file,
                     json.dumps(self._mining_catalog, indent=2),
                 )
-        except OSError as exc:
+            store = getattr(self, "_mining_market_store", None)
+            if store is not None:
+                saved = store.reset() and saved
+            self._mining_market_cache = {}
+            if hasattr(self, "mining_market_cache_file"):
+                saved = atomic_write(
+                    self.mining_market_cache_file, json.dumps({}, indent=2),
+                ) and saved
+            legacy_path = getattr(
+                self, "mining_market_catalog_legacy_file", None
+            )
+            if legacy_path is not None:
+                Path(legacy_path).unlink(missing_ok=True)
+            self._mining_market_revision = getattr(
+                self, "_mining_market_revision", 0
+            ) + 1
+            self._mining_market_status = (
+                "Market catalog reset · rebuilds from Journal and public data"
+            )
+        except (OSError, sqlite3.DatabaseError) as exc:
             saved = False
             LOGGER.warning("Mining catalog reset failed: %s", type(exc).__name__)
         self._mining_sync_status = (
-            "Mining catalog reset · awaiting new Journal and EDDN observations"
+            "Mining catalog reset · rebuilding from Journal and public data"
             if saved else "Mining catalog reset failed"
         )
         self.miningChanged.emit()
@@ -2025,8 +2827,10 @@ class NavigationMixin:
         learned_at = datetime.now(timezone.utc).isoformat(timespec="seconds")
         for row in incoming:
             row["learnedAt"] = learned_at
+        old = old if isinstance(old, list) else []
+        positions = self._mining_positions_for(old)
         merged, _displaced = merge_mining_candidate_batch(
-            old if isinstance(old, list) else [], incoming
+            old, incoming, positions=positions,
         )
         preserved = self._archive_history("mining_observations", incoming)
         preserved = self._archive_history(
@@ -2036,8 +2840,7 @@ class NavigationMixin:
             ),
         ) and preserved
         candidates = (
-            merged if preserved
-            else [*(old if isinstance(old, list) else []), *incoming]
+            merged if preserved else [*old, *incoming]
         )
         self._compact_mining_catalog_rows(candidates)
         self._mining_catalog = {
@@ -2045,6 +2848,17 @@ class NavigationMixin:
             "resetAt": str(self._mining_catalog.get("resetAt") or ""),
             "candidates": candidates,
         }
+        self._mining_catalog_revision = getattr(
+            self, "_mining_catalog_revision", 0
+        ) + 1
+        if candidates is merged:
+            self._mining_catalog_positions = positions
+        else:
+            self._mining_catalog_positions = mining_candidate_positions(
+                candidates
+            )
+        self._mining_catalog_positions_identity = id(candidates)
+        self._add_mining_system_names(incoming)
         self._mining_rows_cache_key = None
         self._mining_find_cache_key = None
         self._mining_find_cache = []
@@ -2129,8 +2943,10 @@ class NavigationMixin:
         )
         if mining_rows:
             existing = self._mining_catalog.get("candidates", [])
+            existing = existing if isinstance(existing, list) else []
+            positions = self._mining_positions_for(existing)
             merged, displaced = merge_mining_candidate_batch(
-                existing if isinstance(existing, list) else [], mining_rows
+                existing, mining_rows, positions=positions,
             )
             preserved = self._archive_history(
                 "mining_observations", mining_rows
@@ -2140,8 +2956,7 @@ class NavigationMixin:
             ) and preserved
             candidates = (
                 merged if preserved else [
-                    *(existing if isinstance(existing, list) else []),
-                    *mining_rows,
+                    *existing, *mining_rows,
                 ]
             )
             self._compact_mining_catalog_rows(candidates)
@@ -2150,6 +2965,17 @@ class NavigationMixin:
                 "resetAt": str(self._mining_catalog.get("resetAt") or ""),
                 "candidates": candidates,
             }
+            self._mining_catalog_revision = getattr(
+                self, "_mining_catalog_revision", 0
+            ) + 1
+            if candidates is merged:
+                self._mining_catalog_positions = positions
+            else:
+                self._mining_catalog_positions = mining_candidate_positions(
+                    candidates
+                )
+            self._mining_catalog_positions_identity = id(candidates)
+            self._add_mining_system_names(mining_rows)
             self._mining_rows_cache_key = None
             self._mining_find_cache_key = None
             self._mining_find_cache = []

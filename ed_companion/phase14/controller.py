@@ -127,6 +127,7 @@ from ed_companion.navigation.mining_commodities import (
     mining_commodity_id,
     mining_commodities_for_method,
 )
+from ed_companion.navigation.mining_market_store import MarketCatalogStore
 from ed_companion.navigation.trader_type_cache import normalize_timestamp
 
 HGE_OBSERVATION_LIMIT = 10000
@@ -349,6 +350,12 @@ class CockpitController(
         self.tech_broker_catalog_file = self.config_dir / "tech_broker_catalog_user.json"
         self.mining_catalog_file = self.config_dir / "mining_finder_catalog.json"
         self.mining_market_cache_file = self.config_dir / "mining_market_cache.json"
+        self.mining_market_catalog_legacy_file = (
+            self.config_dir / "mining_market_catalog.json"
+        )
+        self.mining_market_catalog_file = (
+            self.config_dir / "mining_market_catalog.sqlite3"
+        )
         self.mining_powerplay_catalog_file = (
             self.config_dir / "mining_powerplay_catalog.json"
         )
@@ -356,6 +363,34 @@ class CockpitController(
         self.history_archive_file = self.config_dir / "data_history.sqlite3"
         self.fleet_images_file = self.config_dir / "fleet_images.json"
         self.fleet_images_dir = self.config_dir / "fleet_images"
+
+    def _open_mining_market_store(self) -> MarketCatalogStore:
+        """Open this profile's durable catalog and migrate legacy JSON once."""
+        store = MarketCatalogStore(self.mining_market_catalog_file)
+        migration_rows = []
+        migration_required = store.metadata("legacy_migrated") != "1"
+        if migration_required:
+            legacy = self._read_local_json(
+                self.mining_market_catalog_legacy_file, {}
+            )
+            if isinstance(legacy, dict):
+                legacy_rows = legacy.get("markets", [])
+                if isinstance(legacy_rows, list):
+                    migration_rows.extend(legacy_rows)
+            cache = getattr(self, "_mining_market_cache", {})
+            if isinstance(cache, dict):
+                cached_rows = cache.get("markets", [])
+                if isinstance(cached_rows, list):
+                    migration_rows.extend(cached_rows)
+        imported = store.ingest(
+            (row for row in migration_rows if isinstance(row, dict)),
+            create_backup=False,
+        )
+        if migration_required:
+            store.set_metadata("legacy_migrated", "1")
+        if migration_required or imported or not store.backup_path.is_file():
+            store.backup()
+        return store
 
     def __init__(self):
         super().__init__()
@@ -514,6 +549,11 @@ class CockpitController(
         # The mature Mining catalog can exceed 50 MB. It is loaded by the
         # existing startup worker so JSON parsing never delays the first frame.
         self._mining_catalog = {"candidates": []}
+        self._mining_catalog_revision = 0
+        self._mining_catalog_positions = {}
+        self._mining_catalog_positions_identity = None
+        self._mining_system_names = []
+        self._mining_system_name_keys = []
         self._mining_file_lock = threading.Lock()
         self._mining_save_sequence = 0
         self._mining_save_sequences = {}
@@ -528,14 +568,31 @@ class CockpitController(
         self._mining_sync_status = "Ready"
         self._active_mining_request = None
         self.miningSyncFinished.connect(self._finish_mining_sync)
+        self._mining_verification_busy = False
+        self._mining_verification_status = "Ready · verifies top routes after search"
+        self._mining_verification_completed = 0
+        self._mining_verification_total = 0
+        self._mining_verification_failures = 0
+        self._mining_verification_cache = {}
+        self._active_mining_verification_request = None
+        self._pending_mining_verification = None
+        self.miningVerificationProgress.connect(
+            self._finish_mining_verification_progress
+        )
+        self.miningVerificationFinished.connect(
+            self._finish_mining_verification
+        )
         self._mining_market_cache = self._read_local_json(
             self.mining_market_cache_file, {}
         )
         if not isinstance(self._mining_market_cache, dict):
             self._mining_market_cache = {}
+        self._mining_market_store = self._open_mining_market_store()
         self._mining_market_busy = False
         self._mining_market_status = self._mining_market_cache_status()
         self._mining_market_revision = 0
+        self._mining_market_failure_count = 0
+        self._local_market_snapshot_fingerprint = ""
         self._active_mining_market_request = None
         self.miningMarketFinished.connect(self._finish_mining_market_sync)
         self._mining_powerplay_catalog = self._read_local_json(
@@ -686,7 +743,19 @@ class CockpitController(
         self.spanshAutoRefreshTimer.setInterval(5 * 60 * 1000)
         self.spanshAutoRefreshTimer.timeout.connect(self._maybe_auto_refresh_spansh)
         self.spanshAutoRefreshTimer.start()
+        self.miningMarketAutoRefreshTimer = QTimer(self)
+        self.miningMarketAutoRefreshTimer.setInterval(15 * 60 * 1000)
+        self.miningMarketAutoRefreshTimer.timeout.connect(
+            self._maybe_auto_refresh_mining_markets
+        )
+        self.miningMarketAutoRefreshTimer.start()
+        self._mining_market_retry_timer = QTimer(self)
+        self._mining_market_retry_timer.setSingleShot(True)
+        self._mining_market_retry_timer.timeout.connect(
+            self._maybe_auto_refresh_mining_markets
+        )
         QTimer.singleShot(30_000, self._maybe_auto_refresh_spansh)
+        QTimer.singleShot(60_000, self._maybe_auto_refresh_mining_markets)
         self._ensure_eddn_listener()
 
     def _start_initial_state_load(self):
@@ -2287,8 +2356,20 @@ class CockpitController(
         self._active_mining_request = None
         self._mining_sync_busy = False
         self._mining_sync_status = "Ready"
+        self._active_mining_verification_request = None
+        self._pending_mining_verification = None
+        self._mining_verification_busy = False
+        self._mining_verification_status = "Ready · verifies top routes after search"
+        self._mining_verification_completed = 0
+        self._mining_verification_total = 0
+        self._mining_verification_failures = 0
+        self._mining_verification_cache = {}
         self._active_mining_market_request = None
         self._mining_market_busy = False
+        self._mining_market_failure_count = 0
+        self._local_market_snapshot_fingerprint = ""
+        if getattr(self, "_mining_market_retry_timer", None) is not None:
+            self._mining_market_retry_timer.stop()
         self._mining_market_status = "Ready · market data loads when a route is searched"
         self._pending_mining_candidates = []
         self._last_commander_status_stamp = None
@@ -2312,6 +2393,7 @@ class CockpitController(
         )
         if not isinstance(self._mining_market_cache, dict):
             self._mining_market_cache = {}
+        self._mining_market_store = self._open_mining_market_store()
         self._mining_market_status = self._mining_market_cache_status()
         self._mining_powerplay_catalog = self._read_local_json(
             self.mining_powerplay_catalog_file, {}
@@ -2397,6 +2479,13 @@ class CockpitController(
         if not isinstance(self._hge_sightings, list):
             self._hge_sightings = []
         self._mining_catalog = {"candidates": []}
+        self._mining_catalog_revision = getattr(
+            self, "_mining_catalog_revision", 0
+        ) + 1
+        self._mining_catalog_positions = {}
+        self._mining_catalog_positions_identity = None
+        self._mining_system_names = []
+        self._mining_system_name_keys = []
         self._mining_rows_build_token = getattr(
             self, "_mining_rows_build_token", 0
         ) + 1
@@ -2552,7 +2641,9 @@ class CockpitController(
         # cannot mutate or re-persist queue state after this point.
         for timer_name in (
             "timer", "refreshDebounceTimer", "craftConfirmationTimer",
-            "hgeBatchTimer", "_frontier_watchdog",
+            "hgeBatchTimer", "spanshAutoRefreshTimer",
+            "miningMarketAutoRefreshTimer", "_mining_market_retry_timer",
+            "_frontier_watchdog",
         ):
             timer = getattr(self, timer_name, None)
             if timer is not None:
@@ -2581,6 +2672,9 @@ class CockpitController(
             self._save_inara_journal_cache()
             self._save_inara_receipts()
             self._save_ui_config()
+            store = getattr(self, "_mining_market_store", None)
+            if store is not None:
+                store.backup()
         except OSError as exc:
             LOGGER.warning("Final shutdown save failed: %s", exc)
 

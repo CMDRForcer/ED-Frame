@@ -1,12 +1,15 @@
 from datetime import datetime, timezone
 from pathlib import Path
 import unittest
+from unittest.mock import patch
 
+from ed_companion.navigation import mining_planner as planner_module
 from ed_companion.navigation.mining_planner import (
     OPTIMIZE_DISTANCE,
     OPTIMIZE_MERITS,
     OPTIMIZE_PROFIT,
     OPTIMIZE_YIELD,
+    market_filter_diagnostics,
     plan_mining_routes,
 )
 
@@ -29,6 +32,53 @@ def candidate(system, distance, target="HOTSPOT", **extra):
 
 
 class MiningPlannerTests(unittest.TestCase):
+    def test_market_diagnostics_distinguish_filtered_from_missing_data(self):
+        diagnostics = market_filter_diagnostics(
+            [{
+                "commodity": "Platinum", "station": "Old Market",
+                "system": "Old", "sellPrice": 200000, "demand": 10000,
+                "landingPadSize": "L",
+                "observedAt": "2026-09-30T08:00:00Z",
+            }],
+            "Platinum", landing_pad="LARGE", min_demand=5000,
+            max_demand=500000, max_market_age_hours=1, now=NOW,
+        )
+
+        self.assertEqual(diagnostics["total"], 1)
+        self.assertEqual(diagnostics["eligible"], 0)
+        self.assertEqual(diagnostics["reason"], "AGE")
+        self.assertIn("OUTSIDE THE 1 H AGE LIMIT", diagnostics["summary"])
+
+    def test_shared_markets_are_projected_once_not_once_per_candidate(self):
+        candidates = [candidate(f"Mine {index}", index + 1) for index in range(50)]
+        markets = [{
+            "commodity": "Platinum",
+            "station": f"Market {index}",
+            "system": f"Sell {index}",
+            "sellPrice": 200000 + index,
+            "demand": 10000,
+            "observedAt": "2026-09-30T11:30:00Z",
+        } for index in range(80)]
+        original = planner_module.mining_commodity_id
+        calls = 0
+
+        def counted(value):
+            nonlocal calls
+            calls += 1
+            return original(value)
+
+        with patch.object(
+            planner_module, "mining_commodity_id", side_effect=counted,
+        ):
+            planned = plan_mining_routes(
+                candidates, "Platinum", OPTIMIZE_PROFIT,
+                min_demand=5000, max_market_age_hours=2,
+                markets=markets, now=NOW,
+            )
+
+        self.assertEqual(len(planned), 30)
+        self.assertLess(calls, 200)
+
     def test_shared_eddn_market_resolves_price_demand_and_age(self):
         rows = plan_mining_routes(
             [{
@@ -125,7 +175,37 @@ class MiningPlannerTests(unittest.TestCase):
 
         self.assertEqual(planned[0]["system"], "Confirmed")
         self.assertEqual(planned[0]["meritStars"], "★★★★★")
+        self.assertEqual(planned[0]["mineToSellLy"], 0.0)
         self.assertFalse(planned[1]["meritKnown"])
+
+    def test_same_system_market_distance_is_zero_without_coordinates(self):
+        planned = plan_mining_routes(
+            [candidate("Local Mine", 10, markets=[{
+                "commodity": "Platinum", "station": "Local Port",
+                "system": "Local Mine", "sellPrice": 220000,
+                "demand": 12000,
+                "observedAt": "2026-09-30T11:30:00Z",
+            }])],
+            "Platinum", OPTIMIZE_PROFIT, now=NOW,
+        )
+
+        self.assertTrue(planned[0]["marketKnown"])
+        self.assertEqual(planned[0]["mineToSellLy"], 0.0)
+
+    def test_cross_system_market_uses_known_coordinates_for_distance(self):
+        planned = plan_mining_routes(
+            [candidate(
+                "Mine", 10, coordinates=[0, 0, 0], markets=[{
+                    "commodity": "Platinum", "station": "Remote Port",
+                    "system": "Remote", "coordinates": [3, 4, 0],
+                    "sellPrice": 220000, "demand": 12000,
+                    "observedAt": "2026-09-30T11:30:00Z",
+                }],
+            )],
+            "Platinum", OPTIMIZE_PROFIT, now=NOW,
+        )
+
+        self.assertEqual(planned[0]["mineToSellLy"], 5.0)
 
     def test_partial_power_match_never_becomes_a_merit_claim(self):
         planned = plan_mining_routes([candidate("Power Context", 10, markets=[{
@@ -164,6 +244,111 @@ class MiningPlannerTests(unittest.TestCase):
         self.assertEqual(planned[0]["meritScore"], 5.0)
         self.assertEqual(planned[0]["mineToSellLy"], 0.0)
 
+    def test_same_system_merit_goals_never_offer_a_remote_sell_market(self):
+        for goal, opposing_power in (
+            ("REINFORCE", "ANY"),
+            ("UNDERMINE", "Felicia Winters"),
+        ):
+            with self.subTest(goal=goal):
+                row = candidate(
+                    "Mining System", 10,
+                    controllingPower=(
+                        "Aisling Duval" if goal == "REINFORCE"
+                        else "Felicia Winters"
+                    ),
+                    powerState="Fortified",
+                    powers=["Felicia Winters", "Aisling Duval"],
+                    markets=[{
+                        "commodity": "Platinum", "station": "Remote Port",
+                        "system": "Remote System", "sellPrice": 300000,
+                        "demand": 20000,
+                        "observedAt": "2026-09-30T11:30:00Z",
+                    }],
+                )
+
+                planned = plan_mining_routes(
+                    [row], "Platinum", OPTIMIZE_MERITS,
+                    power="Aisling Duval", power_goal=goal,
+                    opposing_power=opposing_power, now=NOW,
+                )
+
+                self.assertFalse(planned[0]["marketKnown"])
+                self.assertEqual(planned[0]["station"], "")
+                self.assertEqual(planned[0]["sellSystem"], "")
+                self.assertTrue(planned[0]["sameSystemSaleRequired"])
+                self.assertFalse(planned[0]["meritKnown"])
+                self.assertIn(
+                    "SAME-SYSTEM SELL MARKET NOT VERIFIED",
+                    planned[0]["meritStatus"],
+                )
+
+    def test_reinforce_shared_market_is_limited_to_the_mining_system(self):
+        planned = plan_mining_routes(
+            [candidate(
+                "Local System", 10, controllingPower="Aisling Duval",
+                powerState="Fortified",
+            )],
+            "Platinum", OPTIMIZE_MERITS, power="Aisling Duval",
+            power_goal="REINFORCE", markets=[{
+                "commodity": "Platinum", "station": "Remote Rich Port",
+                "system": "Remote System", "sellPrice": 350000,
+                "demand": 30000,
+                "observedAt": "2026-09-30T11:30:00Z",
+            }, {
+                "commodity": "Platinum", "station": "Local Port",
+                "system": "Local System", "sellPrice": 180000,
+                "demand": 12000,
+                "observedAt": "2026-09-30T11:30:00Z",
+            }],
+            now=NOW,
+        )
+
+        self.assertEqual(planned[0]["station"], "Local Port")
+        self.assertEqual(planned[0]["sellSystem"], "Local System")
+        self.assertEqual(planned[0]["meritScore"], 5.0)
+
+    def test_acquire_keeps_the_cross_system_sell_route(self):
+        row = candidate(
+            "Stronghold Source", 10, controllingPower="Aisling Duval",
+            powerState="Stronghold", coordinates=[0, 0, 0], markets=[{
+                "commodity": "Platinum", "station": "Acquire Port",
+                "system": "Expansion Target", "sellPrice": 200000,
+                "demand": 12000,
+                "observedAt": "2026-09-30T11:30:00Z",
+            }],
+        )
+        planned = plan_mining_routes(
+            [row], "Platinum", OPTIMIZE_MERITS, power="Aisling Duval",
+            power_goal="ACQUIRE", powerplay_systems=[{
+                "system": "Expansion Target", "power": "Aisling Duval",
+                "powerState": "Unoccupied", "coordinates": [25, 0, 0],
+            }], now=NOW,
+        )
+
+        self.assertTrue(planned[0]["marketKnown"])
+        self.assertFalse(planned[0]["sameSystemSaleRequired"])
+        self.assertEqual(planned[0]["sellSystem"], "Expansion Target")
+        self.assertEqual(planned[0]["meritScore"], 5.0)
+
+    def test_headquarters_is_known_but_not_a_reinforcement_target(self):
+        row = candidate(
+            "Cubeo", 0, controllingPower="Aisling Duval",
+            powerState="Headquarters", coordinates=[0, 0, 0], markets=[{
+                "commodity": "Platinum", "station": "Chelomey Orbital",
+                "system": "Cubeo", "sellPrice": 180000,
+                "demand": 12000, "observedAt": "2026-09-30T11:30:00Z",
+            }],
+        )
+
+        planned = plan_mining_routes(
+            [row], "Platinum", OPTIMIZE_MERITS, power="Aisling Duval",
+            power_goal="REINFORCE", now=NOW,
+        )
+
+        self.assertTrue(planned[0]["meritKnown"])
+        self.assertEqual(planned[0]["meritScore"], 0.0)
+        self.assertIn("HEADQUARTERS CANNOT BE REINFORCED", planned[0]["meritStatus"])
+
     def test_acquire_pairs_stronghold_source_with_unoccupied_target_in_30ly(self):
         row = candidate(
             "Stronghold Mine", 10, controllingPower="Aisling Duval",
@@ -187,6 +372,28 @@ class MiningPlannerTests(unittest.TestCase):
 
         self.assertEqual(planned[0]["meritScore"], 5.0)
         self.assertEqual(planned[0]["mineToSellLy"], 25.0)
+        self.assertIn("25.0/30 LY", planned[0]["meritStatus"])
+
+    def test_headquarters_supplies_the_same_acquisition_radius_as_stronghold(self):
+        row = candidate(
+            "Cubeo", 0, controllingPower="Aisling Duval",
+            powerState="Headquarters", coordinates=[0, 0, 0], markets=[{
+                "commodity": "Platinum", "station": "Acquire Port",
+                "system": "Target", "sellPrice": 200000, "demand": 12000,
+                "observedAt": "2026-09-30T11:30:00Z",
+            }],
+        )
+        catalog = [{
+            "system": "Target", "power": "Aisling Duval",
+            "powerState": "Unoccupied", "coordinates": [25, 0, 0],
+        }]
+
+        planned = plan_mining_routes(
+            [row], "Platinum", OPTIMIZE_MERITS, power="Aisling Duval",
+            power_goal="ACQUIRE", powerplay_systems=catalog, now=NOW,
+        )
+
+        self.assertEqual(planned[0]["meritScore"], 5.0)
         self.assertIn("25.0/30 LY", planned[0]["meritStatus"])
 
     def test_acquire_rejects_target_beyond_fortified_20ly_limit(self):
@@ -275,6 +482,20 @@ class MiningPlannerTests(unittest.TestCase):
 
         self.assertEqual([row["system"] for row in planned], ["Metallic"])
 
+    def test_rings_only_hides_belts_without_removing_normal_rings(self):
+        planned = plan_mining_routes([
+            candidate(
+                "Ring System", 8, ringTypeName="Metallic",
+                miningSiteType="RING",
+            ),
+            candidate(
+                "Belt System", 4, ringTypeName="Metallic",
+                miningSiteType="BELT", ring="Belt System A Belt Cluster 1",
+            ),
+        ], "Platinum", OPTIMIZE_DISTANCE, rings_only=True, now=NOW)
+
+        self.assertEqual([row["system"] for row in planned], ["Ring System"])
+
     def test_optional_secondary_and_system_state_filters_are_real(self):
         rows = [
             candidate("With State", 10, systemState="Boom", hotspots=[
@@ -315,6 +536,16 @@ class MiningFinderUiContractTests(unittest.TestCase):
         self.assertIn("appliedCommodityFilter = commodityFilter", qml)
         self.assertIn('id: startSystemField', qml)
         self.assertIn('appliedStartSystem = startSystem.trim()', qml)
+        self.assertIn('cockpit.miningSystemSuggestions(startSystem, 8)', qml)
+        self.assertIn('id: systemSuggestionsPopup', qml)
+        self.assertIn('miningFinderPage.chooseStartSystem(', qml)
+        self.assertIn('cockpit.miningMarketDiagnostics(', qml)
+        self.assertIn('"NO MARKET MATCHES ACTIVE FILTERS"', qml)
+        self.assertIn("row.sameSystemSaleRequired", qml)
+        self.assertIn('"NO VERIFIED SAME-SYSTEM MARKET"', qml)
+        self.assertIn("readonly property bool marketQueryPending", qml)
+        self.assertIn('"CHECKING SAME-SYSTEM MARKETS"', qml)
+        self.assertIn("Layout.maximumWidth: routeSaleWidth", qml)
         self.assertIn(
             'appliedStartSystem, appliedCommodityFilter, appliedNearbyLy', qml,
         )
@@ -324,10 +555,20 @@ class MiningFinderUiContractTests(unittest.TestCase):
         self.assertIn('property int nearbyLy: 250', qml)
         self.assertIn("appliedRequireHotspot", qml)
         self.assertIn('id: ringBox', qml)
+        self.assertIn('property bool ringsOnly: true', qml)
+        self.assertIn('appWindow.t("mining.rings_only", "RINGS ONLY")', qml)
+        self.assertIn('cockpit.verifyMiningRoutes(', qml)
+        self.assertIn('property string selectedRouteKey: ""', qml)
+        self.assertIn('property bool searchGoalExpanded: true', qml)
+        self.assertIn('searchGoalExpanded = false', qml)
+        self.assertIn('id: toggleSearchGoalButton', qml)
+        self.assertIn('appWindow.t("mining.edit_search", "EDIT SEARCH")', qml)
+        self.assertIn(': 48', qml)
         self.assertIn('miningRingFiltersForCommodity', qml)
         self.assertIn('"MORE RESOURCES"', qml)
         self.assertIn('"SYSTEM STATE"', qml)
-        self.assertIn("Layout.maximumHeight: 318", qml)
+        self.assertIn("Layout.maximumHeight: 250", qml)
+        self.assertIn("Layout.minimumHeight: 120", qml)
         self.assertIn("PRICE / T", qml)
         self.assertIn("DATA AGE", qml)
         self.assertIn("MiningFinderPage {", main)
@@ -358,8 +599,9 @@ class MiningFinderUiContractTests(unittest.TestCase):
         self.assertIn(
             'appWindow.t("mining.max_demand", "MAX. DEMAND")', qml,
         )
+        self.assertIn('gesturePolicy: TapHandler.DragThreshold', qml)
         self.assertIn(
-            'onClicked: miningFinderPage.selectRoute(modelData)', qml,
+            'onTapped: miningFinderPage.selectRoute(modelData)', qml,
         )
         self.assertIn(
             'appWindow.t("mining.copy_sell", "COPY SELL")', qml,
@@ -372,6 +614,17 @@ class MiningFinderUiContractTests(unittest.TestCase):
         self.assertIn('searchRevision === 0', qml)
         self.assertIn('"READY TO PLAN A MINING ROUTE"', qml)
         self.assertIn('"NO MATCHING MINING EVIDENCE"', qml)
+        self.assertIn('if (searchRevision === 0)', qml)
+        self.assertIn('trackThickness: 12', qml)
+        self.assertIn('thumbThickness: 8', qml)
+
+    def test_connections_exposes_edsm_as_a_first_class_catalog_status(self):
+        root = Path(__file__).resolve().parents[1]
+        qml = (root / "Main.qml").read_text(encoding="utf-8-sig")
+        self.assertIn('"SPANSH & EDSM"', qml)
+        self.assertIn('cockpit.miningPowerplaySyncStatus', qml)
+        self.assertIn('cockpit.miningPowerplaySystemCount', qml)
+        self.assertIn('cockpit.miningPowerplayLastRefresh', qml)
 
 
 if __name__ == "__main__":

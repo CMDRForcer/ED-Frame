@@ -13,6 +13,7 @@ Item {
     property string miningMethod: "LASER"
     property string optimization: "POWERPLAY MERITS"
     property string ringFilter: "ANY RING"
+    property bool ringsOnly: true
     property string reserveFilter: "ALL RESERVES"
     property string landingPad: "LARGE"
     property string powerGoal: "REINFORCE"
@@ -33,6 +34,7 @@ Item {
     property string appliedMiningMethod: "LASER"
     property string appliedOptimization: "POWERPLAY MERITS"
     property string appliedRingFilter: "ANY RING"
+    property bool appliedRingsOnly: true
     property string appliedReserveFilter: "ALL RESERVES"
     property string appliedLandingPad: "LARGE"
     property string appliedPowerGoal: "REINFORCE"
@@ -48,13 +50,22 @@ Item {
     property bool appliedRequireHotspot: false
     property bool appliedPreferSecondary: false
     property bool appliedRequireSystemState: false
+    property bool searchGoalExpanded: true
     property int searchRevision: 0
     property int _miningRevisionSnapshot: cockpit.miningRevision
     property real _listScrollY: 0
     property int selectedRouteIndex: 0
-    readonly property int activeRouteIndex: resultRows.length
-            ? Math.max(0, Math.min(selectedRouteIndex,
-                                   resultRows.length - 1)) : 0
+    property string selectedRouteKey: ""
+    readonly property int activeRouteIndex: {
+        if (!resultRows.length) return 0
+        if (selectedRouteKey) {
+            for (let index = 0; index < resultRows.length; ++index)
+                if (routeKey(resultRows[index]) === selectedRouteKey)
+                    return index
+        }
+        return Math.max(0, Math.min(selectedRouteIndex,
+                                    resultRows.length - 1))
+    }
 
     readonly property var powerplay: cockpit.powerplayOverview || ({})
     readonly property string powerName: String(powerplay.power || "")
@@ -96,11 +107,18 @@ Item {
         return cockpit.miningRingFiltersForCommodity(
                     commodityFilter, miningMethod)
     }
+    readonly property var systemSuggestions: {
+        let revision = _miningRevisionSnapshot
+        return cockpit.miningSystemSuggestions(startSystem, 8)
+    }
     readonly property var resultRows: {
         let revision = _miningRevisionSnapshot + searchRevision
+        if (searchRevision === 0)
+            return []
         return cockpit.miningPlanRoutes(
                     appliedStartSystem, appliedCommodityFilter, appliedNearbyLy,
                     appliedReserveFilter, appliedRingFilter,
+                    appliedRingsOnly,
                     appliedMiningMethod,
                     appliedOptimization, appliedMinDemand, appliedMaxDemand,
                     appliedMaxMarketAgeHours, appliedResultLimit,
@@ -110,6 +128,18 @@ Item {
                     appliedPowerGoal, appliedOpposingPower,
                     appliedSystemState)
     }
+    readonly property var marketDiagnostics: {
+        let revision = _miningRevisionSnapshot + searchRevision
+        if (searchRevision === 0)
+            return ({})
+        return cockpit.miningMarketDiagnostics(
+                    appliedStartSystem, appliedCommodityFilter,
+                    appliedNearbyLy, appliedMinDemand, appliedMaxDemand,
+                    appliedMaxMarketAgeHours, appliedLandingPad)
+    }
+    readonly property bool marketQueryPending: searchRevision > 0
+            && cockpit.miningMarketSyncBusy
+            && !Boolean(marketDiagnostics.cacheMatches)
     readonly property var bestRoute: resultRows.length
             ? resultRows[activeRouteIndex] : ({})
     readonly property var alternativeRows: {
@@ -137,6 +167,12 @@ Item {
     readonly property real availableWorkspaceWidth: Math.max(
         0, width - sidebarWidth - pageMargin * 2)
     readonly property bool compactFilters: availableWorkspaceWidth < 1180
+    readonly property int routeRankWidth: 30
+    readonly property int routeSaleWidth: 250
+    readonly property int routePriceWidth: 110
+    readonly property int routeDemandWidth: 100
+    readonly property int routeStatusWidth: 90
+    readonly property int routeSelectWidth: 64
 
     objectName: "qa-page-mining-finder"
     anchors.fill: parent
@@ -163,11 +199,24 @@ Item {
         return Math.round(seconds / 3600) + " H"
     }
     function marketName(row) {
+        if (!row.marketKnown && row.sameSystemSaleRequired)
+            return appWindow.t("mining.market_same_system_missing", "NO VERIFIED SAME-SYSTEM MARKET")
+        if (!row.marketKnown && marketFiltersBlockRoute())
+            return appWindow.t("mining.market_filtered", "NO MARKET MATCHES ACTIVE FILTERS")
         return row.marketKnown
                 ? String(row.station || row.sellSystem || "MARKET CONFIRMED")
                 : appWindow.t("mining.market_missing", "NO VERIFIED MARKET DATA")
     }
+    function marketFiltersBlockRoute() {
+        return marketDiagnostics.cacheMatches
+                && Number(marketDiagnostics.total || 0) > 0
+                && Number(marketDiagnostics.eligible || 0) === 0
+    }
     function marketDetail(row) {
+        if (!row.marketKnown && row.sameSystemSaleRequired)
+            return appWindow.tf("mining.market_same_system_help", "%1 requires a verified %2 market in %3 matching the active pad, demand and age filters", [appliedPowerGoal, appliedCommodityFilter, String(row.system || appWindow.t("status.unknown", "UNKNOWN"))])
+        if (!row.marketKnown && marketFiltersBlockRoute())
+            return String(marketDiagnostics.summary || "")
         if (!row.marketKnown)
             return appWindow.t("mining.market_missing_help", "Mining location remains usable · profit and merit ratings stay unknown")
         return formatNumber(row.sellPrice) + " CR/T  ·  "
@@ -187,9 +236,31 @@ Item {
         }
         return -1
     }
+    function routeKey(row) {
+        return String(row.systemAddress || row.system || "") + "|"
+                + String(row.bodyId === undefined ? row.body || "" : row.bodyId)
+                + "|" + String(row.ring || "")
+    }
     function selectRoute(row) {
         let index = routeIndex(row)
-        if (index >= 0) selectedRouteIndex = index
+        if (index >= 0) {
+            selectedRouteIndex = index
+            selectedRouteKey = routeKey(row)
+        }
+    }
+    function isExactSystemSuggestion(value) {
+        let key = String(value || "").trim().toLowerCase()
+        for (let index = 0; index < systemSuggestions.length; ++index)
+            if (String(systemSuggestions[index]).toLowerCase() === key)
+                return true
+        return false
+    }
+    function chooseStartSystem(value) {
+        let selected = String(value || "")
+        startSystem = selected
+        startSystemField.text = selected
+        startSystemField.cursorPosition = selected.length
+        startSystemField.forceActiveFocus()
     }
     function resetForMethod() {
         let rows = cockpit.miningCommodityFiltersForMethod(miningMethod)
@@ -216,6 +287,7 @@ Item {
         appliedMiningMethod = miningMethod
         appliedOptimization = optimization
         appliedRingFilter = ringFilter
+        appliedRingsOnly = ringsOnly
         appliedReserveFilter = reserveFilter
         appliedLandingPad = landingPad
         appliedPowerGoal = powerGoal
@@ -232,14 +304,21 @@ Item {
         appliedPreferSecondary = preferSecondary
         appliedRequireSystemState = systemState !== "ANY"
         selectedRouteIndex = 0
+        selectedRouteKey = ""
         searchRevision += 1
     }
     function executeSearch() {
         applySearch()
+        searchGoalExpanded = false
         cockpit.refreshMiningMarkets(
                     appliedStartSystem, appliedCommodityFilter,
                     appliedNearbyLy, appliedMinDemand,
                     appliedMaxMarketAgeHours, appliedLandingPad)
+        Qt.callLater(function() {
+            cockpit.verifyMiningRoutes(
+                        miningFinderPage.resultRows,
+                        miningFinderPage.appliedStartSystem)
+        })
         _miningRevisionSnapshot = cockpit.miningRevision
     }
 
@@ -290,7 +369,7 @@ Item {
         Slider {
             id: smoothSlider
             Layout.fillWidth: true
-            implicitHeight: 24
+            implicitHeight: 20
             from: sliderField.minimumValue
             to: sliderField.maximumValue
             stepSize: sliderField.increment
@@ -352,9 +431,15 @@ Item {
     Rectangle {
         objectName: "qa-mining-config"
         Layout.fillWidth: true
-        Layout.minimumHeight: miningFinderPage.compactFilters ? 650 : 430
-        Layout.preferredHeight: miningFinderPage.compactFilters ? 650 : 430
-        Layout.maximumHeight: miningFinderPage.compactFilters ? 650 : 430
+        Layout.minimumHeight: miningFinderPage.searchGoalExpanded
+                              ? (miningFinderPage.compactFilters ? 540 : 340)
+                              : 48
+        Layout.preferredHeight: miningFinderPage.searchGoalExpanded
+                                ? (miningFinderPage.compactFilters ? 560 : 350)
+                                : 48
+        Layout.maximumHeight: miningFinderPage.searchGoalExpanded
+                              ? (miningFinderPage.compactFilters ? 580 : 350)
+                              : 48
         radius: 12
         color: panelRaised
         border.width: 1
@@ -362,22 +447,64 @@ Item {
 
         ColumnLayout {
             anchors.fill: parent
-            anchors.margins: 13
-            spacing: 9
+            anchors.margins: 10
+            spacing: 6
 
             RowLayout {
                 Layout.fillWidth: true
-                Label { text: appWindow.t("mining.define_goal", "1 · DEFINE SEARCH GOAL"); color: orange; font.pixelSize: 11; font.bold: true }
-                Item { Layout.fillWidth: true }
                 Label {
-                    text: appWindow.t("mining.one_search_note", "ONE SEARCH · WEIGHTED BY YOUR GOAL")
+                    text: (miningFinderPage.searchGoalExpanded ? "⌃  " : "⌄  ")
+                          + appWindow.t("mining.define_goal", "1 · DEFINE SEARCH GOAL")
+                    color: orange; font.pixelSize: 11; font.bold: true
+                }
+                Item { Layout.fillWidth: miningFinderPage.searchGoalExpanded }
+                Label {
+                    Layout.fillWidth: !miningFinderPage.searchGoalExpanded
+                    Layout.minimumWidth: 0
+                    text: miningFinderPage.searchGoalExpanded
+                          ? appWindow.t("mining.one_search_note", "ONE SEARCH · WEIGHTED BY YOUR GOAL")
+                          : appWindow.tf(
+                                "mining.collapsed_summary",
+                                "%1 · %2 · %3 · %4 LY · %5 RESULTS",
+                                [appliedCommodityFilter, appliedMiningMethod,
+                                 displayOptimization(appliedOptimization),
+                                 appliedNearbyLy, resultRows.length])
                     color: muted; font.pixelSize: 9; font.bold: true
+                    elide: Text.ElideRight
+                    horizontalAlignment: Text.AlignRight
+                }
+                Button {
+                    id: toggleSearchGoalButton
+                    implicitWidth: miningFinderPage.searchGoalExpanded ? 94 : 126
+                    implicitHeight: 26
+                    text: miningFinderPage.searchGoalExpanded
+                          ? appWindow.t("mining.collapse_search", "COLLAPSE")
+                          : appWindow.t("mining.edit_search", "EDIT SEARCH")
+                    onClicked: miningFinderPage.searchGoalExpanded =
+                                   !miningFinderPage.searchGoalExpanded
+                    contentItem: Label {
+                        text: toggleSearchGoalButton.text
+                        color: toggleSearchGoalButton.hovered ? cyan : textSecondary
+                        horizontalAlignment: Text.AlignHCenter
+                        verticalAlignment: Text.AlignVCenter
+                        font.pixelSize: 8; font.bold: true
+                    }
+                    background: Rectangle {
+                        radius: 6; color: inputBackground
+                        border.width: 1
+                        border.color: toggleSearchGoalButton.hovered
+                                      ? cyan : borderTone
+                    }
                 }
             }
-            Rectangle { Layout.fillWidth: true; height: 1; color: divider }
+            Rectangle {
+                Layout.fillWidth: true; height: 1; color: divider
+                visible: miningFinderPage.searchGoalExpanded
+            }
 
             GridLayout {
                 Layout.fillWidth: true
+                visible: miningFinderPage.searchGoalExpanded
                 columns: miningFinderPage.compactFilters ? 2 : 5
                 uniformCellWidths: true
                 columnSpacing: 9
@@ -389,7 +516,7 @@ Item {
                         id: startSystemField
                         Layout.fillWidth: true
                         Layout.minimumWidth: 0
-                        implicitHeight: 38
+                        implicitHeight: 34
                         text: miningFinderPage.startSystem
                         placeholderText: cockpit.system
                                          || appWindow.t("status.unknown", "UNKNOWN")
@@ -399,8 +526,38 @@ Item {
                         rightPadding: 11
                         color: textPrimary
                         font.pixelSize: 11
-                        onTextEdited: miningFinderPage.startSystem = text
-                        onAccepted: miningFinderPage.executeSearch()
+                        onTextEdited: {
+                            miningFinderPage.startSystem = text
+                            systemSuggestionList.currentIndex = 0
+                        }
+                        onAccepted: {
+                            if (systemSuggestionsPopup.visible
+                                    && systemSuggestionList.currentIndex >= 0) {
+                                miningFinderPage.chooseStartSystem(
+                                            miningFinderPage.systemSuggestions[
+                                                systemSuggestionList.currentIndex])
+                            } else {
+                                miningFinderPage.executeSearch()
+                            }
+                        }
+                        Keys.onPressed: function(event) {
+                            if (!systemSuggestionsPopup.visible)
+                                return
+                            if (event.key === Qt.Key_Down) {
+                                systemSuggestionList.currentIndex = Math.min(
+                                            systemSuggestionList.count - 1,
+                                            systemSuggestionList.currentIndex + 1)
+                                event.accepted = true
+                            } else if (event.key === Qt.Key_Up) {
+                                systemSuggestionList.currentIndex = Math.max(
+                                            0,
+                                            systemSuggestionList.currentIndex - 1)
+                                event.accepted = true
+                            } else if (event.key === Qt.Key_Escape) {
+                                startSystemField.focus = false
+                                event.accepted = true
+                            }
+                        }
                         background: Rectangle {
                             radius: 7
                             color: inputBackground
@@ -408,13 +565,78 @@ Item {
                             border.color: startSystemField.activeFocus
                                           ? cyan : borderTone
                         }
+                        Popup {
+                            id: systemSuggestionsPopup
+                            parent: startSystemField
+                            x: 0
+                            y: startSystemField.height + 4
+                            width: startSystemField.width
+                            height: Math.min(298,
+                                             systemSuggestionList.contentHeight + 10)
+                            padding: 5
+                            z: 1000
+                            visible: startSystemField.activeFocus
+                                     && startSystemField.text.trim().length > 0
+                                     && miningFinderPage.systemSuggestions.length > 0
+                                     && !miningFinderPage.isExactSystemSuggestion(
+                                         startSystemField.text)
+                            closePolicy: Popup.CloseOnEscape
+                                         | Popup.CloseOnPressOutsideParent
+                            contentItem: ListView {
+                                id: systemSuggestionList
+                                clip: true
+                                model: miningFinderPage.systemSuggestions
+                                currentIndex: count > 0 ? 0 : -1
+                                highlightMoveDuration: 70
+                                ScrollBar.vertical: CockpitScrollBar {
+                                    trackThickness: 10
+                                    thumbThickness: 7
+                                }
+                                delegate: ItemDelegate {
+                                    required property int index
+                                    width: systemSuggestionList.width
+                                    height: 36
+                                    highlighted: systemSuggestionList.currentIndex
+                                                 === index
+                                    hoverEnabled: true
+                                    onHoveredChanged: {
+                                        if (hovered)
+                                            systemSuggestionList.currentIndex = index
+                                    }
+                                    onClicked: miningFinderPage.chooseStartSystem(
+                                                   miningFinderPage.systemSuggestions[index])
+                                    contentItem: Label {
+                                        text: String(
+                                            miningFinderPage.systemSuggestions[index])
+                                        color: highlighted ? textPrimary : textSecondary
+                                        font.pixelSize: 10
+                                        font.bold: highlighted
+                                        verticalAlignment: Text.AlignVCenter
+                                        elide: Text.ElideRight
+                                    }
+                                    background: Rectangle {
+                                        radius: 5
+                                        color: highlighted
+                                               ? appWindow.active : "transparent"
+                                        border.width: highlighted ? 1 : 0
+                                        border.color: cyan
+                                    }
+                                }
+                            }
+                            background: Rectangle {
+                                radius: 8
+                                color: appWindow.cardRaised
+                                border.width: 1
+                                border.color: cyan
+                            }
+                        }
                     }
                 }
                 ColumnLayout {
                     Layout.fillWidth: true; Layout.minimumWidth: 0; Layout.preferredWidth: 1; spacing: 4
                     Label { text: appWindow.t("mining.target_commodity", "TARGET COMMODITY"); color: muted; font.pixelSize: 9; font.bold: true }
                     CockpitComboBox {
-                        id: commodityBox; Layout.fillWidth: true; Layout.minimumWidth: 0; Layout.preferredWidth: 1; implicitHeight: 38
+                        id: commodityBox; Layout.fillWidth: true; Layout.minimumWidth: 0; Layout.preferredWidth: 1; implicitHeight: 34
                         model: miningFinderPage.commodityOptions
                         currentIndex: Math.max(0, model.indexOf(miningFinderPage.commodityFilter))
                         onActivated: {
@@ -427,7 +649,7 @@ Item {
                     Layout.fillWidth: true; Layout.minimumWidth: 0; Layout.preferredWidth: 1; spacing: 4
                     Label { text: appWindow.t("mining.method", "MINING METHOD"); color: muted; font.pixelSize: 9; font.bold: true }
                     CockpitComboBox {
-                        id: methodBox; Layout.fillWidth: true; Layout.minimumWidth: 0; Layout.preferredWidth: 1; implicitHeight: 38
+                        id: methodBox; Layout.fillWidth: true; Layout.minimumWidth: 0; Layout.preferredWidth: 1; implicitHeight: 34
                         model: ["LASER", "CORE", "SUBSURFACE", "RHINO SURFACE"]
                         currentIndex: model.indexOf(miningFinderPage.miningMethod)
                         onActivated: { miningFinderPage.miningMethod = currentText; miningFinderPage.resetForMethod() }
@@ -437,7 +659,7 @@ Item {
                     Layout.fillWidth: true; Layout.minimumWidth: 0; Layout.preferredWidth: 1; spacing: 4
                     Label { text: appWindow.t("mining.optimize_for", "OPTIMIZE FOR"); color: orange; font.pixelSize: 9; font.bold: true }
                     CockpitComboBox {
-                        id: optimizationBox; Layout.fillWidth: true; Layout.minimumWidth: 0; Layout.preferredWidth: 1; implicitHeight: 38
+                        id: optimizationBox; Layout.fillWidth: true; Layout.minimumWidth: 0; Layout.preferredWidth: 1; implicitHeight: 34
                         model: ["POWERPLAY MERITS", "BEST YIELD", "HIGHEST PROFIT", "SHORTEST ROUTE"]
                         currentIndex: model.indexOf(miningFinderPage.optimization)
                         onActivated: miningFinderPage.optimization = currentText
@@ -449,7 +671,7 @@ Item {
                     CockpitComboBox {
                         id: powerBox
                         Layout.fillWidth: true; Layout.minimumWidth: 0
-                        Layout.preferredWidth: 1; implicitHeight: 38
+                        Layout.preferredWidth: 1; implicitHeight: 34
                         model: miningFinderPage.powerOptions
                         currentIndex: powerOverride
                                       ? Math.max(0, model.indexOf(powerOverride)) : 0
@@ -459,9 +681,13 @@ Item {
                 }
             }
 
-            Rectangle { Layout.fillWidth: true; height: 1; color: divider }
+            Rectangle {
+                Layout.fillWidth: true; height: 1; color: divider
+                visible: miningFinderPage.searchGoalExpanded
+            }
             GridLayout {
                 Layout.fillWidth: true
+                visible: miningFinderPage.searchGoalExpanded
                 columns: miningFinderPage.compactFilters ? 1 : 2
                 columnSpacing: 16
                 rowSpacing: 8
@@ -532,7 +758,7 @@ Item {
                             Layout.fillWidth: true; Layout.minimumWidth: 0; Layout.preferredWidth: 1; spacing: 2
                             Label { text: appWindow.t("mining.ring_type", "RING TYPE"); color: muted; font.pixelSize: 8; font.bold: true }
                             CockpitComboBox {
-                                id: ringBox; Layout.fillWidth: true; Layout.minimumWidth: 0; implicitHeight: 34
+                                id: ringBox; Layout.fillWidth: true; Layout.minimumWidth: 0; implicitHeight: 30
                                 model: miningFinderPage.ringOptions
                                 currentIndex: model.indexOf(miningFinderPage.ringFilter)
                                 onActivated: miningFinderPage.ringFilter = currentText
@@ -542,7 +768,7 @@ Item {
                             Layout.fillWidth: true; Layout.minimumWidth: 0; Layout.preferredWidth: 1; spacing: 2
                             Label { text: appWindow.t("mining.reserve_quality", "RESERVE QUALITY"); color: muted; font.pixelSize: 8; font.bold: true }
                             CockpitComboBox {
-                                id: reserveBox; Layout.fillWidth: true; Layout.minimumWidth: 0; implicitHeight: 34
+                                id: reserveBox; Layout.fillWidth: true; Layout.minimumWidth: 0; implicitHeight: 30
                                 model: ["PRISTINE + MAJOR", "PRISTINE", "MAJOR", "ALL RESERVES"]
                                 currentIndex: model.indexOf(miningFinderPage.reserveFilter)
                                 onActivated: miningFinderPage.reserveFilter = currentText
@@ -552,7 +778,7 @@ Item {
                             Layout.fillWidth: true; Layout.minimumWidth: 0; Layout.preferredWidth: 1; spacing: 2
                             Label { text: appWindow.t("mining.landing_pad", "LANDING PAD"); color: muted; font.pixelSize: 8; font.bold: true }
                             CockpitComboBox {
-                                id: padBox; Layout.fillWidth: true; Layout.minimumWidth: 0; implicitHeight: 34
+                                id: padBox; Layout.fillWidth: true; Layout.minimumWidth: 0; implicitHeight: 30
                                 model: ["LARGE", "MEDIUM", "ANY"]
                                 currentIndex: model.indexOf(miningFinderPage.landingPad)
                                 onActivated: miningFinderPage.landingPad = currentText
@@ -562,7 +788,7 @@ Item {
                             Layout.fillWidth: true; Layout.minimumWidth: 0; Layout.preferredWidth: 1; spacing: 2
                             Label { text: appWindow.t("mining.powerplay_goal", "POWERPLAY GOAL"); color: muted; font.pixelSize: 8; font.bold: true }
                             CockpitComboBox {
-                                id: goalBox; Layout.fillWidth: true; Layout.minimumWidth: 0; implicitHeight: 34
+                                id: goalBox; Layout.fillWidth: true; Layout.minimumWidth: 0; implicitHeight: 30
                                 model: ["REINFORCE", "ACQUIRE", "UNDERMINE"]
                                 currentIndex: model.indexOf(miningFinderPage.powerGoal)
                                 onActivated: miningFinderPage.powerGoal = currentText
@@ -572,7 +798,7 @@ Item {
                             Layout.fillWidth: true; Layout.minimumWidth: 0; Layout.preferredWidth: 1; spacing: 2
                             Label { text: appWindow.t("mining.opposing_power", "OPPOSING POWER"); color: muted; font.pixelSize: 8; font.bold: true }
                             CockpitComboBox {
-                                id: opposingPowerBox; Layout.fillWidth: true; Layout.minimumWidth: 0; implicitHeight: 34
+                                id: opposingPowerBox; Layout.fillWidth: true; Layout.minimumWidth: 0; implicitHeight: 30
                                 model: miningFinderPage.opposingPowerOptions
                                 enabled: miningFinderPage.powerGoal === "UNDERMINE"
                                 opacity: enabled ? 1.0 : 0.45
@@ -584,7 +810,7 @@ Item {
                             Layout.fillWidth: true; Layout.minimumWidth: 0; Layout.preferredWidth: 1; spacing: 2
                             Label { text: appWindow.t("mining.system_state", "SYSTEM STATE"); color: muted; font.pixelSize: 8; font.bold: true }
                             CockpitComboBox {
-                                id: systemStateBox; Layout.fillWidth: true; Layout.minimumWidth: 0; implicitHeight: 34
+                                id: systemStateBox; Layout.fillWidth: true; Layout.minimumWidth: 0; implicitHeight: 30
                                 model: miningFinderPage.systemStateOptions
                                 currentIndex: Math.max(0, model.indexOf(miningFinderPage.systemState))
                                 onActivated: miningFinderPage.systemState = currentText
@@ -612,6 +838,15 @@ Item {
                             contentItem: Label { text: parent.text; color: parent.checked ? "#17100a" : textPrimary; horizontalAlignment: Text.AlignHCenter; verticalAlignment: Text.AlignVCenter; font.pixelSize: 9; font.bold: true }
                         }
                         Button {
+                            text: appWindow.t("mining.rings_only", "RINGS ONLY")
+                            checkable: true; checked: miningFinderPage.ringsOnly
+                            enabled: miningFinderPage.miningMethod !== "RHINO SURFACE"
+                            opacity: enabled ? 1.0 : 0.45
+                            onClicked: miningFinderPage.ringsOnly = checked
+                            background: Rectangle { radius: 6; color: parent.checked ? orange : inputBackground; border.width: 1; border.color: parent.checked ? orange : borderTone }
+                            contentItem: Label { text: parent.text; color: parent.checked ? "#17100a" : textPrimary; horizontalAlignment: Text.AlignHCenter; verticalAlignment: Text.AlignVCenter; font.pixelSize: 9; font.bold: true }
+                        }
+                        Button {
                             text: appWindow.t("mining.secondary_preferred", "MORE RESOURCES")
                             checkable: true; checked: miningFinderPage.preferSecondary
                             onClicked: miningFinderPage.preferSecondary = checked
@@ -624,6 +859,7 @@ Item {
 
             RowLayout {
                 Layout.fillWidth: true
+                visible: miningFinderPage.searchGoalExpanded
                 Label {
                     Layout.fillWidth: true
                     Layout.minimumWidth: 0
@@ -633,7 +869,7 @@ Item {
                 }
                 Button {
                     id: findRouteButton
-                    Layout.minimumWidth: 180; Layout.preferredWidth: 220; Layout.maximumWidth: 220; implicitHeight: 38
+                    Layout.minimumWidth: 180; Layout.preferredWidth: 220; Layout.maximumWidth: 220; implicitHeight: 34
                     text: appWindow.t("mining.find_best_route", "FIND BEST ROUTE")
                     onClicked: {
                         miningFinderPage.executeSearch()
@@ -665,9 +901,39 @@ Item {
             Layout.minimumWidth: 0
             text: cockpit.miningMarketSyncBusy
                   ? appWindow.t("mining.market_checking", "CHECKING EDDN MARKET DATA…")
-                  : cockpit.miningMarketSyncStatus
-            color: cockpit.miningMarketSyncStatus.toLowerCase().indexOf("fail") >= 0 ? orange : muted
+                  : (miningFinderPage.searchRevision > 0
+                     && miningFinderPage.marketDiagnostics.cacheMatches
+                     ? String(miningFinderPage.marketDiagnostics.summary || "")
+                     : cockpit.miningMarketSyncStatus)
+            color: (!cockpit.miningMarketSyncBusy
+                    && miningFinderPage.searchRevision > 0
+                    && miningFinderPage.marketDiagnostics.cacheMatches
+                    && Number(miningFinderPage.marketDiagnostics.eligible || 0) === 0)
+                   || cockpit.miningMarketSyncStatus.toLowerCase().indexOf("fail") >= 0
+                   ? orange : muted
             font.pixelSize: 9; elide: Text.ElideRight
+            ToolTip.visible: marketStatusHover.hovered && truncated
+            ToolTip.text: text
+            HoverHandler { id: marketStatusHover }
+        }
+        Label {
+            Layout.minimumWidth: 0
+            Layout.maximumWidth: 220
+            visible: miningFinderPage.searchRevision > 0
+            text: cockpit.miningVerificationBusy
+                  ? appWindow.tf(
+                        "mining.verifying_progress",
+                        "VERIFYING %1/%2 SYSTEMS",
+                        [cockpit.miningVerificationCompleted,
+                         cockpit.miningVerificationTotal])
+                  : cockpit.miningVerificationStatus
+            color: cockpit.miningVerificationBusy ? cyan : muted
+            font.pixelSize: 9
+            font.bold: cockpit.miningVerificationBusy
+            elide: Text.ElideRight
+            ToolTip.visible: verificationStatusHover.hovered && truncated
+            ToolTip.text: cockpit.miningVerificationStatus
+            HoverHandler { id: verificationStatusHover }
         }
         Item { Layout.fillWidth: true }
         Label { text: readiness.ready ? "✓ " + appWindow.t("mining.loadout_ready", "LOADOUT READY") : "! " + appWindow.t("mining.loadout_incomplete", "LOADOUT INCOMPLETE"); color: readiness.ready ? green : orange; font.pixelSize: 9; font.bold: true }
@@ -693,17 +959,17 @@ Item {
 
     RowLayout {
         Layout.fillWidth: true
-        Layout.minimumHeight: 318
-        Layout.preferredHeight: 318
-        Layout.maximumHeight: 318
+        Layout.minimumHeight: 220
+        Layout.preferredHeight: 250
+        Layout.maximumHeight: 250
         spacing: 10
-        visible: resultRows.length > 0
+        visible: resultRows.length > 0 && !marketQueryPending
 
         Rectangle {
             Layout.fillWidth: true; Layout.fillHeight: true
             radius: 11; color: panelRaised; border.width: 1; border.color: orange
             ColumnLayout {
-                anchors.fill: parent; anchors.margins: 13; spacing: 7
+                anchors.fill: parent; anchors.margins: 10; spacing: 5
                 RowLayout {
                     Layout.fillWidth: true
                     ColumnLayout {
@@ -756,8 +1022,8 @@ Item {
                 RowLayout {
                     Layout.fillWidth: true; spacing: 8
                     Rectangle {
-                        Layout.fillWidth: true; Layout.preferredHeight: 72; radius: 8; color: backgroundSecondary
-                        ColumnLayout { anchors.fill: parent; anchors.margins: 9; spacing: 3
+                        Layout.fillWidth: true; Layout.preferredHeight: 60; radius: 8; color: backgroundSecondary
+                        ColumnLayout { anchors.fill: parent; anchors.margins: 7; spacing: 2
                             Label { text: appWindow.t("mining.mine_step", "1 · MINE"); color: cyan; font.pixelSize: 9; font.bold: true }
                             Label { text: String(bestRoute.system || "UNKNOWN") + " · " + String(bestRoute.ring || bestRoute.body || ""); color: textPrimary; font.pixelSize: 11; font.bold: true; Layout.fillWidth: true; elide: Text.ElideRight }
                             Label { text: String(bestRoute.reserveName || "UNKNOWN") + " · " + formatDistance(bestRoute.distanceLy); color: textSecondary; font.pixelSize: 9; Layout.fillWidth: true; elide: Text.ElideRight }
@@ -765,8 +1031,8 @@ Item {
                     }
                     Label { text: appWindow.t("mining.route_arrow", "→"); color: orange; font.pixelSize: 19; font.bold: true }
                     Rectangle {
-                        Layout.fillWidth: true; Layout.preferredHeight: 72; radius: 8; color: backgroundSecondary
-                        ColumnLayout { anchors.fill: parent; anchors.margins: 9; spacing: 3
+                        Layout.fillWidth: true; Layout.preferredHeight: 60; radius: 8; color: backgroundSecondary
+                        ColumnLayout { anchors.fill: parent; anchors.margins: 7; spacing: 2
                             Label { text: appWindow.t("mining.sell_step", "2 · SELL"); color: cyan; font.pixelSize: 9; font.bold: true }
                             Label { text: marketName(bestRoute); color: bestRoute.marketKnown ? textPrimary : orange; font.pixelSize: 11; font.bold: true; Layout.fillWidth: true; elide: Text.ElideRight }
                             Label { text: marketDetail(bestRoute); color: textSecondary; font.pixelSize: 9; Layout.fillWidth: true; elide: Text.ElideRight }
@@ -784,8 +1050,8 @@ Item {
                         ]
                         delegate: Rectangle {
                             required property var modelData
-                            Layout.fillWidth: true; Layout.preferredHeight: 44; radius: 7; color: inputBackground
-                            ColumnLayout { anchors.fill: parent; anchors.margins: 7; spacing: 2
+                            Layout.fillWidth: true; Layout.preferredHeight: 38; radius: 7; color: inputBackground
+                            ColumnLayout { anchors.fill: parent; anchors.margins: 5; spacing: 1
                                 Label { text: modelData.label; color: muted; font.pixelSize: 8; font.bold: true }
                                 Label { text: modelData.value || "—"; color: orange; font.pixelSize: 12; font.bold: true }
                             }
@@ -803,10 +1069,10 @@ Item {
                         ]
                         delegate: Rectangle {
                             required property var modelData
-                            Layout.fillWidth: true; Layout.preferredHeight: 42
+                            Layout.fillWidth: true; Layout.preferredHeight: 36
                             radius: 7; color: backgroundSecondary
                             ColumnLayout {
-                                anchors.fill: parent; anchors.margins: 7; spacing: 2
+                                anchors.fill: parent; anchors.margins: 5; spacing: 1
                                 Label { text: modelData.label; color: muted; font.pixelSize: 8; font.bold: true }
                                 Label { text: modelData.value; color: textPrimary; font.pixelSize: 10; font.bold: true }
                             }
@@ -821,18 +1087,22 @@ Item {
             Layout.fillHeight: true; radius: 11; color: panelRaised
             border.width: 1; border.color: borderTone
             ColumnLayout {
-                anchors.fill: parent; anchors.margins: 13; spacing: 7
+                anchors.fill: parent; anchors.margins: 10; spacing: 5
                 Label { text: appWindow.t("mining.why_route", "WHY THIS ROUTE?"); color: orange; font.pixelSize: 9; font.bold: true }
                 Repeater {
                     model: [
-                        {"ok": bestRoute.meritKnown, "title": appWindow.t("mining.reason_merit", "Powerplay suitability"), "detail": bestRoute.meritKnown ? bestRoute.meritStatus : appWindow.t("mining.reason_merit_unknown", "Unknown — no merit claim is made")},
+                        {"ok": bestRoute.meritKnown, "title": appWindow.t("mining.reason_merit", "Powerplay suitability"), "detail": (bestRoute.meritKnown || (bestRoute.sameSystemSaleRequired && !bestRoute.marketKnown)) ? bestRoute.meritStatus : (miningFinderPage.marketFiltersBlockRoute() ? appWindow.t("mining.reason_merit_filtered", "Unknown — active market filters leave no sell route to verify") : appWindow.t("mining.reason_merit_unknown", "Unknown — no merit claim is made"))},
                         {"ok": bestRoute.targetMatch === "LOCAL_YIELD" || bestRoute.targetMatch === "HOTSPOT", "title": appWindow.t("mining.reason_method", "Mining evidence"), "detail": bestRoute.targetMatchName || "—"},
-                        {"ok": bestRoute.marketKnown, "title": appWindow.t("mining.reason_market", "Market demand"), "detail": bestRoute.marketKnown ? (bestRoute.demandInfinite ? "∞" : formatNumber(bestRoute.demand) + " T") + " · " + String(bestRoute.marketSource || "EDDN") : appWindow.t("mining.reason_market_unknown", "Unknown — route remains a mining destination")},
+                        {"ok": bestRoute.marketKnown, "title": appWindow.t("mining.reason_market", "Market demand"), "detail": bestRoute.marketKnown ? (bestRoute.demandInfinite ? "∞" : formatNumber(bestRoute.demand) + " T") + " · " + String(bestRoute.marketSource || "EDDN") : miningFinderPage.marketDetail(bestRoute)},
                         {"ok": !bestRoute.stale, "title": appWindow.t("mining.reason_age", "Data freshness"), "detail": bestRoute.confirmationStatus || "—"}
                     ]
                     delegate: RowLayout {
                         required property var modelData
-                        Layout.fillWidth: true; spacing: 7
+                        Layout.fillWidth: true
+                        Layout.fillHeight: false
+                        Layout.minimumHeight: 36
+                        Layout.maximumHeight: 42
+                        spacing: 7
                         Label { text: modelData.ok ? "✓" : "!"; color: modelData.ok ? green : orange; font.pixelSize: 13; font.bold: true }
                         ColumnLayout { Layout.fillWidth: true; spacing: 1
                             Label { text: modelData.title; color: textPrimary; font.pixelSize: 10; font.bold: true }
@@ -840,6 +1110,7 @@ Item {
                         }
                     }
                 }
+                Item { Layout.fillHeight: true }
             }
         }
     }
@@ -850,18 +1121,22 @@ Item {
         Layout.minimumHeight: 180
         Layout.preferredHeight: 200
         Layout.maximumHeight: 220
-        visible: resultRows.length === 0
+        visible: resultRows.length === 0 || marketQueryPending
 
         EmptyState {
             width: Math.min(parent.width, 720)
             anchors.centerIn: parent
             symbol: "◇"
-            title: searchRevision === 0
-                   ? appWindow.t("mining.empty_initial", "READY TO PLAN A MINING ROUTE")
-                   : appWindow.t("mining.empty", "NO MATCHING MINING EVIDENCE")
-            detail: searchRevision === 0
-                    ? appWindow.t("mining.empty_initial_help", "Choose your goal and filters above, then select FIND BEST ROUTE. Market and Powerplay data load when the search starts.")
-                    : appWindow.t("mining.empty_unified_help", "Widen the radius or relax hotspot, reserve and method filters. Unknown market data never hides a valid mining location.")
+            title: marketQueryPending
+                   ? appWindow.t("mining.market_loading", "CHECKING SAME-SYSTEM MARKETS")
+                   : (searchRevision === 0
+                      ? appWindow.t("mining.empty_initial", "READY TO PLAN A MINING ROUTE")
+                      : appWindow.t("mining.empty", "NO MATCHING MINING EVIDENCE"))
+            detail: marketQueryPending
+                    ? appWindow.t("mining.market_loading_help", "EDDN market evidence is loading. Routes appear only after the current search can be evaluated.")
+                    : (searchRevision === 0
+                       ? appWindow.t("mining.empty_initial_help", "Choose your goal and filters above, then select FIND BEST ROUTE. Market and Powerplay data load when the search starts.")
+                       : appWindow.t("mining.empty_unified_help", "Widen the radius or relax hotspot, reserve and method filters. Unknown market data never hides a valid mining location."))
             tone: cyan
         }
     }
@@ -869,7 +1144,8 @@ Item {
     ColumnLayout {
         Layout.fillWidth: true
         Layout.fillHeight: true
-        visible: resultRows.length > 0
+        Layout.minimumHeight: 120
+        visible: resultRows.length > 0 && !marketQueryPending
         spacing: 5
         RowLayout {
             Layout.fillWidth: true
@@ -881,19 +1157,21 @@ Item {
             Layout.fillWidth: true; Layout.preferredHeight: 27; color: panelRaised; radius: 7
             RowLayout {
                 anchors.fill: parent; anchors.leftMargin: 11; anchors.rightMargin: 11; spacing: 10
-                Label { Layout.preferredWidth: 30; text: appWindow.t("mining.rank", "#"); color: muted; font.pixelSize: 8; font.bold: true }
-                Label { Layout.fillWidth: true; text: appWindow.t("mining.location", "MINING LOCATION"); color: muted; font.pixelSize: 8; font.bold: true }
-                Label { Layout.preferredWidth: 210; text: appWindow.t("mining.sale", "SALE"); color: muted; font.pixelSize: 8; font.bold: true }
-                Label { Layout.preferredWidth: 110; text: appWindow.t("mining.price_per_tonne", "PRICE / T"); color: muted; font.pixelSize: 8; font.bold: true }
-                Label { Layout.preferredWidth: 100; text: appWindow.t("mining.demand", "DEMAND"); color: muted; font.pixelSize: 8; font.bold: true }
+                Label { Layout.minimumWidth: routeRankWidth; Layout.preferredWidth: routeRankWidth; Layout.maximumWidth: routeRankWidth; text: appWindow.t("mining.rank", "#"); color: muted; font.pixelSize: 8; font.bold: true }
+                Label { Layout.fillWidth: true; Layout.minimumWidth: 0; text: appWindow.t("mining.location", "MINING LOCATION"); color: muted; font.pixelSize: 8; font.bold: true }
+                Label { Layout.minimumWidth: routeSaleWidth; Layout.preferredWidth: routeSaleWidth; Layout.maximumWidth: routeSaleWidth; text: appWindow.t("mining.sale", "SALE"); color: muted; font.pixelSize: 8; font.bold: true }
+                Label { Layout.minimumWidth: routePriceWidth; Layout.preferredWidth: routePriceWidth; Layout.maximumWidth: routePriceWidth; text: appWindow.t("mining.price_per_tonne", "PRICE / T"); color: muted; font.pixelSize: 8; font.bold: true }
+                Label { Layout.minimumWidth: routeDemandWidth; Layout.preferredWidth: routeDemandWidth; Layout.maximumWidth: routeDemandWidth; text: appWindow.t("mining.demand", "DEMAND"); color: muted; font.pixelSize: 8; font.bold: true }
                 Label {
-                    Layout.preferredWidth: 90
+                    Layout.minimumWidth: routeStatusWidth
+                    Layout.preferredWidth: routeStatusWidth
+                    Layout.maximumWidth: routeStatusWidth
                     text: appliedOptimization === "POWERPLAY MERITS"
                           ? appWindow.t("mining.merit_fit", "MERIT FIT")
                           : appWindow.t("mining.market_age", "DATA AGE")
                     color: muted; font.pixelSize: 8; font.bold: true
                 }
-                Label { Layout.preferredWidth: 64; text: appWindow.t("mining.select", "SELECT"); color: muted; font.pixelSize: 8; font.bold: true; horizontalAlignment: Text.AlignHCenter }
+                Label { Layout.minimumWidth: routeSelectWidth; Layout.preferredWidth: routeSelectWidth; Layout.maximumWidth: routeSelectWidth; text: appWindow.t("mining.select", "SELECT"); color: muted; font.pixelSize: 8; font.bold: true; horizontalAlignment: Text.AlignHCenter }
             }
         }
         ListView {
@@ -901,32 +1179,38 @@ Item {
             Layout.fillWidth: true; Layout.fillHeight: true
             spacing: 5; clip: true
             model: alternativeRows
-            ScrollBar.vertical: CockpitScrollBar {}
+            ScrollBar.vertical: CockpitScrollBar {
+                trackThickness: 12
+                thumbThickness: 8
+                policy: ScrollBar.AlwaysOn
+            }
             onContentYChanged: miningFinderPage._listScrollY = contentY
             delegate: Rectangle {
                 id: routeRow
                 required property var modelData
                 required property int index
                 width: routesList.width; height: 58; radius: 8
-                color: routeMouse.containsMouse ? appWindow.hover : panelRaised
-                border.width: routeMouse.containsMouse ? 2 : 1
-                border.color: routeMouse.containsMouse ? cyan
+                color: routeHover.hovered ? appWindow.hover : panelRaised
+                border.width: routeHover.hovered ? 2 : 1
+                border.color: routeHover.hovered ? cyan
                                                      : (modelData.stale ? orange : borderTone)
                 RowLayout {
                     anchors.fill: parent; anchors.leftMargin: 11; anchors.rightMargin: 11; spacing: 10
-                    Label { Layout.preferredWidth: 30; text: String(routeIndex(modelData) + 1); color: orange; font.family: monoFont; font.pixelSize: 11; font.bold: true }
-                    ColumnLayout { Layout.fillWidth: true; spacing: 2
+                    Label { Layout.minimumWidth: routeRankWidth; Layout.preferredWidth: routeRankWidth; Layout.maximumWidth: routeRankWidth; text: String(routeIndex(modelData) + 1); color: orange; font.family: monoFont; font.pixelSize: 11; font.bold: true }
+                    ColumnLayout { Layout.fillWidth: true; Layout.minimumWidth: 0; spacing: 2
                         Label { Layout.fillWidth: true; text: String(modelData.system || "UNKNOWN") + " · " + String(modelData.ring || modelData.body || ""); color: textPrimary; font.pixelSize: 10; font.bold: true; elide: Text.ElideRight }
                         Label { Layout.fillWidth: true; text: String(modelData.reserveName || "UNKNOWN") + " · " + String(modelData.targetMatchName || ""); color: textSecondary; font.pixelSize: 8; elide: Text.ElideRight }
                     }
-                    ColumnLayout { Layout.preferredWidth: 210; spacing: 2
+                    ColumnLayout { Layout.minimumWidth: routeSaleWidth; Layout.preferredWidth: routeSaleWidth; Layout.maximumWidth: routeSaleWidth; spacing: 2
                         Label { Layout.fillWidth: true; text: marketName(modelData); color: modelData.marketKnown ? textPrimary : orange; font.pixelSize: 9; font.bold: true; elide: Text.ElideRight }
                         Label { text: String(modelData.sellSystem || ""); color: textSecondary; font.pixelSize: 8; elide: Text.ElideRight }
                     }
-                    Label { Layout.preferredWidth: 110; text: modelData.marketKnown ? formatNumber(modelData.sellPrice) + " CR" : "—"; color: modelData.marketKnown ? green : muted; font.pixelSize: 9; font.bold: true }
-                    Label { Layout.preferredWidth: 100; text: modelData.marketKnown ? (modelData.demandInfinite ? "∞" : formatNumber(modelData.demand) + " T") : "—"; color: textPrimary; font.pixelSize: 9; font.bold: true }
+                    Label { Layout.minimumWidth: routePriceWidth; Layout.preferredWidth: routePriceWidth; Layout.maximumWidth: routePriceWidth; text: modelData.marketKnown ? formatNumber(modelData.sellPrice) + " CR" : "—"; color: modelData.marketKnown ? green : muted; font.pixelSize: 9; font.bold: true }
+                    Label { Layout.minimumWidth: routeDemandWidth; Layout.preferredWidth: routeDemandWidth; Layout.maximumWidth: routeDemandWidth; text: modelData.marketKnown ? (modelData.demandInfinite ? "∞" : formatNumber(modelData.demand) + " T") : "—"; color: textPrimary; font.pixelSize: 9; font.bold: true }
                     Label {
-                        Layout.preferredWidth: 90
+                        Layout.minimumWidth: routeStatusWidth
+                        Layout.preferredWidth: routeStatusWidth
+                        Layout.maximumWidth: routeStatusWidth
                         text: appliedOptimization === "POWERPLAY MERITS"
                               ? String(modelData.meritStars || "—")
                               : (modelData.marketKnown ? formatAge(modelData.marketAgeSeconds) : "—")
@@ -935,15 +1219,16 @@ Item {
                                : (modelData.stale ? orange : green)
                         font.pixelSize: 8; font.bold: true
                     }
-                    Label { Layout.preferredWidth: 64; text: appWindow.t("mining.use_route", "USE"); color: routeMouse.containsMouse ? cyan : textSecondary; font.pixelSize: 9; font.bold: true; horizontalAlignment: Text.AlignHCenter }
+                    Label { Layout.minimumWidth: routeSelectWidth; Layout.preferredWidth: routeSelectWidth; Layout.maximumWidth: routeSelectWidth; text: appWindow.t("mining.use_route", "USE"); color: routeHover.hovered ? cyan : textSecondary; font.pixelSize: 9; font.bold: true; horizontalAlignment: Text.AlignHCenter }
                 }
-                MouseArea {
-                    id: routeMouse
-                    anchors.fill: parent
-                    hoverEnabled: true
-                    preventStealing: false
+                HoverHandler {
+                    id: routeHover
                     cursorShape: Qt.PointingHandCursor
-                    onClicked: miningFinderPage.selectRoute(modelData)
+                }
+                TapHandler {
+                    acceptedButtons: Qt.LeftButton
+                    gesturePolicy: TapHandler.DragThreshold
+                    onTapped: miningFinderPage.selectRoute(modelData)
                 }
             }
         }
