@@ -2,11 +2,15 @@ from __future__ import annotations
 
 import hashlib
 import json
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any, Iterable
 
 from ed_companion.navigation.mining_commodities import mining_commodity_id
 from ed_companion.navigation.mining_finder import project_eddn_mining_candidates
+from ed_companion.navigation.hge import (
+    extract_signal_finds,
+    extract_system_bgs_snapshot,
+)
 
 
 def utc_now() -> str:
@@ -335,6 +339,88 @@ def project_sites(
             "source": str(row.get("source") or "EDDN"),
             "observed_at": str(row.get("observedAt") or received_at),
             "received_at": received_at,
+        })
+    return result
+
+
+def _state_identity(system_address: Any, system_name: Any) -> str:
+    address = _integer(system_address)
+    if address is not None:
+        return f"address:{address}"
+    return f"name:{str(system_name or '').strip().casefold()}"
+
+
+def _timestamp(value: Any) -> datetime | None:
+    try:
+        parsed = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+        if parsed.tzinfo is None:
+            parsed = parsed.replace(tzinfo=timezone.utc)
+        return parsed.astimezone(timezone.utc)
+    except (TypeError, ValueError):
+        return None
+
+
+def project_state_bgs_snapshot(
+    payload: dict[str, Any], received_at: str,
+) -> dict[str, Any] | None:
+    """Project the complete public BGS subset for one system."""
+    snapshot = extract_system_bgs_snapshot(payload, received_at)
+    if not snapshot:
+        return None
+    system = str(snapshot.get("system") or "").strip()
+    if not system:
+        return None
+    observations = [
+        row for row in snapshot.get("observations") or []
+        if isinstance(row, dict)
+    ]
+    return {
+        "identity": _state_identity(snapshot.get("system_address"), system),
+        "system_address": snapshot.get("system_address"),
+        "system_name": system,
+        "observed_at": str(snapshot.get("observed_at") or received_at),
+        "received_at": received_at,
+        "snapshot": json.dumps({
+            "system": system,
+            "system_address": snapshot.get("system_address"),
+            "observed_at": str(snapshot.get("observed_at") or received_at),
+            "observations": observations,
+        }),
+    }
+
+
+def project_state_signals(
+    payload: dict[str, Any], received_at: str,
+) -> list[dict[str, Any]]:
+    """Project only currently useful public signals with honest expiry."""
+    result = []
+    received = _timestamp(received_at) or datetime.now(timezone.utc)
+    for observation in extract_signal_finds(payload, received_at):
+        lifetime = max(0, _integer(observation.get("time_remaining")) or 0)
+        observed = _timestamp(observation.get("signal_timestamp")) or received
+        expires = observed + timedelta(seconds=lifetime)
+        if lifetime <= 0 or expires <= received:
+            continue
+        identity_source = "|".join((
+            _state_identity(
+                observation.get("system_address"), observation.get("system")
+            ),
+            observed.isoformat(),
+            str(observation.get("faction") or "").casefold(),
+            str(observation.get("state") or "").casefold(),
+            str(observation.get("find_type") or "").casefold(),
+            str(observation.get("intensity") or "").casefold(),
+        ))
+        result.append({
+            "identity": hashlib.sha256(
+                identity_source.encode("utf-8")
+            ).hexdigest(),
+            "system_address": observation.get("system_address"),
+            "system_name": str(observation.get("system") or "").strip(),
+            "observed_at": observed.isoformat(),
+            "received_at": received_at,
+            "expires_at": expires.isoformat(),
+            "observation": json.dumps(observation),
         })
     return result
 

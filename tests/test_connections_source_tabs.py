@@ -51,6 +51,8 @@ class ConnectionSourceTabTests(unittest.TestCase):
         ).read_text(encoding="utf-8")
         self.assertIn("cockpit.edFrameCatalogSyncStatus", qml)
         self.assertIn("cockpit.edFrameCatalogSyncBusy", qml)
+        self.assertIn("cockpit.edFrameStateFindSyncStatus", qml)
+        self.assertIn("cockpit.edFrameStateFindSyncBusy", qml)
         self.assertIn("cockpit.edFrameCatalogSyncStatus", mining_qml)
         controller_source = (
             ROOT / "ed_companion" / "phase14" / "controller_navigation.py"

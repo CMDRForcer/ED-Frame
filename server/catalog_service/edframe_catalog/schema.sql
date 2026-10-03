@@ -120,6 +120,37 @@ CREATE INDEX IF NOT EXISTS mining_sites_system_idx
 CREATE INDEX IF NOT EXISTS mining_sites_hotspots_idx
     ON mining_sites USING GIN (hotspots);
 
+CREATE TABLE IF NOT EXISTS state_bgs_snapshots (
+    identity TEXT PRIMARY KEY,
+    system_address BIGINT,
+    system_name TEXT NOT NULL,
+    observed_at TIMESTAMPTZ NOT NULL,
+    received_at TIMESTAMPTZ NOT NULL,
+    snapshot JSONB NOT NULL,
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS state_bgs_sync_idx
+    ON state_bgs_snapshots (updated_at, identity);
+CREATE INDEX IF NOT EXISTS state_bgs_observed_idx
+    ON state_bgs_snapshots (observed_at DESC);
+
+CREATE TABLE IF NOT EXISTS state_signals (
+    identity TEXT PRIMARY KEY,
+    system_address BIGINT,
+    system_name TEXT NOT NULL,
+    observed_at TIMESTAMPTZ NOT NULL,
+    received_at TIMESTAMPTZ NOT NULL,
+    expires_at TIMESTAMPTZ NOT NULL,
+    observation JSONB NOT NULL,
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS state_signals_sync_idx
+    ON state_signals (updated_at, identity);
+CREATE INDEX IF NOT EXISTS state_signals_expiry_idx
+    ON state_signals (expires_at);
+
 CREATE TABLE IF NOT EXISTS collector_state (
     source TEXT PRIMARY KEY,
     last_received_at TIMESTAMPTZ,

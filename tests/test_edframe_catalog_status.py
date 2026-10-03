@@ -111,6 +111,8 @@ class EdFrameCatalogStatusTests(unittest.TestCase):
                     "markets": 30,
                     "sites": 40,
                     "commodities": 50,
+                    "state_bgs_snapshots": 6,
+                    "state_signals": 7,
                 },
                 "completeness": {
                     "marketDetailPercent": 99.5,
@@ -134,6 +136,10 @@ class EdFrameCatalogStatusTests(unittest.TestCase):
         )
         self.assertEqual(controller._edframe_catalog_stats["collectorMessages"], 123)
         self.assertEqual(controller._edframe_catalog_stats["collectorErrors"], 2)
+        self.assertEqual(
+            controller._edframe_catalog_stats["stateBgsSnapshots"], 6
+        )
+        self.assertEqual(controller._edframe_catalog_stats["stateSignals"], 7)
         self.assertIn("20 stations", controller._edframe_catalog_status)
 
     def test_old_server_does_not_report_missing_station_catalog_as_zero(self):

@@ -153,6 +153,10 @@ from ed_companion.navigation.mining_market import (
     nearby_catalog_markets,
     project_local_market_snapshot,
 )
+from ed_companion.navigation.state_find_catalog import (
+    fetch_edframe_state_find_delta,
+    merge_edframe_state_find_page,
+)
 from ed_companion.navigation.mining_powerplay import (
     catalog_rows,
     fetch_powerplay_catalog,
@@ -317,6 +321,9 @@ class NavigationMixin:
 
 
     edFrameCatalogSyncFinished = Signal(object)
+
+
+    edFrameStateFindSyncFinished = Signal(object)
 
 
     miningPowerplayFinished = Signal(object)
@@ -2011,6 +2018,25 @@ class NavigationMixin:
     )
 
 
+    edFrameStateFindSyncBusy = Property(
+        bool,
+        lambda self: bool(getattr(
+            self, "_edframe_state_find_sync_busy", False
+        )),
+        notify=CoreControllerMixin.connectionChanged,
+    )
+
+
+    edFrameStateFindSyncStatus = Property(
+        str,
+        lambda self: str(getattr(
+            self, "_edframe_state_find_sync_status",
+            "State Finds waiting for server check",
+        )),
+        notify=CoreControllerMixin.connectionChanged,
+    )
+
+
     miningCurrentAction = Property(
         str,
         lambda self: (
@@ -2018,6 +2044,8 @@ class NavigationMixin:
             if getattr(self, "_edframe_catalog_busy", False)
             else "CATALOG SYNC"
             if getattr(self, "_edframe_catalog_sync_busy", False)
+            else "STATE SYNC"
+            if getattr(self, "_edframe_state_find_sync_busy", False)
             else "MARKET SYNC"
             if getattr(self, "_mining_market_busy", False)
             else "ROUTE CHECK"
@@ -2282,6 +2310,9 @@ class NavigationMixin:
         self._active_edframe_catalog_sync_request = None
         self._edframe_catalog_sync_busy = False
         self._edframe_catalog_sync_continue = False
+        self._active_edframe_state_find_sync_request = None
+        self._edframe_state_find_sync_busy = False
+        self._edframe_state_find_sync_continue = False
         self._edframe_catalog_online = False
         if enabled:
             self._edframe_catalog_status = "Enabled · checking server…"
@@ -2290,6 +2321,9 @@ class NavigationMixin:
             self._edframe_catalog_status = "Disabled · local catalog active"
             self._edframe_catalog_sync_status = (
                 "Paused · retained local catalog remains available"
+            )
+            self._edframe_state_find_sync_status = (
+                "Paused · retained local State Finds remain available"
             )
             self._append_edframe_catalog_log(
                 "Online catalog disabled · retained local data stays available"
@@ -2373,6 +2407,12 @@ class NavigationMixin:
             )
             markets = int(counts.get("markets", 0) or 0)
             sites = int(counts.get("sites", 0) or 0)
+            state_bgs = int(counts.get(
+                "state_bgs_snapshots", counts.get("stateBgsSnapshots", 0)
+            ) or 0)
+            state_signals = int(counts.get(
+                "state_signals", counts.get("stateSignals", 0)
+            ) or 0)
             self._edframe_catalog_online = True
             self._edframe_catalog_last_success = str(
                 payload.get("generatedAt")
@@ -2383,6 +2423,8 @@ class NavigationMixin:
                 "stations": stations,
                 "markets": markets,
                 "sites": sites,
+                "stateBgsSnapshots": state_bgs,
+                "stateSignals": state_signals,
                 "commodities": int(counts.get("commodities", 0) or 0),
                 "marketCoordinatePercent": float(
                     completeness.get("marketCoordinatePercent", 0) or 0
@@ -2430,7 +2472,8 @@ class NavigationMixin:
             )
             self._append_edframe_catalog_log(
                 f"Server online · {stations:,} stations · "
-                f"{markets:,} markets · {sites:,} sites"
+                f"{markets:,} markets · {sites:,} sites · "
+                f"{state_bgs:,} BGS · {state_signals:,} signals"
             )
             if store is not None:
                 store.record_source_result(
@@ -2441,6 +2484,10 @@ class NavigationMixin:
         self.miningChanged.emit()
         if result.get("success") and store is not None:
             QTimer.singleShot(0, self.syncEdFrameCatalog)
+        if result.get("success"):
+            state_sync = getattr(self, "syncEdFrameStateFinds", None)
+            if callable(state_sync):
+                QTimer.singleShot(0, state_sync)
 
 
     @Slot()
@@ -2574,6 +2621,146 @@ class NavigationMixin:
         )
         self.connectionChanged.emit()
         self.miningChanged.emit()
+
+
+    @Slot()
+    def syncEdFrameStateFinds(self):
+        """Merge one resumable server page into the profile-local cache."""
+        if (
+            not getattr(self, "_edframe_catalog_enabled", True)
+            or getattr(self, "_shutdown_complete", False)
+            or getattr(self, "_edframe_state_find_sync_busy", False)
+        ):
+            return
+        meta = getattr(self, "_edframe_state_find_sync_meta", {})
+        cursor = str(meta.get("cursor") or "") if isinstance(meta, dict) else ""
+        continuing = bool(getattr(
+            self, "_edframe_state_find_sync_continue", False
+        ))
+        self._edframe_state_find_sync_continue = False
+        if not continuing:
+            self._edframe_state_find_sync_rows = 0
+        request = {
+            "id": uuid.uuid4().hex,
+            "cursor": cursor,
+            "generation": getattr(self, "_profile_generation", 0),
+        }
+        self._active_edframe_state_find_sync_request = request
+        self._edframe_state_find_sync_busy = True
+        self._edframe_state_find_sync_status = (
+            "Initial State Finds sync…" if not cursor
+            else "Checking for State Finds changes…"
+        )
+        self.connectionChanged.emit()
+
+        def worker():
+            result = dict(request)
+            try:
+                result["page"] = fetch_edframe_state_find_delta(
+                    cursor=cursor, get=requests.get,
+                )
+                result["success"] = True
+            except Exception as exc:
+                result.update({
+                    "success": False,
+                    "error": f"{type(exc).__name__}: {exc}",
+                })
+            self.edFrameStateFindSyncFinished.emit(result)
+
+        if not self._start_network_worker(worker, "edframe-state-find-sync"):
+            self._active_edframe_state_find_sync_request = None
+            self._edframe_state_find_sync_busy = False
+            self._edframe_state_find_sync_status = (
+                "Paused during shutdown · retained local State Finds active"
+            )
+            self.connectionChanged.emit()
+
+
+    @Slot(object)
+    def _finish_edframe_state_find_sync(self, result):
+        request = getattr(
+            self, "_active_edframe_state_find_sync_request", None
+        )
+        if not request or result.get("id") != request.get("id"):
+            return
+        self._active_edframe_state_find_sync_request = None
+        self._edframe_state_find_sync_busy = False
+        if (
+            not getattr(self, "_edframe_catalog_enabled", True)
+            or result.get("generation") != getattr(self, "_profile_generation", 0)
+        ):
+            return
+        if not result.get("success"):
+            error = str(result.get("error") or "unknown error")
+            self._edframe_state_find_sync_status = (
+                "Sync paused · retained local State Finds active"
+            )
+            self._append_edframe_catalog_log(f"State Finds sync paused · {error}")
+            self.connectionChanged.emit()
+            return
+        page = result.get("page") or {}
+        merged, stats = merge_edframe_state_find_page(
+            self._hge_sightings, page, limit=HGE_OBSERVATION_LIMIT,
+        )
+        active, historical = partition_hge_observations(merged)
+        if historical and not self._archive_history(
+            "hge_observations", historical
+        ):
+            self._edframe_state_find_sync_status = (
+                "Sync paused · history archive failed; page will be retried"
+            )
+            self.connectionChanged.emit()
+            return
+        merged = active[-HGE_OBSERVATION_LIMIT:]
+        next_cursor = str(page.get("nextCursor") or "").strip()
+        stamp = str(page.get("generatedAt") or "")
+        meta = {"cursor": next_cursor, "lastSuccess": stamp}
+        # The facts are durably written before their cursor. A crash may replay
+        # a page, but can never skip a page that was not stored.
+        self._hge_save_sequence = int(getattr(
+            self, "_hge_save_sequence", 0
+        ) or 0) + 1
+        self._hge_save_sequences[str(self.hge_cache_file)] = (
+            self._hge_save_sequence
+        )
+        with self._hge_file_lock:
+            cache_saved = self._persist_json(
+                self.hge_cache_file, merged, "State Finds cache"
+            )
+        meta_saved = cache_saved and self._persist_json(
+            self.state_find_sync_file, meta, "State Finds sync cursor"
+        )
+        if not meta_saved:
+            self._edframe_state_find_sync_status = (
+                "Sync paused · local save failed; page will be retried"
+            )
+            self.connectionChanged.emit()
+            return
+        self._hge_sightings = merged
+        self._edframe_state_find_sync_meta = meta
+        applied = int(stats.get("snapshotsApplied", 0) or 0) + int(
+            stats.get("signalsApplied", 0) or 0
+        )
+        self._edframe_state_find_sync_rows = int(getattr(
+            self, "_edframe_state_find_sync_rows", 0
+        ) or 0) + applied
+        self.hgeChanged.emit()
+        if page.get("hasMore"):
+            self._edframe_state_find_sync_status = (
+                f"Syncing · {self._edframe_state_find_sync_rows:,} facts merged"
+            )
+            self.connectionChanged.emit()
+            self._edframe_state_find_sync_continue = True
+            QTimer.singleShot(75, self.syncEdFrameStateFinds)
+            return
+        self._edframe_state_find_sync_status = (
+            f"Up to date · {len(self._hge_sightings):,} active local facts · "
+            f"{self._edframe_state_find_sync_rows:,} changes merged"
+        )
+        self._append_edframe_catalog_log(
+            f"State Finds current · {len(self._hge_sightings):,} active facts"
+        )
+        self.connectionChanged.emit()
 
 
     @Slot()

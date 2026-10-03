@@ -12,6 +12,9 @@ anonymous public catalog facts ED-Frame can reuse:
 - complete public `commodity/3` rows for every commodity: mean, buy and sell
   prices, stock, demand, brackets, status flags, observation time and receipt
   time.
+- current public BGS snapshots and supported FSS signal observations used by
+  State Finds. BGS snapshots are retained for 24 hours; signals retain their
+  reported lifetime and are never extended by the server.
 
 Missing source fields remain `null`; the collector does not infer landing-pad
 size or other station properties from names or station types. Sparse newer
@@ -37,7 +40,8 @@ for an application-level database backup.
 
 The files in `ops/` provide a verified daily custom-format `pg_dump` with
 14-day retention and conservative weekly removal of market observations older
-than 90 days. Mining evidence and system geography are deliberately retained.
+than 90 days. Expired signals and BGS snapshots older than 24 hours are also
+removed. Mining evidence and system geography are deliberately retained.
 
 ## API
 
@@ -47,6 +51,8 @@ than 90 days. Mining evidence and system geography are deliberately retained.
 - `GET /v1/stations/search?system=Cubeo&landing_pad=L`
 - `GET /v1/markets/search?commodity=platinum`
 - `GET /v1/sites/search?commodity=platinum`
+- `GET /v1/sync/markets`
+- `GET /v1/sync/state-finds`
 
 Market and site search accept optional `x`, `y`, `z` and `max_distance`
 parameters. This keeps route-radius filtering on the server while preserving

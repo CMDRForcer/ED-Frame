@@ -9,12 +9,17 @@ import zmq
 
 from ed_companion.integrations.eddn import EddnRelayDecodeError, decode_relay_frame
 
-from .database import connection, ensure_schema, record_state, upsert_batch
+from .database import (
+    connection, ensure_schema, record_state, upsert_batch,
+    upsert_state_find_batch,
+)
 from .projection import (
     project_markets,
     project_sites,
     project_stations,
     project_system,
+    project_state_bgs_snapshot,
+    project_state_signals,
     projected_systems,
     schema_name,
     utc_now,
@@ -72,6 +77,13 @@ def main() -> None:
                         stations,
                         markets,
                         sites,
+                    )
+                    snapshot = project_state_bgs_snapshot(payload, received_at)
+                    signals = project_state_signals(payload, received_at)
+                    projected += upsert_state_find_batch(
+                        conn,
+                        [snapshot] if snapshot else [],
+                        signals,
                     )
                     record_state(
                         conn,

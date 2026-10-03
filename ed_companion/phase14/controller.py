@@ -346,6 +346,7 @@ class CockpitController(
         self.eddn_quarantine_file = self.config_dir / "community_upload_quarantine.json"
         self.eddn_cursor_file = self.config_dir / "eddn_journal_cursor.json"
         self.hge_cache_file = self.config_dir / "hge_live_sightings.json"
+        self.state_find_sync_file = self.config_dir / "state_find_sync.json"
         self.trader_catalog_file = user_trader_catalog_path(context)
         self.tech_broker_catalog_file = self.config_dir / "tech_broker_catalog_user.json"
         self.mining_catalog_file = self.config_dir / "mining_finder_catalog.json"
@@ -488,6 +489,20 @@ class CockpitController(
         self._edframe_catalog_sync_rows = 0
         self._edframe_catalog_sync_continue = False
         self._active_edframe_catalog_sync_request = None
+        self._edframe_state_find_sync_busy = False
+        self._edframe_state_find_sync_status = (
+            "State Finds waiting for server check"
+            if self._edframe_catalog_enabled
+            else "Paused · retained local State Finds remain available"
+        )
+        self._edframe_state_find_sync_rows = 0
+        self._edframe_state_find_sync_continue = False
+        self._active_edframe_state_find_sync_request = None
+        self._edframe_state_find_sync_meta = self._read_local_json(
+            self.state_find_sync_file, {}
+        )
+        if not isinstance(self._edframe_state_find_sync_meta, dict):
+            self._edframe_state_find_sync_meta = {}
         self._background_mode = bool(ui_config.get("background_mode", False))
         self._autostart_enabled = bool(ui_config.get("autostart_enabled", False))
         self._trader_preference = str(
@@ -631,6 +646,9 @@ class CockpitController(
         )
         self.edFrameCatalogSyncFinished.connect(
             self._finish_edframe_catalog_sync
+        )
+        self.edFrameStateFindSyncFinished.connect(
+            self._finish_edframe_state_find_sync
         )
         self._mining_powerplay_catalog = self._read_local_json(
             self.mining_powerplay_catalog_file, {}
@@ -2438,6 +2456,13 @@ class CockpitController(
         self._edframe_catalog_sync_status = (
             "Local catalog waiting for profile sync"
         )
+        self._active_edframe_state_find_sync_request = None
+        self._edframe_state_find_sync_busy = False
+        self._edframe_state_find_sync_rows = 0
+        self._edframe_state_find_sync_continue = False
+        self._edframe_state_find_sync_status = (
+            "State Finds waiting for profile sync"
+        )
         self._active_mining_market_request = None
         self._pending_mining_market_query = None
         self._mining_market_busy = False
@@ -2560,6 +2585,11 @@ class CockpitController(
         self._hge_sightings = self._read_local_json(self.hge_cache_file, [])
         if not isinstance(self._hge_sightings, list):
             self._hge_sightings = []
+        self._edframe_state_find_sync_meta = self._read_local_json(
+            self.state_find_sync_file, {}
+        )
+        if not isinstance(self._edframe_state_find_sync_meta, dict):
+            self._edframe_state_find_sync_meta = {}
         self._mining_catalog = {"candidates": []}
         self._mining_catalog_revision = getattr(
             self, "_mining_catalog_revision", 0
@@ -2693,6 +2723,8 @@ class CockpitController(
         batch = dict(self._last_hge_batch_stats)
         previous_count = len(self._hge_sightings)
         self._save_hge_cache()
+        if getattr(self, "_edframe_catalog_enabled", True):
+            QTimer.singleShot(0, self.syncEdFrameStateFinds)
         removed = max(0, previous_count - len(self._hge_sightings))
         self._ensure_eddn_listener()
         self._scan_eddn_journal()

@@ -7874,12 +7874,32 @@ ApplicationWindow {
                                     wrapMode: Text.WordWrap; Layout.fillWidth: true
                                 }
                                 Label {
+                                    visible: cockpit.edFrameCatalogOnline
+                                    text: window.tf(
+                                        "connections.edframe_state_counts",
+                                        "STATE FINDS · %1 CURRENT BGS SNAPSHOTS · %2 LIVE SIGNALS",
+                                        [cockpit.edFrameCatalogStats.stateBgsSnapshots || 0,
+                                         cockpit.edFrameCatalogStats.stateSignals || 0])
+                                    color: textPrimary; font.pixelSize: 9; font.bold: true
+                                    wrapMode: Text.WordWrap; Layout.fillWidth: true
+                                }
+                                Label {
                                     visible: cockpit.edFrameCatalogEnabled
                                     text: window.t(
                                         "connections.edframe_offline_sync",
                                         "OFFLINE CATALOG")
                                           + " · " + cockpit.edFrameCatalogSyncStatus
                                     color: cockpit.edFrameCatalogSyncBusy ? cyan : textSecondary
+                                    font.pixelSize: 9; font.bold: true
+                                    wrapMode: Text.WordWrap; Layout.fillWidth: true
+                                }
+                                Label {
+                                    visible: cockpit.edFrameCatalogEnabled
+                                    text: window.t(
+                                        "connections.edframe_state_sync",
+                                        "STATE FINDS")
+                                          + " · " + cockpit.edFrameStateFindSyncStatus
+                                    color: cockpit.edFrameStateFindSyncBusy ? cyan : textSecondary
                                     font.pixelSize: 9; font.bold: true
                                     wrapMode: Text.WordWrap; Layout.fillWidth: true
                                 }
@@ -7920,10 +7940,13 @@ ApplicationWindow {
                                               ? window.t("status.checking", "CHECKING…")
                                               : cockpit.edFrameCatalogSyncBusy
                                                 ? window.t("status.syncing", "SYNCING…")
+                                              : cockpit.edFrameStateFindSyncBusy
+                                                ? window.t("status.syncing", "SYNCING…")
                                               : window.t("connections.check_now", "CHECK NOW")
                                         enabled: cockpit.edFrameCatalogEnabled
                                                  && !cockpit.edFrameCatalogBusy
                                                  && !cockpit.edFrameCatalogSyncBusy
+                                                 && !cockpit.edFrameStateFindSyncBusy
                                         onClicked: cockpit.refreshEdFrameCatalogStatus()
                                     }
                                 }

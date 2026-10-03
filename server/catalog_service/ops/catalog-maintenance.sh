@@ -19,4 +19,9 @@ docker compose exec -T db psql \
     --username "$POSTGRES_USER" \
     --dbname "$POSTGRES_DB" \
     --set ON_ERROR_STOP=1 \
-    --command "VACUUM (ANALYZE) markets;"
+    --command "DELETE FROM state_bgs_snapshots WHERE observed_at < NOW() - INTERVAL '24 hours'; DELETE FROM state_signals WHERE expires_at <= NOW();"
+docker compose exec -T db psql \
+    --username "$POSTGRES_USER" \
+    --dbname "$POSTGRES_DB" \
+    --set ON_ERROR_STOP=1 \
+    --command "VACUUM (ANALYZE) markets, state_bgs_snapshots, state_signals;"

@@ -203,6 +203,60 @@ def upsert_batch(
     return projected
 
 
+def upsert_state_find_batch(
+    conn: psycopg.Connection,
+    snapshots: Iterable[dict[str, Any]],
+    signals: Iterable[dict[str, Any]],
+) -> int:
+    projected = 0
+    for row in snapshots:
+        conn.execute(
+            """
+            INSERT INTO state_bgs_snapshots
+                (identity, system_address, system_name, observed_at,
+                 received_at, snapshot, updated_at)
+            VALUES
+                (%(identity)s, %(system_address)s, %(system_name)s,
+                 %(observed_at)s, %(received_at)s, %(snapshot)s::jsonb, NOW())
+            ON CONFLICT (identity) DO UPDATE SET
+                system_address = EXCLUDED.system_address,
+                system_name = EXCLUDED.system_name,
+                observed_at = EXCLUDED.observed_at,
+                received_at = EXCLUDED.received_at,
+                snapshot = EXCLUDED.snapshot,
+                updated_at = NOW()
+            WHERE EXCLUDED.observed_at >= state_bgs_snapshots.observed_at
+            """,
+            row,
+        )
+        projected += 1
+    for row in signals:
+        conn.execute(
+            """
+            INSERT INTO state_signals
+                (identity, system_address, system_name, observed_at,
+                 received_at, expires_at, observation, updated_at)
+            VALUES
+                (%(identity)s, %(system_address)s, %(system_name)s,
+                 %(observed_at)s, %(received_at)s, %(expires_at)s,
+                 %(observation)s::jsonb, NOW())
+            ON CONFLICT (identity) DO UPDATE SET
+                received_at = GREATEST(
+                    EXCLUDED.received_at, state_signals.received_at
+                ),
+                expires_at = GREATEST(
+                    EXCLUDED.expires_at, state_signals.expires_at
+                ),
+                observation = EXCLUDED.observation,
+                updated_at = NOW()
+            WHERE EXCLUDED.observed_at >= state_signals.observed_at
+            """,
+            row,
+        )
+        projected += 1
+    return projected
+
+
 def record_state(
     conn: psycopg.Connection,
     *,

@@ -1006,8 +1006,12 @@ class MiningFinderUiContractTests(unittest.TestCase):
     def test_connections_exposes_edsm_as_a_first_class_catalog_status(self):
         root = Path(__file__).resolve().parents[1]
         qml = (root / "Main.qml").read_text(encoding="utf-8-sig")
-        self.assertIn('text: "SPANSH"', qml)
-        self.assertIn('text: "EDSM"', qml)
+        self.assertIn(
+            'text: window.t("connections.spansh_source_tab", "SPANSH")', qml
+        )
+        self.assertIn(
+            'text: window.t("connections.edsm_tab", "EDSM")', qml
+        )
         self.assertIn('connectionsPage.connectionMode = 5', qml)
         self.assertIn('"UPDATE EDSM CATALOG"', qml)
         self.assertIn('cockpit.miningPowerplaySyncStatus', qml)

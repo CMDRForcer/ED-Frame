@@ -71,6 +71,39 @@ def _decode_market_cursor(value: str | None) -> tuple[datetime, int, str]:
         raise HTTPException(status_code=400, detail="Invalid market cursor") from exc
 
 
+def _encode_state_cursor(
+    sync_at: datetime | str, kind: str, identity: str,
+) -> str:
+    stamp = (
+        sync_at.astimezone(timezone.utc).isoformat()
+        if isinstance(sync_at, datetime) else str(sync_at)
+    )
+    payload = json.dumps(
+        [1, stamp, str(kind), str(identity)],
+        ensure_ascii=True, separators=(",", ":"),
+    ).encode("utf-8")
+    return base64.urlsafe_b64encode(payload).decode("ascii").rstrip("=")
+
+
+def _decode_state_cursor(value: str | None) -> tuple[datetime, str, str]:
+    if not value:
+        return datetime(1970, 1, 1, tzinfo=timezone.utc), "", ""
+    try:
+        text = str(value).strip()
+        decoded = base64.urlsafe_b64decode(text + "=" * (-len(text) % 4))
+        version, stamp, kind, identity = json.loads(decoded)
+        parsed = datetime.fromisoformat(str(stamp).replace("Z", "+00:00"))
+        if version != 1 or parsed.tzinfo is None:
+            raise ValueError("invalid cursor fields")
+        return parsed.astimezone(timezone.utc), str(kind), str(identity)
+    except (
+        binascii.Error, json.JSONDecodeError, TypeError, ValueError,
+    ) as exc:
+        raise HTTPException(
+            status_code=400, detail="Invalid State Finds cursor"
+        ) from exc
+
+
 @app.get("/")
 def root() -> dict:
     return {
@@ -80,6 +113,7 @@ def root() -> dict:
         "health": "/healthz",
         "stations": "/v1/stations/search",
         "marketSync": "/v1/sync/markets",
+        "stateFindSync": "/v1/sync/state-finds",
     }
 
 
@@ -99,7 +133,12 @@ def status() -> dict:
               (SELECT COUNT(*) FROM systems) AS systems,
               (SELECT COUNT(*) FROM stations) AS stations,
               (SELECT COUNT(*) FROM markets) AS markets,
-              (SELECT COUNT(*) FROM mining_sites) AS sites
+              (SELECT COUNT(*) FROM mining_sites) AS sites,
+              (SELECT COUNT(*) FROM state_bgs_snapshots
+                 WHERE observed_at >= NOW() - INTERVAL '24 hours')
+                   AS state_bgs_snapshots,
+              (SELECT COUNT(*) FROM state_signals
+                 WHERE expires_at > NOW()) AS state_signals
             """
         ).fetchone()
         state = conn.execute(
@@ -205,6 +244,60 @@ def status() -> dict:
             ),
         },
         "collector": dict(state) if state else None,
+    }
+
+
+@app.get("/v1/sync/state-finds")
+def sync_state_finds(
+    cursor: Annotated[str | None, Query(max_length=512)] = None,
+    limit: Annotated[int, Query(ge=1, le=1000)] = 500,
+) -> dict:
+    """Return current public BGS snapshots and unexpired signal sightings."""
+    cursor_at, cursor_kind, cursor_identity = _decode_state_cursor(cursor)
+    with connection() as conn:
+        rows = conn.execute(
+            """
+            WITH current_state AS (
+                SELECT updated_at AS sync_at, 'BGS'::text AS kind,
+                       identity, snapshot AS payload
+                FROM state_bgs_snapshots
+                WHERE observed_at >= NOW() - INTERVAL '24 hours'
+                UNION ALL
+                SELECT updated_at AS sync_at, 'SIGNAL'::text AS kind,
+                       identity, observation AS payload
+                FROM state_signals
+                WHERE expires_at > NOW()
+            )
+            SELECT sync_at AS "syncAt", kind, identity, payload
+            FROM current_state
+            WHERE (sync_at, kind, identity) > (%s, %s, %s)
+            ORDER BY sync_at, kind, identity
+            LIMIT %s
+            """,
+            (cursor_at, cursor_kind, cursor_identity, limit + 1),
+        ).fetchall()
+    has_more = len(rows) > limit
+    page = rows[:limit]
+    results = []
+    for row in page:
+        item = {
+            "kind": row["kind"],
+            "identity": row["identity"],
+            "syncAt": row["syncAt"],
+        }
+        item["snapshot" if row["kind"] == "BGS" else "row"] = row["payload"]
+        results.append(item)
+    next_cursor = str(cursor or "")
+    if page:
+        last = page[-1]
+        next_cursor = _encode_state_cursor(
+            last["syncAt"], last["kind"], last["identity"]
+        )
+    return {
+        "generatedAt": _now(),
+        "results": results,
+        "nextCursor": next_cursor,
+        "hasMore": has_more,
     }
 
 

@@ -25,6 +25,9 @@ class SchemaContractTests(unittest.TestCase):
         self.assertIn("ON CONFLICT (market_id) DO NOTHING", schema)
         self.assertIn("markets_received_idx", schema)
         self.assertIn("stations_received_idx", schema)
+        self.assertIn("CREATE TABLE IF NOT EXISTS state_bgs_snapshots", schema)
+        self.assertIn("CREATE TABLE IF NOT EXISTS state_signals", schema)
+        self.assertIn("state_signals_expiry_idx", schema)
 
     def test_public_api_exposes_station_and_full_market_contract(self):
         source = (SERVICE / "edframe_catalog" / "api.py").read_text(
@@ -45,6 +48,8 @@ class SchemaContractTests(unittest.TestCase):
         self.assertIn('@app.get("/v1/sync/markets")', source)
         self.assertIn("nextCursor", source)
         self.assertIn("ORDER BY sync_at, market_id, commodity", source)
+        self.assertIn('@app.get("/v1/sync/state-finds")', source)
+        self.assertIn("WHERE expires_at > NOW()", source)
 
 
 if __name__ == "__main__":

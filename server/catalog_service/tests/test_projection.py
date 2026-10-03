@@ -4,6 +4,8 @@ from edframe_catalog.projection import (
     project_markets,
     project_stations,
     project_system,
+    project_state_bgs_snapshot,
+    project_state_signals,
     projected_systems,
     schema_name,
 )
@@ -181,6 +183,52 @@ class ProjectionTests(unittest.TestCase):
         self.assertEqual((cubeo["x"], cubeo["y"], cubeo["z"]), (1.0, 2.0, 3.0))
         achenar = next(row for row in rows if row["name"] == "Achenar")
         self.assertEqual(achenar["system_address"], 456)
+
+    def test_state_find_projection_keeps_public_facts_without_uploader(self):
+        payload = {
+            "$schemaRef": "https://eddn.edcd.io/schemas/journal/1",
+            "header": {"uploaderID": "private-name"},
+            "message": {
+                "event": "FSDJump",
+                "timestamp": "2026-10-03T08:00:00Z",
+                "StarSystem": "Cubeo",
+                "SystemAddress": 123,
+                "StarPos": [1, 2, 3],
+                "SystemAllegiance": "Empire",
+                "Factions": [{
+                    "Name": "Cubeo Patron's Principles",
+                    "Allegiance": "Empire",
+                    "ActiveStates": [{"State": "$FactionState_CivilUnrest;"}],
+                }],
+            },
+        }
+        row = project_state_bgs_snapshot(payload, "2026-10-03T08:00:01Z")
+        self.assertEqual(row["identity"], "address:123")
+        self.assertIn('"system": "Cubeo"', row["snapshot"])
+        self.assertNotIn("private-name", row["snapshot"])
+
+    def test_state_signal_projection_rejects_expired_signals(self):
+        payload = {
+            "$schemaRef": "https://eddn.edcd.io/schemas/fsssignaldiscovered/1",
+            "message": {
+                "timestamp": "2026-10-03T08:00:00Z",
+                "StarSystem": "Cubeo",
+                "SystemAddress": 123,
+                "StarPos": [1, 2, 3],
+                "signals": [{
+                    "USSType": "$USS_Type_VeryValuableSalvage;",
+                    "SpawningFaction": "Faction",
+                    "SpawningState": "$FactionState_Boom;",
+                    "timestamp": "2026-10-03T08:00:00Z",
+                    "TimeRemaining": 300,
+                }],
+            },
+        }
+        current = project_state_signals(payload, "2026-10-03T08:01:00Z")
+        expired = project_state_signals(payload, "2026-10-03T08:06:00Z")
+        self.assertEqual(len(current), 1)
+        self.assertEqual(current[0]["system_name"], "Cubeo")
+        self.assertEqual(expired, [])
 
 
 if __name__ == "__main__":

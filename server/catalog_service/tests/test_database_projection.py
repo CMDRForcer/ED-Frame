@@ -1,6 +1,6 @@
 import unittest
 
-from edframe_catalog.database import upsert_batch
+from edframe_catalog.database import upsert_batch, upsert_state_find_batch
 
 
 class RecordingConnection:
@@ -65,6 +65,30 @@ class DatabaseProjectionTests(unittest.TestCase):
         self.assertEqual(station_values["prohibited"], '["Slaves"]')
         market_values = conn.calls[1][1]
         self.assertEqual(market_values["status_flags"], '["Rare"]')
+
+    def test_state_find_rows_are_upserted_separately(self):
+        conn = RecordingConnection()
+        projected = upsert_state_find_batch(
+            conn,
+            snapshots=[{
+                "identity": "address:123", "system_address": 123,
+                "system_name": "Cubeo",
+                "observed_at": "2026-10-03T08:00:00Z",
+                "received_at": "2026-10-03T08:00:01Z",
+                "snapshot": '{"system":"Cubeo","observations":[]}',
+            }],
+            signals=[{
+                "identity": "signal", "system_address": 123,
+                "system_name": "Cubeo",
+                "observed_at": "2026-10-03T08:00:00Z",
+                "received_at": "2026-10-03T08:00:01Z",
+                "expires_at": "2026-10-03T08:05:00Z",
+                "observation": '{"system":"Cubeo"}',
+            }],
+        )
+        self.assertEqual(projected, 2)
+        self.assertIn("state_bgs_snapshots", conn.calls[0][0])
+        self.assertIn("state_signals", conn.calls[1][0])
 
 
 if __name__ == "__main__":
