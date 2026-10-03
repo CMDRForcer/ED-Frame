@@ -26,6 +26,22 @@ def _row(observed, **changes):
 
 
 class MiningMarketStoreTests(unittest.TestCase):
+    def test_incremental_server_cursor_survives_restart_and_reset_clears_it(self):
+        with TemporaryDirectory() as directory:
+            path = Path(directory) / "market.sqlite3"
+            store = MarketCatalogStore(path)
+            store.set_metadata("edframe_market_sync_cursor", "page-17")
+
+            reopened = MarketCatalogStore(path)
+            self.assertEqual(
+                reopened.metadata("edframe_market_sync_cursor"), "page-17"
+            )
+
+            reopened.reset()
+            self.assertEqual(
+                reopened.metadata("edframe_market_sync_cursor"), ""
+            )
+
     def test_complete_station_metadata_survives_restart_and_sparse_refresh(self):
         with TemporaryDirectory() as directory:
             path = Path(directory, "market.sqlite3")

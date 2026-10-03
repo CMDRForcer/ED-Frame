@@ -145,6 +145,7 @@ from ed_companion.navigation.mining_planner import (
 )
 from ed_companion.navigation.mining_market import (
     fetch_edframe_catalog_status,
+    fetch_edframe_market_delta,
     fetch_edframe_system_coordinates,
     fetch_edsm_system_coordinates,
     fetch_market_imports,
@@ -271,6 +272,26 @@ MINING_TRANSIENT_FIELDS = frozenset({
 HGE_CLASSIFIER_VERSION = 2
 
 
+def _merge_edframe_market_delta_page(store, page):
+    """Durably merge one page before advancing its resumable cursor."""
+    rows = [row for row in page.get("rows", []) if isinstance(row, dict)]
+    ingested = store.ingest(rows, create_backup=False)
+    next_cursor = str(page.get("nextCursor") or "").strip()
+    if next_cursor:
+        # Cursor follows ingestion: a crash can replay a page but can never
+        # skip rows that were not durably merged first.
+        store.set_metadata("edframe_market_sync_cursor", next_cursor)
+    stamp = str(page.get("generatedAt") or "")
+    if stamp:
+        store.set_metadata("edframe_market_sync_last_success", stamp)
+    return {
+        **page,
+        "ingested": ingested,
+        "rowCount": len(rows),
+        "localCount": store.count(),
+    }
+
+
 class NavigationMixin:
     """Extracted from CockpitController (controller.py modularization).
 
@@ -293,6 +314,9 @@ class NavigationMixin:
 
 
     edFrameCatalogStatusFinished = Signal(object)
+
+
+    edFrameCatalogSyncFinished = Signal(object)
 
 
     miningPowerplayFinished = Signal(object)
@@ -1970,11 +1994,30 @@ class NavigationMixin:
     )
 
 
+    edFrameCatalogSyncBusy = Property(
+        bool,
+        lambda self: bool(getattr(self, "_edframe_catalog_sync_busy", False)),
+        notify=CoreControllerMixin.connectionChanged,
+    )
+
+
+    edFrameCatalogSyncStatus = Property(
+        str,
+        lambda self: str(getattr(
+            self, "_edframe_catalog_sync_status",
+            "Local catalog waiting for server check",
+        )),
+        notify=CoreControllerMixin.connectionChanged,
+    )
+
+
     miningCurrentAction = Property(
         str,
         lambda self: (
             "SERVER CHECK"
             if getattr(self, "_edframe_catalog_busy", False)
+            else "CATALOG SYNC"
+            if getattr(self, "_edframe_catalog_sync_busy", False)
             else "MARKET SYNC"
             if getattr(self, "_mining_market_busy", False)
             else "ROUTE CHECK"
@@ -2236,12 +2279,18 @@ class NavigationMixin:
         self._edframe_catalog_enabled = enabled
         self._active_edframe_catalog_request = None
         self._edframe_catalog_busy = False
+        self._active_edframe_catalog_sync_request = None
+        self._edframe_catalog_sync_busy = False
+        self._edframe_catalog_sync_continue = False
         self._edframe_catalog_online = False
         if enabled:
             self._edframe_catalog_status = "Enabled · checking server…"
             self._append_edframe_catalog_log("Online catalog enabled")
         else:
             self._edframe_catalog_status = "Disabled · local catalog active"
+            self._edframe_catalog_sync_status = (
+                "Paused · retained local catalog remains available"
+            )
             self._append_edframe_catalog_log(
                 "Online catalog disabled · retained local data stays available"
             )
@@ -2388,6 +2437,141 @@ class NavigationMixin:
                     "ED-Frame catalog server", success=True,
                 )
             self._save_ui_config()
+        self.connectionChanged.emit()
+        self.miningChanged.emit()
+        if result.get("success") and store is not None:
+            QTimer.singleShot(0, self.syncEdFrameCatalog)
+
+
+    @Slot()
+    def syncEdFrameCatalog(self):
+        """Incrementally merge the server catalog into profile-local SQLite."""
+        if (
+            not getattr(self, "_edframe_catalog_enabled", True)
+            or getattr(self, "_shutdown_complete", False)
+            or getattr(self, "_edframe_catalog_sync_busy", False)
+        ):
+            return
+        store = getattr(self, "_mining_market_store", None)
+        if store is None:
+            return
+        cursor = store.metadata("edframe_market_sync_cursor", "")
+        continuing = bool(getattr(
+            self, "_edframe_catalog_sync_continue", False,
+        ))
+        self._edframe_catalog_sync_continue = False
+        if not continuing:
+            self._edframe_catalog_sync_rows = 0
+        request = {
+            "id": uuid.uuid4().hex,
+            "cursor": cursor,
+            "generation": getattr(self, "_profile_generation", 0),
+        }
+        self._active_edframe_catalog_sync_request = request
+        self._edframe_catalog_sync_busy = True
+        if not cursor:
+            self._edframe_catalog_sync_status = (
+                "Initial incremental sync · retained local data stays active"
+            )
+        else:
+            self._edframe_catalog_sync_status = (
+                "Checking for market and station changes…"
+            )
+        self.connectionChanged.emit()
+        self.miningChanged.emit()
+
+        def worker():
+            result = dict(request)
+            try:
+                page = fetch_edframe_market_delta(
+                    cursor=cursor, get=requests.get,
+                )
+                result.update(_merge_edframe_market_delta_page(store, page))
+                result["success"] = True
+            except Exception as exc:
+                result.update({
+                    "success": False,
+                    "error": f"{type(exc).__name__}: {exc}",
+                })
+            self.edFrameCatalogSyncFinished.emit(result)
+
+        if not self._start_network_worker(worker, "edframe-catalog-sync"):
+            self._active_edframe_catalog_sync_request = None
+            self._edframe_catalog_sync_busy = False
+            self._edframe_catalog_sync_status = (
+                "Paused during shutdown · retained local catalog active"
+            )
+            self.connectionChanged.emit()
+            self.miningChanged.emit()
+
+
+    @Slot(object)
+    def _finish_edframe_catalog_sync(self, result):
+        request = getattr(self, "_active_edframe_catalog_sync_request", None)
+        if not request or result.get("id") != request.get("id"):
+            return
+        self._active_edframe_catalog_sync_request = None
+        self._edframe_catalog_sync_busy = False
+        if (
+            not getattr(self, "_edframe_catalog_enabled", True)
+            or result.get("generation") != getattr(self, "_profile_generation", 0)
+        ):
+            return
+        store = getattr(self, "_mining_market_store", None)
+        if store is None:
+            return
+        if not result.get("success"):
+            error = str(result.get("error") or "unknown error")
+            self._edframe_catalog_sync_status = (
+                "Sync paused · retained local catalog active"
+            )
+            store.record_source_result(
+                "ED-Frame incremental sync", success=False, error=error,
+            )
+            self._append_edframe_catalog_log(f"Incremental sync paused · {error}")
+            self.connectionChanged.emit()
+            self.miningChanged.emit()
+            return
+        ingested = int(result.get("ingested", 0) or 0)
+        self._edframe_catalog_sync_rows = int(getattr(
+            self, "_edframe_catalog_sync_rows", 0,
+        ) or 0) + ingested
+        local_count = int(result.get("localCount", 0) or 0)
+        self._edframe_catalog_stats.update({
+            "localMarkets": local_count,
+            "lastSyncRows": self._edframe_catalog_sync_rows,
+        })
+        if ingested:
+            self._mining_market_revision = getattr(
+                self, "_mining_market_revision", 0,
+            ) + 1
+            self._mining_market_status = self._mining_market_cache_status()
+        if result.get("hasMore"):
+            self._edframe_catalog_sync_status = (
+                f"Syncing · {self._edframe_catalog_sync_rows:,} changes retained · "
+                f"{local_count:,} local markets"
+            )
+            self.connectionChanged.emit()
+            self.miningChanged.emit()
+            self._edframe_catalog_sync_continue = True
+            QTimer.singleShot(75, self.syncEdFrameCatalog)
+            return
+        store.record_source_result(
+            "ED-Frame incremental sync", success=True,
+        )
+        backup_ok = (
+            self._schedule_mining_market_backup()
+            if self._edframe_catalog_sync_rows else True
+        )
+        self._edframe_catalog_sync_status = (
+            f"Up to date · {local_count:,} local markets · "
+            f"{self._edframe_catalog_sync_rows:,} changes merged"
+        )
+        if not backup_ok:
+            self._edframe_catalog_sync_status += " · backup retry pending"
+        self._append_edframe_catalog_log(
+            f"Offline catalog current · {local_count:,} markets"
+        )
         self.connectionChanged.emit()
         self.miningChanged.emit()
 
@@ -3516,6 +3700,13 @@ class NavigationMixin:
         self._mining_verification_failures = 0
         self._mining_verification_cache = {}
         self._mining_powerplay_market_verification_cache = {}
+        self._active_edframe_catalog_sync_request = None
+        self._edframe_catalog_sync_busy = False
+        self._edframe_catalog_sync_rows = 0
+        self._edframe_catalog_sync_continue = False
+        self._edframe_catalog_sync_status = (
+            "Rebuild queued · retained data is cleared only for this profile"
+        )
         self._mining_verification_status = (
             "Ready · verifies top routes after search"
         )
@@ -3606,6 +3797,9 @@ class NavigationMixin:
         )
         self.miningChanged.emit()
         self.stateChanged.emit()
+        self.connectionChanged.emit()
+        if saved and getattr(self, "_edframe_catalog_enabled", True):
+            QTimer.singleShot(0, self.syncEdFrameCatalog)
 
 
     @Slot(object)

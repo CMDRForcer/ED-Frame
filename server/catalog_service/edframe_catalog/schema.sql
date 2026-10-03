@@ -34,6 +34,8 @@ CREATE TABLE IF NOT EXISTS stations (
 
 CREATE INDEX IF NOT EXISTS stations_system_idx ON stations (LOWER(system_name));
 CREATE INDEX IF NOT EXISTS stations_services_idx ON stations USING GIN (services);
+CREATE INDEX IF NOT EXISTS stations_received_idx
+    ON stations (received_at, market_id);
 
 CREATE TABLE IF NOT EXISTS markets (
     market_id BIGINT NOT NULL,
@@ -65,6 +67,8 @@ ALTER TABLE markets ADD COLUMN IF NOT EXISTS status_flags JSONB;
 CREATE INDEX IF NOT EXISTS markets_search_idx
     ON markets (commodity, observed_at DESC, sell_price DESC);
 CREATE INDEX IF NOT EXISTS markets_system_idx ON markets (LOWER(system_name));
+CREATE INDEX IF NOT EXISTS markets_received_idx
+    ON markets (received_at, market_id, commodity);
 
 -- Installations created before the station catalog already contain reliable
 -- market-to-station mappings. Make those stations immediately available and

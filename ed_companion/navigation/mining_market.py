@@ -48,6 +48,40 @@ def fetch_edframe_catalog_status(*, get: Any, timeout: int = 12) -> dict[str, An
     return payload
 
 
+def fetch_edframe_market_delta(
+    *, cursor: str = "", get: Any, timeout: int = 20, limit: int = 1000,
+) -> dict[str, Any]:
+    """Fetch one anonymous, resumable page for the local offline catalog."""
+    bounded_limit = max(1, min(1000, int(limit or 1000)))
+    params = {
+        "commodities": ",".join(sorted(MINING_COMMODITIES)),
+        "limit": bounded_limit,
+    }
+    if str(cursor or "").strip():
+        params["cursor"] = str(cursor).strip()
+    response = get(
+        f"{EDFRAME_CATALOG_BASE}/v1/sync/markets",
+        params=params, timeout=timeout,
+    )
+    response.raise_for_status()
+    payload = response.json()
+    if not isinstance(payload, dict):
+        raise MiningMarketError("ED-Frame returned an invalid sync response")
+    rows = project_edframe_catalog_markets(payload, "")
+    next_cursor = str(payload.get("nextCursor") or "").strip()
+    has_more = bool(payload.get("hasMore"))
+    if rows and not next_cursor:
+        raise MiningMarketError("ED-Frame sync response has no resume cursor")
+    if has_more and (not rows or next_cursor == str(cursor or "").strip()):
+        raise MiningMarketError("ED-Frame sync cursor did not advance")
+    return {
+        "rows": rows,
+        "nextCursor": next_cursor,
+        "hasMore": has_more,
+        "generatedAt": str(payload.get("generatedAt") or ""),
+    }
+
+
 def fetch_edframe_system_coordinates(
     system: str, *, get: Any, timeout: int = 12,
 ) -> dict[str, Any]:
@@ -401,7 +435,7 @@ def project_market_imports(
 
 
 def project_edframe_catalog_markets(
-    payload: Any, commodity: str,
+    payload: Any, commodity: str = "",
 ) -> list[dict[str, Any]]:
     """Project the central ED-Frame read-only catalog into local rows."""
     rows = payload.get("results") if isinstance(payload, dict) else None
@@ -410,9 +444,12 @@ def project_edframe_catalog_markets(
     commodity_id = mining_commodity_id(commodity)
     result = []
     for source_row in rows:
-        if not isinstance(source_row, dict) or mining_commodity_id(
-            source_row.get("commodity")
-        ) != commodity_id:
+        if not isinstance(source_row, dict):
+            continue
+        row_commodity = mining_commodity_id(source_row.get("commodity"))
+        if row_commodity not in MINING_COMMODITIES or (
+            commodity_id and row_commodity != commodity_id
+        ):
             continue
         station = str(source_row.get("station") or "").strip()
         system = str(source_row.get("system") or "").strip()
@@ -430,7 +467,7 @@ def project_edframe_catalog_markets(
         demand = max(0, _integer(source_row.get("demand")))
         demand_bracket = max(0, _integer(source_row.get("demandBracket")))
         result.append({
-            "commodity": commodity_id,
+            "commodity": row_commodity,
             "marketId": market_id,
             "station": station,
             "system": system,

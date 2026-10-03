@@ -1,6 +1,9 @@
 import unittest
 
-from ed_companion.phase14.controller_navigation import NavigationMixin
+from ed_companion.phase14.controller_navigation import (
+    NavigationMixin,
+    _merge_edframe_market_delta_page,
+)
 
 
 class Emitter:
@@ -26,8 +29,75 @@ class ControllerStub:
     def _save_ui_config(self):
         pass
 
+    def _schedule_mining_market_backup(self):
+        return self._mining_market_store.backup()
+
+
+class SyncStore:
+    def __init__(self):
+        self.events = []
+        self.values = {}
+
+    def ingest(self, rows, *, create_backup=True):
+        self.events.append(("ingest", list(rows), create_backup))
+        return len(rows)
+
+    def set_metadata(self, key, value):
+        self.events.append(("cursor", key, value))
+        self.values[key] = value
+
+    def count(self):
+        return 321
+
+    def record_source_result(self, source, *, success, error=""):
+        self.events.append(("source", source, success, error))
+
+    def backup(self):
+        self.events.append(("backup",))
+        return True
+
 
 class EdFrameCatalogStatusTests(unittest.TestCase):
+    def test_incremental_page_is_merged_before_resume_cursor_advances(self):
+        store = SyncStore()
+
+        page = _merge_edframe_market_delta_page(store, {
+            "rows": [{"commodity": "platinum"}],
+            "nextCursor": "page-2", "hasMore": False,
+            "generatedAt": "2026-10-03T10:00:00Z",
+        })
+
+        self.assertEqual(store.events[0][0], "ingest")
+        self.assertEqual(store.events[1], (
+            "cursor", "edframe_market_sync_cursor", "page-2",
+        ))
+        self.assertEqual(page["ingested"], 1)
+        self.assertEqual(page["localCount"], 321)
+
+    def test_completed_incremental_page_updates_visible_sync_state(self):
+        controller = ControllerStub()
+        store = SyncStore()
+        controller._mining_market_store = store
+        controller._active_edframe_catalog_sync_request = {
+            "id": "sync", "generation": 7,
+        }
+        controller._profile_generation = 7
+        controller._edframe_catalog_sync_busy = True
+        controller._edframe_catalog_sync_rows = 0
+        controller._mining_market_revision = 0
+        controller._mining_market_cache_status = lambda: "321 retained"
+
+        NavigationMixin._finish_edframe_catalog_sync(controller, {
+            "id": "sync", "generation": 7, "success": True,
+            "ingested": 1, "rowCount": 1, "localCount": 321,
+            "nextCursor": "page-2", "hasMore": False,
+            "generatedAt": "2026-10-03T10:00:00Z",
+        })
+
+        self.assertTrue(any(event[0] == "backup" for event in store.events))
+        self.assertEqual(controller._edframe_catalog_stats["localMarkets"], 321)
+        self.assertIn("Up to date", controller._edframe_catalog_sync_status)
+
     def test_new_station_and_completeness_metrics_are_retained(self):
         controller = ControllerStub()
         NavigationMixin._finish_edframe_catalog_status(controller, {

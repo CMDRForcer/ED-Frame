@@ -5,6 +5,7 @@ from ed_companion.navigation.mining_market import (
     EDDATA_MARKET_SOURCE,
     MiningMarketError,
     fetch_edframe_catalog_status,
+    fetch_edframe_market_delta,
     fetch_edframe_system_coordinates,
     fetch_edsm_system_coordinates,
     fetch_market_imports,
@@ -32,6 +33,51 @@ class _Response:
 
 
 class MiningMarketTests(unittest.TestCase):
+    def test_incremental_sync_is_anonymous_bounded_and_resumable(self):
+        calls = []
+
+        def get(url, **kwargs):
+            calls.append((url, kwargs))
+            return _Response({
+                "generatedAt": "2026-10-03T10:00:00Z",
+                "nextCursor": "cursor-2",
+                "hasMore": True,
+                "results": [{
+                    "marketId": 42, "commodity": "platinum",
+                    "station": "Safe Port", "system": "HIP 1",
+                    "sellPrice": 260000, "demand": 9000,
+                    "observedAt": "2026-10-03T10:00:00Z",
+                }],
+            })
+
+        page = fetch_edframe_market_delta(
+            cursor="cursor-1", get=get, limit=250,
+        )
+
+        self.assertEqual(page["nextCursor"], "cursor-2")
+        self.assertTrue(page["hasMore"])
+        self.assertEqual(page["rows"][0]["commodity"], "platinum")
+        url, kwargs = calls[0]
+        self.assertTrue(url.endswith("/v1/sync/markets"))
+        self.assertEqual(kwargs["params"]["cursor"], "cursor-1")
+        self.assertEqual(kwargs["params"]["limit"], 250)
+        self.assertIn("platinum", kwargs["params"]["commodities"])
+        self.assertNotIn("commander", str((url, kwargs)).casefold())
+
+    def test_incremental_sync_rejects_a_non_advancing_cursor(self):
+        def get(_url, **_kwargs):
+            return _Response({
+                "nextCursor": "same", "hasMore": True, "results": [{
+                    "marketId": 42, "commodity": "platinum",
+                    "station": "Safe Port", "system": "HIP 1",
+                    "sellPrice": 260000, "demand": 9000,
+                    "observedAt": "2026-10-03T10:00:00Z",
+                }],
+            })
+
+        with self.assertRaises(MiningMarketError):
+            fetch_edframe_market_delta(cursor="same", get=get)
+
     def test_central_catalog_status_projects_public_counts(self):
         calls = []
 

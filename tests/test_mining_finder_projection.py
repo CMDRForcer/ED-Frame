@@ -561,6 +561,7 @@ class MiningFinderProjectionTests(unittest.TestCase):
             controller._pending_mining_candidates = [{"ring": "Pending"}]
             controller.miningChanged = Mock()
             controller.stateChanged = Mock()
+            controller.connectionChanged = Mock()
 
             controller.resetMiningCatalog()
 

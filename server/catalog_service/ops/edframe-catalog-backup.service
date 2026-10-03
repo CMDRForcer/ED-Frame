@@ -5,7 +5,7 @@ After=docker.service
 
 [Service]
 Type=oneshot
-ExecStart=/opt/edframe-catalog/server/catalog_service/ops/catalog-backup.sh
+ExecStart=/bin/sh /opt/edframe-catalog/server/catalog_service/ops/catalog-backup.sh
 Nice=10
 IOSchedulingClass=best-effort
 IOSchedulingPriority=7

@@ -479,6 +479,15 @@ class CockpitController(
         self._edframe_catalog_stats = {}
         self._edframe_catalog_log = []
         self._active_edframe_catalog_request = None
+        self._edframe_catalog_sync_busy = False
+        self._edframe_catalog_sync_status = (
+            "Local catalog waiting for server check"
+            if self._edframe_catalog_enabled
+            else "Paused · retained local catalog remains available"
+        )
+        self._edframe_catalog_sync_rows = 0
+        self._edframe_catalog_sync_continue = False
+        self._active_edframe_catalog_sync_request = None
         self._background_mode = bool(ui_config.get("background_mode", False))
         self._autostart_enabled = bool(ui_config.get("autostart_enabled", False))
         self._trader_preference = str(
@@ -619,6 +628,9 @@ class CockpitController(
         self.miningMarketFinished.connect(self._finish_mining_market_sync)
         self.edFrameCatalogStatusFinished.connect(
             self._finish_edframe_catalog_status
+        )
+        self.edFrameCatalogSyncFinished.connect(
+            self._finish_edframe_catalog_sync
         )
         self._mining_powerplay_catalog = self._read_local_json(
             self.mining_powerplay_catalog_file, {}
@@ -2419,6 +2431,13 @@ class CockpitController(
         self._mining_verification_failures = 0
         self._mining_verification_cache = {}
         self._mining_powerplay_market_verification_cache = {}
+        self._active_edframe_catalog_sync_request = None
+        self._edframe_catalog_sync_busy = False
+        self._edframe_catalog_sync_rows = 0
+        self._edframe_catalog_sync_continue = False
+        self._edframe_catalog_sync_status = (
+            "Local catalog waiting for profile sync"
+        )
         self._active_mining_market_request = None
         self._pending_mining_market_query = None
         self._mining_market_busy = False
@@ -2586,6 +2605,11 @@ class CockpitController(
             "EDDN context switched to isolated profile %s at %s",
             context.key, context.journal_root,
         )
+        if (
+            hasattr(self, "_network_threads_lock")
+            and getattr(self, "_edframe_catalog_enabled", True)
+        ):
+            QTimer.singleShot(0, self.syncEdFrameCatalog)
         return True
 
 
@@ -2705,7 +2729,8 @@ class CockpitController(
         for timer_name in (
             "timer", "refreshDebounceTimer", "craftConfirmationTimer",
             "hgeBatchTimer", "spanshAutoRefreshTimer",
-            "miningMarketAutoRefreshTimer", "_mining_market_retry_timer",
+            "miningMarketAutoRefreshTimer", "edFrameCatalogStatusTimer",
+            "_mining_market_retry_timer",
             "_frontier_watchdog",
         ):
             timer = getattr(self, timer_name, None)

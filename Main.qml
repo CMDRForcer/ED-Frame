@@ -7874,6 +7874,16 @@ ApplicationWindow {
                                     wrapMode: Text.WordWrap; Layout.fillWidth: true
                                 }
                                 Label {
+                                    visible: cockpit.edFrameCatalogEnabled
+                                    text: window.t(
+                                        "connections.edframe_offline_sync",
+                                        "OFFLINE CATALOG")
+                                          + " · " + cockpit.edFrameCatalogSyncStatus
+                                    color: cockpit.edFrameCatalogSyncBusy ? cyan : textSecondary
+                                    font.pixelSize: 9; font.bold: true
+                                    wrapMode: Text.WordWrap; Layout.fillWidth: true
+                                }
+                                Label {
                                     visible: cockpit.edFrameCatalogOnline
                                     text: window.tf(
                                         "connections.edframe_completeness",
@@ -7908,9 +7918,12 @@ ApplicationWindow {
                                     CockpitButton {
                                         text: cockpit.edFrameCatalogBusy
                                               ? window.t("status.checking", "CHECKING…")
+                                              : cockpit.edFrameCatalogSyncBusy
+                                                ? window.t("status.syncing", "SYNCING…")
                                               : window.t("connections.check_now", "CHECK NOW")
                                         enabled: cockpit.edFrameCatalogEnabled
                                                  && !cockpit.edFrameCatalogBusy
+                                                 && !cockpit.edFrameCatalogSyncBusy
                                         onClicked: cockpit.refreshEdFrameCatalogStatus()
                                     }
                                 }

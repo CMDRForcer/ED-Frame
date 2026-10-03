@@ -613,6 +613,8 @@ Item {
                         ? appWindow.t("mining.server_off", "SERVER OFF · LOCAL ACTIVE")
                         : cockpit.edFrameCatalogBusy
                           ? appWindow.t("mining.server_checking", "SERVER · CHECKING…")
+                          : cockpit.edFrameCatalogSyncBusy
+                            ? appWindow.t("mining.server_syncing", "SERVER · SYNCING CATALOG…")
                           : cockpit.edFrameCatalogOnline
                             ? appWindow.tf(
                                 "mining.server_online",
@@ -622,7 +624,8 @@ Item {
                                 "mining.server_offline",
                                 "SERVER OFFLINE · LOCAL ACTIVE")
             tone: cockpit.edFrameCatalogOnline ? green
-                  : cockpit.edFrameCatalogBusy ? cyan : orange
+                  : (cockpit.edFrameCatalogBusy
+                     || cockpit.edFrameCatalogSyncBusy) ? cyan : orange
             ToolTip.visible: edFrameServerHover.hovered
             ToolTip.delay: 250
             ToolTip.text: cockpit.edFrameCatalogStatus
@@ -632,6 +635,7 @@ Item {
                                      "Last successful contact")
                                    + " · " + cockpit.edFrameCatalogLastSuccess
                                  : "")
+                              + "\n" + cockpit.edFrameCatalogSyncStatus
             HoverHandler { id: edFrameServerHover }
         }
         StatusBadge {
@@ -640,7 +644,8 @@ Item {
                         + " · " + cockpit.miningCurrentAction
             tone: cockpit.miningSyncBusy || cockpit.miningMarketSyncBusy
                   || cockpit.miningVerificationBusy
-                  || cockpit.edFrameCatalogBusy ? orange : cyan
+                  || cockpit.edFrameCatalogBusy
+                  || cockpit.edFrameCatalogSyncBusy ? orange : cyan
         }
     }
 

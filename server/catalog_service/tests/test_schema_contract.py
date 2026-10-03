@@ -23,6 +23,8 @@ class SchemaContractTests(unittest.TestCase):
         self.assertNotIn("TRUNCATE", schema.upper())
         self.assertIn("Backfilled from retained market catalog", schema)
         self.assertIn("ON CONFLICT (market_id) DO NOTHING", schema)
+        self.assertIn("markets_received_idx", schema)
+        self.assertIn("stations_received_idx", schema)
 
     def test_public_api_exposes_station_and_full_market_contract(self):
         source = (SERVICE / "edframe_catalog" / "api.py").read_text(
@@ -40,6 +42,9 @@ class SchemaContractTests(unittest.TestCase):
         self.assertIn('"M": ("M", "L")', source)
         self.assertIn('"L": ("L",)', source)
         self.assertIn("st.fleet_carrier IS NOT TRUE", source)
+        self.assertIn('@app.get("/v1/sync/markets")', source)
+        self.assertIn("nextCursor", source)
+        self.assertIn("ORDER BY sync_at, market_id, commodity", source)
 
 
 if __name__ == "__main__":

@@ -1,10 +1,13 @@
 from __future__ import annotations
 
+import base64
+import binascii
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
+import json
 from typing import Annotated
 
-from fastapi import FastAPI, Query
+from fastapi import FastAPI, HTTPException, Query
 from fastapi.responses import ORJSONResponse
 
 from . import __version__
@@ -35,6 +38,39 @@ def _percent(part: int, whole: int) -> float:
     return round((part * 100.0 / whole), 1) if whole else 0.0
 
 
+def _encode_market_cursor(
+    sync_at: datetime | str, market_id: int, commodity: str,
+) -> str:
+    stamp = (
+        sync_at.astimezone(timezone.utc).isoformat()
+        if isinstance(sync_at, datetime) else str(sync_at)
+    )
+    payload = json.dumps(
+        [1, stamp, int(market_id), str(commodity)],
+        ensure_ascii=True, separators=(",", ":"),
+    ).encode("utf-8")
+    return base64.urlsafe_b64encode(payload).decode("ascii").rstrip("=")
+
+
+def _decode_market_cursor(value: str | None) -> tuple[datetime, int, str]:
+    if not value:
+        return datetime(1970, 1, 1, tzinfo=timezone.utc), 0, ""
+    try:
+        text = str(value).strip()
+        decoded = base64.urlsafe_b64decode(text + "=" * (-len(text) % 4))
+        version, stamp, market_id, commodity = json.loads(decoded)
+        parsed = datetime.fromisoformat(str(stamp).replace("Z", "+00:00"))
+        if version != 1 or parsed.tzinfo is None or int(market_id) < 0:
+            raise ValueError("invalid cursor fields")
+        return (
+            parsed.astimezone(timezone.utc), int(market_id), str(commodity),
+        )
+    except (
+        binascii.Error, json.JSONDecodeError, TypeError, ValueError,
+    ) as exc:
+        raise HTTPException(status_code=400, detail="Invalid market cursor") from exc
+
+
 @app.get("/")
 def root() -> dict:
     return {
@@ -43,6 +79,7 @@ def root() -> dict:
         "status": "/v1/status",
         "health": "/healthz",
         "stations": "/v1/stations/search",
+        "marketSync": "/v1/sync/markets",
     }
 
 
@@ -192,6 +229,109 @@ def suggest_systems(
     return {"generatedAt": _now(), "results": rows}
 
 
+@app.get("/v1/sync/markets")
+def sync_markets(
+    cursor: Annotated[str | None, Query(max_length=512)] = None,
+    commodities: Annotated[str | None, Query(max_length=2048)] = None,
+    limit: Annotated[int, Query(ge=1, le=1000)] = 500,
+) -> dict:
+    """Return a resumable stream of changed market and station facts.
+
+    The cursor advances over the newest of a market or its station metadata.
+    A station update therefore enriches retained market rows even when the
+    commodity price itself has not changed.
+    """
+    cursor_at, cursor_market_id, cursor_commodity = _decode_market_cursor(
+        cursor
+    )
+    clauses = [
+        "(sync_at, market_id, commodity) > (%s, %s, %s)",
+    ]
+    values: list[object] = [
+        cursor_at, cursor_market_id, cursor_commodity,
+    ]
+    requested = sorted({
+        item.strip().casefold()
+        for item in str(commodities or "").split(",")
+        if item.strip()
+    })
+    if requested:
+        if len(requested) > 100:
+            raise HTTPException(
+                status_code=400, detail="Too many requested commodities",
+            )
+        clauses.append("commodity = ANY(%s)")
+        values.append(requested)
+    values.append(limit + 1)
+    with connection() as conn:
+        rows = conn.execute(
+            f"""
+            WITH changed AS (
+                SELECT m.market_id, m.commodity,
+                       COALESCE(NULLIF(st.station_name, ''), m.station_name)
+                           AS station_name,
+                       COALESCE(NULLIF(st.system_name, ''), m.system_name)
+                           AS system_name,
+                       m.mean_price, m.buy_price, m.stock, m.stock_bracket,
+                       m.sell_price, m.demand, m.demand_bracket,
+                       m.status_flags, m.observed_at, m.received_at,
+                       s.x, s.y, s.z, m.source,
+                       st.station_type, st.system_address,
+                       st.landing_pad_size, st.distance_to_arrival_ls,
+                       st.services, st.economies, st.primary_economy,
+                       st.government, st.controlling_faction,
+                       st.fleet_carrier, st.carrier_docking_access,
+                       st.prohibited,
+                       GREATEST(
+                           m.received_at,
+                           COALESCE(st.received_at, m.received_at)
+                       ) AS sync_at
+                FROM markets m
+                LEFT JOIN systems s
+                  ON LOWER(s.name) = LOWER(m.system_name)
+                LEFT JOIN stations st ON st.market_id = m.market_id
+            )
+            SELECT market_id AS "marketId", commodity,
+                   station_name AS station, system_name AS system,
+                   mean_price AS "meanPrice", buy_price AS "buyPrice",
+                   stock, stock_bracket AS "stockBracket",
+                   sell_price AS "sellPrice", demand,
+                   demand_bracket AS "demandBracket",
+                   status_flags AS "statusFlags",
+                   observed_at AS "observedAt", received_at AS "receivedAt",
+                   x, y, z, source,
+                   station_type AS "stationType",
+                   system_address AS "systemAddress",
+                   landing_pad_size AS "landingPadSize",
+                   distance_to_arrival_ls AS "distanceToArrivalLs",
+                   services, economies, primary_economy AS "primaryEconomy",
+                   government, controlling_faction AS "controllingFaction",
+                   fleet_carrier AS "fleetCarrier",
+                   carrier_docking_access AS "carrierDockingAccess",
+                   prohibited, sync_at AS "syncAt"
+            FROM changed
+            WHERE {' AND '.join(clauses)}
+            ORDER BY sync_at, market_id, commodity
+            LIMIT %s
+            """,
+            values,
+        ).fetchall()
+    has_more = len(rows) > limit
+    page = rows[:limit]
+    next_cursor = str(cursor or "")
+    if page:
+        last = page[-1]
+        next_cursor = _encode_market_cursor(
+            last["syncAt"], last["marketId"], last["commodity"],
+        )
+    return {
+        "generatedAt": _now(),
+        "results": page,
+        "nextCursor": next_cursor,
+        "hasMore": has_more,
+    }
+
+
 @app.get("/v1/markets/search")
 def search_markets(
     commodity: Annotated[str, Query(min_length=2, max_length=80)],
@@ -240,7 +380,10 @@ def search_markets(
         rows = conn.execute(
             f"""
             SELECT m.market_id AS "marketId", m.commodity,
-                   m.station_name AS station, m.system_name AS system,
+                   COALESCE(NULLIF(st.station_name, ''), m.station_name)
+                       AS station,
+                   COALESCE(NULLIF(st.system_name, ''), m.system_name)
+                       AS system,
                    m.mean_price AS "meanPrice", m.buy_price AS "buyPrice",
                    m.stock, m.stock_bracket AS "stockBracket",
                    m.sell_price AS "sellPrice", m.demand,

@@ -44,6 +44,19 @@ class ConnectionSourceTabTests(unittest.TestCase):
         self.assertIn('"name": "ED-FRAME SERVER"', source)
         self.assertIn('else "ONLINE" if self._edframe_catalog_online', source)
 
+    def test_edframe_tab_exposes_offline_catalog_sync_progress(self):
+        qml = (ROOT / "Main.qml").read_text(encoding="utf-8")
+        mining_qml = (
+            ROOT / "qml" / "pages" / "MiningFinderPage.qml"
+        ).read_text(encoding="utf-8")
+        self.assertIn("cockpit.edFrameCatalogSyncStatus", qml)
+        self.assertIn("cockpit.edFrameCatalogSyncBusy", qml)
+        self.assertIn("cockpit.edFrameCatalogSyncStatus", mining_qml)
+        controller_source = (
+            ROOT / "ed_companion" / "phase14" / "controller_navigation.py"
+        ).read_text(encoding="utf-8")
+        self.assertIn('"CATALOG SYNC"', controller_source)
+
 
 if __name__ == "__main__":
     unittest.main()
