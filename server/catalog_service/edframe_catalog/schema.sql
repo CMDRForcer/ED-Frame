@@ -37,6 +37,42 @@ CREATE INDEX IF NOT EXISTS stations_services_idx ON stations USING GIN (services
 CREATE INDEX IF NOT EXISTS stations_received_idx
     ON stations (received_at, market_id);
 
+CREATE TABLE IF NOT EXISTS station_outfitting (
+    market_id BIGINT PRIMARY KEY,
+    system_name TEXT NOT NULL,
+    station_name TEXT NOT NULL,
+    modules JSONB NOT NULL,
+    horizons BOOLEAN,
+    odyssey BOOLEAN,
+    observed_at TIMESTAMPTZ NOT NULL,
+    received_at TIMESTAMPTZ NOT NULL,
+    source TEXT NOT NULL,
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS station_outfitting_modules_idx
+    ON station_outfitting USING GIN (modules);
+CREATE INDEX IF NOT EXISTS station_outfitting_sync_idx
+    ON station_outfitting (updated_at, market_id);
+
+CREATE TABLE IF NOT EXISTS station_shipyards (
+    market_id BIGINT PRIMARY KEY,
+    system_name TEXT NOT NULL,
+    station_name TEXT NOT NULL,
+    ships JSONB NOT NULL,
+    horizons BOOLEAN,
+    odyssey BOOLEAN,
+    observed_at TIMESTAMPTZ NOT NULL,
+    received_at TIMESTAMPTZ NOT NULL,
+    source TEXT NOT NULL,
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS station_shipyards_ships_idx
+    ON station_shipyards USING GIN (ships);
+CREATE INDEX IF NOT EXISTS station_shipyards_sync_idx
+    ON station_shipyards (updated_at, market_id);
+
 CREATE TABLE IF NOT EXISTS markets (
     market_id BIGINT NOT NULL,
     commodity TEXT NOT NULL,

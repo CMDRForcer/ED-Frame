@@ -5,8 +5,10 @@ from fastapi import HTTPException
 
 from edframe_catalog.api import (
     _decode_market_cursor,
+    _decode_offer_cursor,
     _decode_state_cursor,
     _encode_market_cursor,
+    _encode_offer_cursor,
     _encode_state_cursor,
 )
 
@@ -38,6 +40,14 @@ class SyncCursorTests(unittest.TestCase):
         self.assertEqual(
             _decode_state_cursor(cursor),
             (stamp, "SIGNAL", "secret-identity"),
+        )
+
+    def test_station_offer_cursor_round_trip_is_stable_and_opaque(self):
+        stamp = datetime(2026, 10, 3, 10, 20, 30, tzinfo=timezone.utc)
+        cursor = _encode_offer_cursor(stamp, "OUTFITTING", 42)
+        self.assertNotIn("OUTFITTING", cursor)
+        self.assertEqual(
+            _decode_offer_cursor(cursor), (stamp, "OUTFITTING", 42)
         )
 
 

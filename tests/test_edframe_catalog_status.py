@@ -3,6 +3,7 @@ import unittest
 from ed_companion.phase14.controller_navigation import (
     NavigationMixin,
     _merge_edframe_market_delta_page,
+    _merge_edframe_station_offer_delta_page,
 )
 
 
@@ -42,6 +43,16 @@ class SyncStore:
         self.events.append(("ingest", list(rows), create_backup))
         return len(rows)
 
+    def ingest_station_offers(self, rows):
+        self.events.append(("offers", list(rows)))
+        return len(rows)
+
+    def station_offer_summary(self):
+        return {
+            "stations": 12, "outfittingStations": 10,
+            "shipyardStations": 8,
+        }
+
     def set_metadata(self, key, value):
         self.events.append(("cursor", key, value))
         self.values[key] = value
@@ -58,6 +69,19 @@ class SyncStore:
 
 
 class EdFrameCatalogStatusTests(unittest.TestCase):
+    def test_station_offer_page_is_merged_before_cursor_advances(self):
+        store = SyncStore()
+        page = _merge_edframe_station_offer_delta_page(store, {
+            "rows": [{"kind": "OUTFITTING", "marketId": 42}],
+            "nextCursor": "offers-2", "hasMore": False,
+            "generatedAt": "2026-10-03T10:00:00Z",
+        })
+        self.assertEqual(store.events[0][0], "offers")
+        self.assertEqual(store.events[1], (
+            "cursor", "edframe_station_offer_sync_cursor", "offers-2",
+        ))
+        self.assertEqual(page["localSummary"]["stations"], 12)
+
     def test_incremental_page_is_merged_before_resume_cursor_advances(self):
         store = SyncStore()
 
@@ -113,6 +137,10 @@ class EdFrameCatalogStatusTests(unittest.TestCase):
                     "commodities": 50,
                     "state_bgs_snapshots": 6,
                     "state_signals": 7,
+                    "outfitting_stations": 8,
+                    "shipyard_stations": 9,
+                    "module_offers": 100,
+                    "ship_offers": 20,
                 },
                 "completeness": {
                     "marketDetailPercent": 99.5,
@@ -140,6 +168,10 @@ class EdFrameCatalogStatusTests(unittest.TestCase):
             controller._edframe_catalog_stats["stateBgsSnapshots"], 6
         )
         self.assertEqual(controller._edframe_catalog_stats["stateSignals"], 7)
+        self.assertEqual(
+            controller._edframe_catalog_stats["outfittingStations"], 8
+        )
+        self.assertEqual(controller._edframe_catalog_stats["shipOffers"], 20)
         self.assertIn("20 stations", controller._edframe_catalog_status)
 
     def test_old_server_does_not_report_missing_station_catalog_as_zero(self):

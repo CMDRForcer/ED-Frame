@@ -19,7 +19,7 @@ from .mining_commodities import mining_commodity_id
 
 LOGGER = logging.getLogger(__name__)
 
-SCHEMA_VERSION = 4
+SCHEMA_VERSION = 5
 CURRENT_RETENTION_DAYS = 90
 HISTORY_RETENTION_DAYS = 30
 MAX_CURRENT_ROWS = 150_000
@@ -178,6 +178,30 @@ class MarketCatalogStore:
                 ON market_current(commodity, observed_epoch, system_key);
                 CREATE INDEX IF NOT EXISTS market_current_coordinates
                 ON market_current(commodity, x, y, z);
+
+                CREATE TABLE IF NOT EXISTS station_offers (
+                    market_id INTEGER PRIMARY KEY,
+                    system TEXT NOT NULL DEFAULT '',
+                    station TEXT NOT NULL DEFAULT '',
+                    system_address INTEGER NOT NULL DEFAULT 0,
+                    station_type TEXT NOT NULL DEFAULT '',
+                    landing_pad_size TEXT NOT NULL DEFAULT '',
+                    distance_to_arrival REAL,
+                    x REAL,
+                    y REAL,
+                    z REAL,
+                    services_json TEXT NOT NULL DEFAULT '[]',
+                    modules_json TEXT NOT NULL DEFAULT '[]',
+                    ships_json TEXT NOT NULL DEFAULT '[]',
+                    outfitting_observed_at TEXT NOT NULL DEFAULT '',
+                    outfitting_observed_epoch REAL NOT NULL DEFAULT 0,
+                    shipyard_observed_at TEXT NOT NULL DEFAULT '',
+                    shipyard_observed_epoch REAL NOT NULL DEFAULT 0,
+                    received_at TEXT NOT NULL DEFAULT '',
+                    source TEXT NOT NULL DEFAULT ''
+                );
+                CREATE INDEX IF NOT EXISTS station_offers_system
+                ON station_offers(system COLLATE NOCASE, station COLLATE NOCASE);
 
                 CREATE TABLE IF NOT EXISTS market_history (
                     market_key TEXT NOT NULL,
@@ -709,6 +733,168 @@ class MarketCatalogStore:
         return int(self._read_rows(
             "SELECT COUNT(*) FROM market_history"
         )[0][0])
+
+    def ingest_station_offers(self, observations: Iterable[dict[str, Any]]) -> int:
+        """Merge complete station inventories without crossing their timestamps."""
+        prepared = []
+        for row in observations or []:
+            if not isinstance(row, dict):
+                continue
+            kind = str(row.get("kind") or "").strip().upper()
+            market_id = _integer(row.get("marketId"))
+            system = str(row.get("system") or "").strip()
+            station = str(row.get("station") or "").strip()
+            observed = _timestamp(row.get("observedAt"))
+            items = sorted({
+                str(item).strip().casefold()
+                for item in row.get("items", [])
+                if isinstance(item, str) and str(item).strip()
+            })
+            if (
+                kind not in {"OUTFITTING", "SHIPYARD"}
+                or market_id <= 0 or not system or not station
+                or observed is None or not items
+            ):
+                continue
+            coordinates = [
+                _number(row.get(axis)) for axis in ("x", "y", "z")
+            ]
+            if not all(value is not None for value in coordinates):
+                coordinates = [None, None, None]
+            modules = items if kind == "OUTFITTING" else []
+            ships = items if kind == "SHIPYARD" else []
+            prepared.append((
+                market_id, system, station,
+                _integer(row.get("systemAddress")),
+                str(row.get("stationType") or "").strip(),
+                str(row.get("landingPadSize") or "").strip().upper(),
+                _number(row.get("distanceToArrivalLs")), *coordinates,
+                _json_list(row.get("services")), _json_list(modules),
+                _json_list(ships),
+                observed.isoformat(timespec="seconds") if modules else "",
+                observed.timestamp() if modules else 0,
+                observed.isoformat(timespec="seconds") if ships else "",
+                observed.timestamp() if ships else 0,
+                str(row.get("receivedAt") or "").strip(),
+                str(row.get("source") or "").strip(),
+            ))
+        if not prepared:
+            return 0
+        statement = """
+            INSERT INTO station_offers(
+                market_id, system, station, system_address, station_type,
+                landing_pad_size, distance_to_arrival, x, y, z, services_json,
+                modules_json, ships_json, outfitting_observed_at,
+                outfitting_observed_epoch, shipyard_observed_at,
+                shipyard_observed_epoch, received_at, source
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(market_id) DO UPDATE SET
+                system=CASE WHEN excluded.system <> '' THEN excluded.system
+                    ELSE station_offers.system END,
+                station=CASE WHEN excluded.station <> '' THEN excluded.station
+                    ELSE station_offers.station END,
+                system_address=CASE WHEN excluded.system_address > 0
+                    THEN excluded.system_address ELSE station_offers.system_address END,
+                station_type=CASE WHEN excluded.station_type <> ''
+                    THEN excluded.station_type ELSE station_offers.station_type END,
+                landing_pad_size=CASE WHEN excluded.landing_pad_size <> ''
+                    THEN excluded.landing_pad_size
+                    ELSE station_offers.landing_pad_size END,
+                distance_to_arrival=COALESCE(
+                    excluded.distance_to_arrival, station_offers.distance_to_arrival),
+                x=COALESCE(excluded.x, station_offers.x),
+                y=COALESCE(excluded.y, station_offers.y),
+                z=COALESCE(excluded.z, station_offers.z),
+                services_json=CASE WHEN excluded.services_json <> '[]'
+                    THEN excluded.services_json ELSE station_offers.services_json END,
+                modules_json=CASE
+                    WHEN excluded.outfitting_observed_epoch >=
+                         station_offers.outfitting_observed_epoch
+                         AND excluded.outfitting_observed_epoch > 0
+                    THEN excluded.modules_json ELSE station_offers.modules_json END,
+                outfitting_observed_at=CASE
+                    WHEN excluded.outfitting_observed_epoch >=
+                         station_offers.outfitting_observed_epoch
+                         AND excluded.outfitting_observed_epoch > 0
+                    THEN excluded.outfitting_observed_at
+                    ELSE station_offers.outfitting_observed_at END,
+                outfitting_observed_epoch=MAX(
+                    excluded.outfitting_observed_epoch,
+                    station_offers.outfitting_observed_epoch),
+                ships_json=CASE
+                    WHEN excluded.shipyard_observed_epoch >=
+                         station_offers.shipyard_observed_epoch
+                         AND excluded.shipyard_observed_epoch > 0
+                    THEN excluded.ships_json ELSE station_offers.ships_json END,
+                shipyard_observed_at=CASE
+                    WHEN excluded.shipyard_observed_epoch >=
+                         station_offers.shipyard_observed_epoch
+                         AND excluded.shipyard_observed_epoch > 0
+                    THEN excluded.shipyard_observed_at
+                    ELSE station_offers.shipyard_observed_at END,
+                shipyard_observed_epoch=MAX(
+                    excluded.shipyard_observed_epoch,
+                    station_offers.shipyard_observed_epoch),
+                received_at=CASE WHEN excluded.received_at <> ''
+                    THEN excluded.received_at ELSE station_offers.received_at END,
+                source=CASE WHEN excluded.source <> '' THEN excluded.source
+                    ELSE station_offers.source END
+        """
+        with self._lock, closing(self._connect()) as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            connection.executemany(statement, prepared)
+            connection.commit()
+        return len(prepared)
+
+    def station_offer_summary(self) -> dict[str, int]:
+        row = self._read_rows("""
+            SELECT COUNT(*) AS stations,
+                   SUM(CASE WHEN modules_json <> '[]' THEN 1 ELSE 0 END)
+                       AS outfitting_stations,
+                   SUM(CASE WHEN ships_json <> '[]' THEN 1 ELSE 0 END)
+                       AS shipyard_stations
+            FROM station_offers
+        """)[0]
+        return {
+            "stations": int(row["stations"] or 0),
+            "outfittingStations": int(row["outfitting_stations"] or 0),
+            "shipyardStations": int(row["shipyard_stations"] or 0),
+        }
+
+    def stations_offering(self, item: str, *, kind: str) -> list[dict[str, Any]]:
+        """Return exact locally retained module or ship matches."""
+        wanted = str(item or "").strip().casefold()
+        column = "modules_json" if str(kind).upper() == "OUTFITTING" else (
+            "ships_json" if str(kind).upper() == "SHIPYARD" else ""
+        )
+        if not wanted or not column:
+            return []
+        result = []
+        for row in self._read_rows(
+            f"SELECT * FROM station_offers WHERE {column} <> '[]'"
+        ):
+            if wanted not in _loaded_list(row[column]):
+                continue
+            result.append({
+                "marketId": row["market_id"], "system": row["system"],
+                "station": row["station"],
+                "systemAddress": row["system_address"],
+                "stationType": row["station_type"],
+                "landingPadSize": row["landing_pad_size"],
+                "distanceToArrivalLs": row["distance_to_arrival"],
+                "coordinates": (
+                    [row["x"], row["y"], row["z"]]
+                    if all(row[key] is not None for key in ("x", "y", "z"))
+                    else []
+                ),
+                "services": _loaded_list(row["services_json"]),
+                "observedAt": row[
+                    "outfitting_observed_at" if column == "modules_json"
+                    else "shipyard_observed_at"
+                ],
+                "source": row["source"],
+            })
+        return result
 
     def record_source_result(
         self, source: str, *, success: bool, error: str = "",

@@ -1,6 +1,8 @@
 import unittest
 
-from edframe_catalog.database import upsert_batch, upsert_state_find_batch
+from edframe_catalog.database import (
+    upsert_batch, upsert_state_find_batch, upsert_station_offer_batch,
+)
 
 
 class RecordingConnection:
@@ -89,6 +91,26 @@ class DatabaseProjectionTests(unittest.TestCase):
         self.assertEqual(projected, 2)
         self.assertIn("state_bgs_snapshots", conn.calls[0][0])
         self.assertIn("state_signals", conn.calls[1][0])
+
+    def test_station_offer_kinds_use_separate_complete_inventory_tables(self):
+        conn = RecordingConnection()
+        base = {
+            "market_id": 42, "system_name": "Cubeo",
+            "station_name": "Chelomey Orbital", "horizons": True,
+            "odyssey": True, "observed_at": "2026-10-03T08:00:00Z",
+            "received_at": "2026-10-03T08:00:01Z",
+        }
+        projected = upsert_station_offer_batch(conn, [
+            {**base, "kind": "OUTFITTING", "items": '["int_fuelscoop"]',
+             "source": "EDDN outfitting/2"},
+            {**base, "kind": "SHIPYARD", "items": '["anaconda"]',
+             "source": "EDDN shipyard/2"},
+        ])
+        self.assertEqual(projected, 2)
+        self.assertIn("station_outfitting", conn.calls[0][0])
+        self.assertIn("modules", conn.calls[0][0])
+        self.assertIn("station_shipyards", conn.calls[1][0])
+        self.assertIn("ships", conn.calls[1][0])
 
 
 if __name__ == "__main__":

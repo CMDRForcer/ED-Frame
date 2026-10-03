@@ -257,6 +257,48 @@ def upsert_state_find_batch(
     return projected
 
 
+def upsert_station_offer_batch(
+    conn: psycopg.Connection,
+    offers: Iterable[dict[str, Any]],
+) -> int:
+    """Replace one station's complete offer list when its observation is newer."""
+    projected = 0
+    for row in offers:
+        kind = str(row.get("kind") or "").upper()
+        if kind == "OUTFITTING":
+            table, items_column = "station_outfitting", "modules"
+        elif kind == "SHIPYARD":
+            table, items_column = "station_shipyards", "ships"
+        else:
+            continue
+        conn.execute(
+            f"""
+            INSERT INTO {table}
+                (market_id, system_name, station_name, {items_column},
+                 horizons, odyssey, observed_at, received_at, source,
+                 updated_at)
+            VALUES
+                (%(market_id)s, %(system_name)s, %(station_name)s,
+                 %(items)s::jsonb, %(horizons)s, %(odyssey)s,
+                 %(observed_at)s, %(received_at)s, %(source)s, NOW())
+            ON CONFLICT (market_id) DO UPDATE SET
+                system_name = EXCLUDED.system_name,
+                station_name = EXCLUDED.station_name,
+                {items_column} = EXCLUDED.{items_column},
+                horizons = EXCLUDED.horizons,
+                odyssey = EXCLUDED.odyssey,
+                observed_at = EXCLUDED.observed_at,
+                received_at = EXCLUDED.received_at,
+                source = EXCLUDED.source,
+                updated_at = NOW()
+            WHERE EXCLUDED.observed_at >= {table}.observed_at
+            """,
+            row,
+        )
+        projected += 1
+    return projected
+
+
 def record_state(
     conn: psycopg.Connection,
     *,

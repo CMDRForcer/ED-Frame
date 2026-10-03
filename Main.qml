@@ -7884,12 +7884,34 @@ ApplicationWindow {
                                     wrapMode: Text.WordWrap; Layout.fillWidth: true
                                 }
                                 Label {
+                                    visible: cockpit.edFrameCatalogOnline
+                                    text: window.tf(
+                                        "connections.edframe_offer_counts",
+                                        "STATION OFFERS · %1 OUTFITTING STATIONS · %2 SHIPYARDS · %3 MODULES · %4 SHIPS",
+                                        [cockpit.edFrameCatalogStats.outfittingStations || 0,
+                                         cockpit.edFrameCatalogStats.shipyardStations || 0,
+                                         cockpit.edFrameCatalogStats.moduleOffers || 0,
+                                         cockpit.edFrameCatalogStats.shipOffers || 0])
+                                    color: textPrimary; font.pixelSize: 9; font.bold: true
+                                    wrapMode: Text.WordWrap; Layout.fillWidth: true
+                                }
+                                Label {
                                     visible: cockpit.edFrameCatalogEnabled
                                     text: window.t(
                                         "connections.edframe_offline_sync",
                                         "OFFLINE CATALOG")
                                           + " · " + cockpit.edFrameCatalogSyncStatus
                                     color: cockpit.edFrameCatalogSyncBusy ? cyan : textSecondary
+                                    font.pixelSize: 9; font.bold: true
+                                    wrapMode: Text.WordWrap; Layout.fillWidth: true
+                                }
+                                Label {
+                                    visible: cockpit.edFrameCatalogEnabled
+                                    text: window.t(
+                                        "connections.edframe_station_offer_sync",
+                                        "STATION OFFERS")
+                                          + " · " + cockpit.edFrameStationOfferSyncStatus
+                                    color: cockpit.edFrameStationOfferSyncBusy ? cyan : textSecondary
                                     font.pixelSize: 9; font.bold: true
                                     wrapMode: Text.WordWrap; Layout.fillWidth: true
                                 }
@@ -7940,12 +7962,15 @@ ApplicationWindow {
                                               ? window.t("status.checking", "CHECKING…")
                                               : cockpit.edFrameCatalogSyncBusy
                                                 ? window.t("status.syncing", "SYNCING…")
+                                              : cockpit.edFrameStationOfferSyncBusy
+                                                ? window.t("status.syncing", "SYNCING…")
                                               : cockpit.edFrameStateFindSyncBusy
                                                 ? window.t("status.syncing", "SYNCING…")
                                               : window.t("connections.check_now", "CHECK NOW")
                                         enabled: cockpit.edFrameCatalogEnabled
                                                  && !cockpit.edFrameCatalogBusy
                                                  && !cockpit.edFrameCatalogSyncBusy
+                                                 && !cockpit.edFrameStationOfferSyncBusy
                                                  && !cockpit.edFrameStateFindSyncBusy
                                         onClicked: cockpit.refreshEdFrameCatalogStatus()
                                     }

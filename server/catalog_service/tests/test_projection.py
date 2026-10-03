@@ -2,6 +2,7 @@ import unittest
 
 from edframe_catalog.projection import (
     project_markets,
+    project_station_offers,
     project_stations,
     project_system,
     project_state_bgs_snapshot,
@@ -146,6 +147,45 @@ class ProjectionTests(unittest.TestCase):
         }
         row = project_stations(payload, "2026-10-03T08:00:01Z")[0]
         self.assertIsNone(row["landing_pad_size"])
+
+    def test_outfitting_inventory_is_complete_normalized_and_anonymous(self):
+        payload = {
+            "$schemaRef": "https://eddn.edcd.io/schemas/outfitting/2",
+            "header": {"uploaderID": "private-name"},
+            "message": {
+                "timestamp": "2026-10-03T08:00:00Z",
+                "systemName": "Cubeo",
+                "stationName": "Chelomey Orbital",
+                "marketId": 42,
+                "horizons": True,
+                "odyssey": True,
+                "modules": ["Int_FuelScoop_Size8_Class5", "Hpt_BeamLaser"],
+            },
+        }
+        offer = project_station_offers(payload, "2026-10-03T08:00:01Z")[0]
+        station = project_stations(payload, "2026-10-03T08:00:01Z")[0]
+        self.assertEqual(offer["kind"], "OUTFITTING")
+        self.assertEqual(offer["market_id"], 42)
+        self.assertIn("int_fuelscoop_size8_class5", offer["items"])
+        self.assertNotIn("private-name", offer["items"])
+        self.assertEqual(station["station_name"], "Chelomey Orbital")
+
+    def test_shipyard_inventory_rejects_empty_and_keeps_exact_public_ids(self):
+        payload = {
+            "$schemaRef": "https://eddn.edcd.io/schemas/shipyard/2",
+            "message": {
+                "timestamp": "2026-10-03T08:00:00Z",
+                "systemName": "Cubeo", "stationName": "Chelomey Orbital",
+                "marketId": 42, "ships": ["Anaconda", "CobraMkIII"],
+            },
+        }
+        offer = project_station_offers(payload, "2026-10-03T08:00:01Z")[0]
+        self.assertEqual(offer["kind"], "SHIPYARD")
+        self.assertEqual(offer["items"], '["anaconda", "cobramkiii"]')
+        payload["message"]["ships"] = []
+        self.assertEqual(
+            project_station_offers(payload, "2026-10-03T08:00:01Z"), []
+        )
 
     def test_system_projection_keeps_public_location_only(self):
         row = project_system({

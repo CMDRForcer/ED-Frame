@@ -82,6 +82,39 @@ def fetch_edframe_market_delta(
     }
 
 
+def fetch_edframe_station_offer_delta(
+    *, cursor: str = "", get: Any, timeout: int = 20, limit: int = 500,
+) -> dict[str, Any]:
+    """Fetch one resumable page of public outfitting/shipyard inventories."""
+    bounded_limit = max(1, min(1000, int(limit or 500)))
+    params: dict[str, Any] = {"limit": bounded_limit}
+    if str(cursor or "").strip():
+        params["cursor"] = str(cursor).strip()
+    response = get(
+        f"{EDFRAME_CATALOG_BASE}/v1/sync/station-offers",
+        params=params, timeout=timeout,
+    )
+    response.raise_for_status()
+    payload = response.json()
+    if not isinstance(payload, dict) or not isinstance(payload.get("results"), list):
+        raise MiningMarketError(
+            "ED-Frame station offer sync returned an invalid response"
+        )
+    rows = [row for row in payload["results"] if isinstance(row, dict)]
+    next_cursor = str(payload.get("nextCursor") or "").strip()
+    has_more = bool(payload.get("hasMore"))
+    if rows and not next_cursor:
+        raise MiningMarketError("ED-Frame station offer sync has no resume cursor")
+    if has_more and (not rows or next_cursor == str(cursor or "").strip()):
+        raise MiningMarketError("ED-Frame station offer cursor did not advance")
+    return {
+        "rows": rows,
+        "nextCursor": next_cursor,
+        "hasMore": has_more,
+        "generatedAt": str(payload.get("generatedAt") or ""),
+    }
+
+
 def fetch_edframe_system_coordinates(
     system: str, *, get: Any, timeout: int = 12,
 ) -> dict[str, Any]:

@@ -6,6 +6,7 @@ from ed_companion.navigation.mining_market import (
     MiningMarketError,
     fetch_edframe_catalog_status,
     fetch_edframe_market_delta,
+    fetch_edframe_station_offer_delta,
     fetch_edframe_system_coordinates,
     fetch_edsm_system_coordinates,
     fetch_market_imports,
@@ -77,6 +78,34 @@ class MiningMarketTests(unittest.TestCase):
 
         with self.assertRaises(MiningMarketError):
             fetch_edframe_market_delta(cursor="same", get=get)
+
+    def test_station_offer_sync_is_anonymous_bounded_and_resumable(self):
+        calls = []
+
+        def get(url, **kwargs):
+            calls.append((url, kwargs))
+            return _Response({
+                "generatedAt": "2026-10-03T10:00:00Z",
+                "nextCursor": "offers-2", "hasMore": True,
+                "results": [{
+                    "kind": "OUTFITTING", "marketId": 42,
+                    "system": "Cubeo", "station": "Chelomey Orbital",
+                    "items": ["int_fuelscoop_size8_class5"],
+                    "observedAt": "2026-10-03T09:00:00Z",
+                }],
+            })
+
+        page = fetch_edframe_station_offer_delta(
+            cursor="offers-1", get=get, limit=250,
+        )
+        self.assertEqual(page["nextCursor"], "offers-2")
+        self.assertTrue(page["hasMore"])
+        url, kwargs = calls[0]
+        self.assertTrue(url.endswith("/v1/sync/station-offers"))
+        self.assertEqual(kwargs["params"], {
+            "cursor": "offers-1", "limit": 250,
+        })
+        self.assertNotIn("commander", str((url, kwargs)).casefold())
 
     def test_central_catalog_status_projects_public_counts(self):
         calls = []

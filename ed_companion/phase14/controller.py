@@ -489,6 +489,15 @@ class CockpitController(
         self._edframe_catalog_sync_rows = 0
         self._edframe_catalog_sync_continue = False
         self._active_edframe_catalog_sync_request = None
+        self._edframe_station_offer_sync_busy = False
+        self._edframe_station_offer_sync_status = (
+            "Station offers waiting for server check"
+            if self._edframe_catalog_enabled
+            else "Paused · retained local station offers remain available"
+        )
+        self._edframe_station_offer_sync_rows = 0
+        self._edframe_station_offer_sync_continue = False
+        self._active_edframe_station_offer_sync_request = None
         self._edframe_state_find_sync_busy = False
         self._edframe_state_find_sync_status = (
             "State Finds waiting for server check"
@@ -649,6 +658,9 @@ class CockpitController(
         )
         self.edFrameStateFindSyncFinished.connect(
             self._finish_edframe_state_find_sync
+        )
+        self.edFrameStationOfferSyncFinished.connect(
+            self._finish_edframe_station_offer_sync
         )
         self._mining_powerplay_catalog = self._read_local_json(
             self.mining_powerplay_catalog_file, {}
@@ -2455,6 +2467,13 @@ class CockpitController(
         self._edframe_catalog_sync_continue = False
         self._edframe_catalog_sync_status = (
             "Local catalog waiting for profile sync"
+        )
+        self._active_edframe_station_offer_sync_request = None
+        self._edframe_station_offer_sync_busy = False
+        self._edframe_station_offer_sync_rows = 0
+        self._edframe_station_offer_sync_continue = False
+        self._edframe_station_offer_sync_status = (
+            "Station offers waiting for profile sync"
         )
         self._active_edframe_state_find_sync_request = None
         self._edframe_state_find_sync_busy = False

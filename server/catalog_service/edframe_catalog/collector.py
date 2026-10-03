@@ -11,11 +11,12 @@ from ed_companion.integrations.eddn import EddnRelayDecodeError, decode_relay_fr
 
 from .database import (
     connection, ensure_schema, record_state, upsert_batch,
-    upsert_state_find_batch,
+    upsert_state_find_batch, upsert_station_offer_batch,
 )
 from .projection import (
     project_markets,
     project_sites,
+    project_station_offers,
     project_stations,
     project_system,
     project_state_bgs_snapshot,
@@ -84,6 +85,9 @@ def main() -> None:
                         conn,
                         [snapshot] if snapshot else [],
                         signals,
+                    )
+                    projected += upsert_station_offer_batch(
+                        conn, project_station_offers(payload, received_at)
                     )
                     record_state(
                         conn,

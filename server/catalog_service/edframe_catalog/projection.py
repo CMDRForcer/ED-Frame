@@ -120,7 +120,7 @@ def project_stations(
 ) -> list[dict[str, Any]]:
     """Project anonymous public station facts from commodity or Journal frames."""
     schema = schema_name(payload)
-    if schema not in {"commodity/3", "journal/1"}:
+    if schema not in {"commodity/3", "journal/1", "outfitting/2", "shipyard/2"}:
         return []
     message = _message(payload)
     event = str(message.get("event") or "")
@@ -165,6 +165,60 @@ def project_stations(
         "observed_at": str(message.get("timestamp") or received_at),
         "received_at": received_at,
         "source": f"EDDN {schema}" + (f":{event}" if event else ""),
+    }]
+
+
+def project_station_offers(
+    payload: dict[str, Any], received_at: str,
+) -> list[dict[str, Any]]:
+    """Project complete public outfitting or shipyard inventories.
+
+    EDDN v2 publishes invariant item identifiers only.  Normalising them to
+    casefolded strings makes exact server searches deterministic without
+    retaining uploader or Commander fields from the envelope.
+    """
+    schema = schema_name(payload)
+    contract = {
+        "outfitting/2": ("OUTFITTING", "modules"),
+        "shipyard/2": ("SHIPYARD", "ships"),
+    }.get(schema)
+    if contract is None:
+        return []
+    message = _message(payload)
+    system = _text(message.get("systemName"))
+    station = _text(message.get("stationName"))
+    market_id = _integer(message.get("marketId"))
+    raw_items = message.get(contract[1])
+    if (
+        not system or not station or not market_id or market_id <= 0
+        or not isinstance(raw_items, list) or not raw_items
+    ):
+        return []
+    items = sorted({
+        str(item).strip().casefold()
+        for item in raw_items
+        if isinstance(item, str) and str(item).strip()
+    })
+    if not items:
+        return []
+    observed_at = str(message.get("timestamp") or received_at)
+    return [{
+        "kind": contract[0],
+        "market_id": market_id,
+        "system_name": system,
+        "station_name": station,
+        "items": json.dumps(items),
+        "horizons": (
+            bool(message["horizons"]) if isinstance(message.get("horizons"), bool)
+            else None
+        ),
+        "odyssey": (
+            bool(message["odyssey"]) if isinstance(message.get("odyssey"), bool)
+            else None
+        ),
+        "observed_at": observed_at,
+        "received_at": received_at,
+        "source": f"EDDN {schema}",
     }]
 
 

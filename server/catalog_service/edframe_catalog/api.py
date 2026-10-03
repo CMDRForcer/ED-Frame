@@ -104,6 +104,39 @@ def _decode_state_cursor(value: str | None) -> tuple[datetime, str, str]:
         ) from exc
 
 
+def _encode_offer_cursor(
+    sync_at: datetime | str, kind: str, market_id: int,
+) -> str:
+    stamp = (
+        sync_at.astimezone(timezone.utc).isoformat()
+        if isinstance(sync_at, datetime) else str(sync_at)
+    )
+    payload = json.dumps(
+        [1, stamp, str(kind), int(market_id)],
+        ensure_ascii=True, separators=(",", ":"),
+    ).encode("utf-8")
+    return base64.urlsafe_b64encode(payload).decode("ascii").rstrip("=")
+
+
+def _decode_offer_cursor(value: str | None) -> tuple[datetime, str, int]:
+    if not value:
+        return datetime(1970, 1, 1, tzinfo=timezone.utc), "", 0
+    try:
+        text = str(value).strip()
+        decoded = base64.urlsafe_b64decode(text + "=" * (-len(text) % 4))
+        version, stamp, kind, market_id = json.loads(decoded)
+        parsed = datetime.fromisoformat(str(stamp).replace("Z", "+00:00"))
+        if version != 1 or parsed.tzinfo is None or int(market_id) < 0:
+            raise ValueError("invalid cursor fields")
+        return parsed.astimezone(timezone.utc), str(kind), int(market_id)
+    except (
+        binascii.Error, json.JSONDecodeError, TypeError, ValueError,
+    ) as exc:
+        raise HTTPException(
+            status_code=400, detail="Invalid station offer cursor"
+        ) from exc
+
+
 @app.get("/")
 def root() -> dict:
     return {
@@ -112,7 +145,9 @@ def root() -> dict:
         "status": "/v1/status",
         "health": "/healthz",
         "stations": "/v1/stations/search",
+        "stationOffers": "/v1/station-offers/search",
         "marketSync": "/v1/sync/markets",
+        "stationOfferSync": "/v1/sync/station-offers",
         "stateFindSync": "/v1/sync/state-finds",
     }
 
@@ -134,6 +169,12 @@ def status() -> dict:
               (SELECT COUNT(*) FROM stations) AS stations,
               (SELECT COUNT(*) FROM markets) AS markets,
               (SELECT COUNT(*) FROM mining_sites) AS sites,
+              (SELECT COUNT(*) FROM station_outfitting) AS outfitting_stations,
+              (SELECT COUNT(*) FROM station_shipyards) AS shipyard_stations,
+              (SELECT COALESCE(SUM(jsonb_array_length(modules)), 0)
+                 FROM station_outfitting) AS module_offers,
+              (SELECT COALESCE(SUM(jsonb_array_length(ships)), 0)
+                 FROM station_shipyards) AS ship_offers,
               (SELECT COUNT(*) FROM state_bgs_snapshots
                  WHERE observed_at >= NOW() - INTERVAL '24 hours')
                    AS state_bgs_snapshots,
@@ -244,6 +285,126 @@ def status() -> dict:
             ),
         },
         "collector": dict(state) if state else None,
+    }
+
+
+@app.get("/v1/sync/station-offers")
+def sync_station_offers(
+    cursor: Annotated[str | None, Query(max_length=512)] = None,
+    limit: Annotated[int, Query(ge=1, le=1000)] = 500,
+) -> dict:
+    """Return a resumable stream of complete outfitting and shipyard lists."""
+    cursor_at, cursor_kind, cursor_market_id = _decode_offer_cursor(cursor)
+    with connection() as conn:
+        rows = conn.execute(
+            """
+            WITH current_offers AS (
+                SELECT updated_at AS sync_at, 'OUTFITTING'::text AS kind,
+                       market_id, system_name, station_name,
+                       modules AS items, horizons, odyssey, observed_at,
+                       received_at, source
+                FROM station_outfitting
+                UNION ALL
+                SELECT updated_at AS sync_at, 'SHIPYARD'::text AS kind,
+                       market_id, system_name, station_name,
+                       ships AS items, horizons, odyssey, observed_at,
+                       received_at, source
+                FROM station_shipyards
+            )
+            SELECT o.sync_at AS "syncAt", o.kind,
+                   o.market_id AS "marketId", o.system_name AS system,
+                   o.station_name AS station, o.items, o.horizons, o.odyssey,
+                   o.observed_at AS "observedAt",
+                   o.received_at AS "receivedAt", o.source,
+                   s.system_address AS "systemAddress",
+                   s.station_type AS "stationType",
+                   s.landing_pad_size AS "landingPadSize",
+                   s.distance_to_arrival_ls AS "distanceToArrivalLs",
+                   s.services, sy.x, sy.y, sy.z
+            FROM current_offers o
+            LEFT JOIN stations s ON s.market_id = o.market_id
+            LEFT JOIN systems sy ON LOWER(sy.name) = LOWER(o.system_name)
+            WHERE (o.sync_at, o.kind, o.market_id) > (%s, %s, %s)
+            ORDER BY o.sync_at, o.kind, o.market_id
+            LIMIT %s
+            """,
+            (cursor_at, cursor_kind, cursor_market_id, limit + 1),
+        ).fetchall()
+    has_more = len(rows) > limit
+    page = rows[:limit]
+    next_cursor = str(cursor or "")
+    if page:
+        last = page[-1]
+        next_cursor = _encode_offer_cursor(
+            last["syncAt"], last["kind"], last["marketId"]
+        )
+    return {
+        "generatedAt": _now(),
+        "results": page,
+        "nextCursor": next_cursor,
+        "hasMore": has_more,
+    }
+
+
+@app.get("/v1/station-offers/search")
+def search_station_offers(
+    module: Annotated[str | None, Query(min_length=2, max_length=160)] = None,
+    ship: Annotated[str | None, Query(min_length=2, max_length=100)] = None,
+    system: Annotated[str | None, Query(max_length=100)] = None,
+    limit: Annotated[int, Query(ge=1, le=200)] = 100,
+) -> dict:
+    if not module and not ship:
+        raise HTTPException(
+            status_code=400, detail="A module or ship identifier is required"
+        )
+    normalized_module = module.strip().casefold() if module else ""
+    normalized_ship = ship.strip().casefold() if ship else ""
+    clauses = []
+    values: list[object] = []
+    if normalized_module:
+        clauses.append("o.modules @> %s::jsonb")
+        values.append(json.dumps([normalized_module]))
+    if normalized_ship:
+        clauses.append("y.ships @> %s::jsonb")
+        values.append(json.dumps([normalized_ship]))
+    if system:
+        clauses.append("LOWER(COALESCE(o.system_name, y.system_name)) = LOWER(%s)")
+        values.append(system.strip())
+    values.append(limit)
+    with connection() as conn:
+        rows = conn.execute(
+            f"""
+            SELECT COALESCE(o.market_id, y.market_id) AS "marketId",
+                   COALESCE(o.system_name, y.system_name) AS system,
+                   COALESCE(o.station_name, y.station_name) AS station,
+                   st.station_type AS "stationType",
+                   st.landing_pad_size AS "landingPadSize",
+                   st.distance_to_arrival_ls AS "distanceToArrivalLs",
+                   st.services, sy.x, sy.y, sy.z,
+                   o.observed_at AS "outfittingObservedAt",
+                   y.observed_at AS "shipyardObservedAt"
+            FROM station_outfitting o
+            FULL OUTER JOIN station_shipyards y ON y.market_id = o.market_id
+            LEFT JOIN stations st
+              ON st.market_id = COALESCE(o.market_id, y.market_id)
+            LEFT JOIN systems sy
+              ON LOWER(sy.name) = LOWER(COALESCE(o.system_name, y.system_name))
+            WHERE {' AND '.join(clauses)}
+            ORDER BY GREATEST(
+                COALESCE(o.observed_at, '-infinity'::timestamptz),
+                COALESCE(y.observed_at, '-infinity'::timestamptz)
+            ) DESC
+            LIMIT %s
+            """,
+            values,
+        ).fetchall()
+    return {
+        "generatedAt": _now(),
+        "query": {
+            "module": normalized_module or None,
+            "ship": normalized_ship or None,
+        },
+        "results": rows,
     }
 
 

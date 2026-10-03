@@ -26,6 +26,62 @@ def _row(observed, **changes):
 
 
 class MiningMarketStoreTests(unittest.TestCase):
+    def test_station_offers_merge_independent_inventories_and_survive_restart(self):
+        with TemporaryDirectory() as directory:
+            path = Path(directory, "market.sqlite3")
+            store = MarketCatalogStore(path)
+            common = {
+                "marketId": 42, "system": "Cubeo",
+                "station": "Chelomey Orbital", "systemAddress": 123,
+                "stationType": "Coriolis", "landingPadSize": "L",
+                "distanceToArrivalLs": 50.5, "x": 1, "y": 2, "z": 3,
+                "services": ["Outfitting", "Shipyard"],
+                "receivedAt": "2026-10-03T08:00:01Z",
+                "source": "EDDN",
+            }
+            store.ingest_station_offers([
+                {**common, "kind": "OUTFITTING",
+                 "items": ["Int_FuelScoop_Size8_Class5"],
+                 "observedAt": "2026-10-03T08:00:00Z"},
+                {**common, "kind": "SHIPYARD", "items": ["Anaconda"],
+                 "observedAt": "2026-10-03T08:01:00Z"},
+            ])
+            reopened = MarketCatalogStore(path)
+            self.assertEqual(reopened.station_offer_summary(), {
+                "stations": 1, "outfittingStations": 1,
+                "shipyardStations": 1,
+            })
+            module = reopened.stations_offering(
+                "INT_FUELSCOOP_SIZE8_CLASS5", kind="OUTFITTING"
+            )[0]
+            ship = reopened.stations_offering("anaconda", kind="SHIPYARD")[0]
+            self.assertEqual(module["station"], "Chelomey Orbital")
+            self.assertEqual(module["coordinates"], [1.0, 2.0, 3.0])
+            self.assertEqual(ship["system"], "Cubeo")
+
+    def test_older_or_invalid_station_offer_does_not_replace_inventory(self):
+        with TemporaryDirectory() as directory:
+            store = MarketCatalogStore(Path(directory, "market.sqlite3"))
+            base = {
+                "kind": "OUTFITTING", "marketId": 42,
+                "system": "Cubeo", "station": "Chelomey Orbital",
+                "source": "EDDN",
+            }
+            self.assertEqual(store.ingest_station_offers([
+                {**base, "items": ["new-module"],
+                 "observedAt": "2026-10-03T08:00:00Z"},
+                {**base, "items": [],
+                 "observedAt": "2026-10-03T09:00:00Z"},
+                {**base, "items": ["old-module"],
+                 "observedAt": "2026-10-03T07:00:00Z"},
+            ]), 2)
+            self.assertEqual(len(store.stations_offering(
+                "new-module", kind="OUTFITTING"
+            )), 1)
+            self.assertEqual(store.stations_offering(
+                "old-module", kind="OUTFITTING"
+            ), [])
+
     def test_incremental_server_cursor_survives_restart_and_reset_clears_it(self):
         with TemporaryDirectory() as directory:
             path = Path(directory) / "market.sqlite3"

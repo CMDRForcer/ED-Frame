@@ -146,6 +146,7 @@ from ed_companion.navigation.mining_planner import (
 from ed_companion.navigation.mining_market import (
     fetch_edframe_catalog_status,
     fetch_edframe_market_delta,
+    fetch_edframe_station_offer_delta,
     fetch_edframe_system_coordinates,
     fetch_edsm_system_coordinates,
     fetch_market_imports,
@@ -296,6 +297,24 @@ def _merge_edframe_market_delta_page(store, page):
     }
 
 
+def _merge_edframe_station_offer_delta_page(store, page):
+    """Durably merge station offers before advancing their cursor."""
+    rows = [row for row in page.get("rows", []) if isinstance(row, dict)]
+    ingested = store.ingest_station_offers(rows)
+    next_cursor = str(page.get("nextCursor") or "").strip()
+    if next_cursor:
+        store.set_metadata("edframe_station_offer_sync_cursor", next_cursor)
+    stamp = str(page.get("generatedAt") or "")
+    if stamp:
+        store.set_metadata("edframe_station_offer_sync_last_success", stamp)
+    return {
+        **page,
+        "ingested": ingested,
+        "rowCount": len(rows),
+        "localSummary": store.station_offer_summary(),
+    }
+
+
 class NavigationMixin:
     """Extracted from CockpitController (controller.py modularization).
 
@@ -324,6 +343,8 @@ class NavigationMixin:
 
 
     edFrameStateFindSyncFinished = Signal(object)
+
+    edFrameStationOfferSyncFinished = Signal(object)
 
 
     miningPowerplayFinished = Signal(object)
@@ -2018,6 +2039,25 @@ class NavigationMixin:
     )
 
 
+    edFrameStationOfferSyncBusy = Property(
+        bool,
+        lambda self: bool(getattr(
+            self, "_edframe_station_offer_sync_busy", False
+        )),
+        notify=CoreControllerMixin.connectionChanged,
+    )
+
+
+    edFrameStationOfferSyncStatus = Property(
+        str,
+        lambda self: str(getattr(
+            self, "_edframe_station_offer_sync_status",
+            "Station offers waiting for server check",
+        )),
+        notify=CoreControllerMixin.connectionChanged,
+    )
+
+
     edFrameStateFindSyncBusy = Property(
         bool,
         lambda self: bool(getattr(
@@ -2044,6 +2084,8 @@ class NavigationMixin:
             if getattr(self, "_edframe_catalog_busy", False)
             else "CATALOG SYNC"
             if getattr(self, "_edframe_catalog_sync_busy", False)
+            else "STATION SYNC"
+            if getattr(self, "_edframe_station_offer_sync_busy", False)
             else "STATE SYNC"
             if getattr(self, "_edframe_state_find_sync_busy", False)
             else "MARKET SYNC"
@@ -2310,6 +2352,9 @@ class NavigationMixin:
         self._active_edframe_catalog_sync_request = None
         self._edframe_catalog_sync_busy = False
         self._edframe_catalog_sync_continue = False
+        self._active_edframe_station_offer_sync_request = None
+        self._edframe_station_offer_sync_busy = False
+        self._edframe_station_offer_sync_continue = False
         self._active_edframe_state_find_sync_request = None
         self._edframe_state_find_sync_busy = False
         self._edframe_state_find_sync_continue = False
@@ -2321,6 +2366,9 @@ class NavigationMixin:
             self._edframe_catalog_status = "Disabled · local catalog active"
             self._edframe_catalog_sync_status = (
                 "Paused · retained local catalog remains available"
+            )
+            self._edframe_station_offer_sync_status = (
+                "Paused · retained local station offers remain available"
             )
             self._edframe_state_find_sync_status = (
                 "Paused · retained local State Finds remain available"
@@ -2413,6 +2461,12 @@ class NavigationMixin:
             state_signals = int(counts.get(
                 "state_signals", counts.get("stateSignals", 0)
             ) or 0)
+            outfitting_stations = int(counts.get(
+                "outfitting_stations", counts.get("outfittingStations", 0)
+            ) or 0)
+            shipyard_stations = int(counts.get(
+                "shipyard_stations", counts.get("shipyardStations", 0)
+            ) or 0)
             self._edframe_catalog_online = True
             self._edframe_catalog_last_success = str(
                 payload.get("generatedAt")
@@ -2425,6 +2479,14 @@ class NavigationMixin:
                 "sites": sites,
                 "stateBgsSnapshots": state_bgs,
                 "stateSignals": state_signals,
+                "outfittingStations": outfitting_stations,
+                "shipyardStations": shipyard_stations,
+                "moduleOffers": int(counts.get(
+                    "module_offers", counts.get("moduleOffers", 0)
+                ) or 0),
+                "shipOffers": int(counts.get(
+                    "ship_offers", counts.get("shipOffers", 0)
+                ) or 0),
                 "commodities": int(counts.get("commodities", 0) or 0),
                 "marketCoordinatePercent": float(
                     completeness.get("marketCoordinatePercent", 0) or 0
@@ -2473,7 +2535,9 @@ class NavigationMixin:
             self._append_edframe_catalog_log(
                 f"Server online · {stations:,} stations · "
                 f"{markets:,} markets · {sites:,} sites · "
-                f"{state_bgs:,} BGS · {state_signals:,} signals"
+                f"{state_bgs:,} BGS · {state_signals:,} signals · "
+                f"{outfitting_stations:,} outfitting · "
+                f"{shipyard_stations:,} shipyards"
             )
             if store is not None:
                 store.record_source_result(
@@ -2484,6 +2548,7 @@ class NavigationMixin:
         self.miningChanged.emit()
         if result.get("success") and store is not None:
             QTimer.singleShot(0, self.syncEdFrameCatalog)
+            QTimer.singleShot(0, self.syncEdFrameStationOffers)
         if result.get("success"):
             state_sync = getattr(self, "syncEdFrameStateFinds", None)
             if callable(state_sync):
@@ -2618,6 +2683,144 @@ class NavigationMixin:
             self._edframe_catalog_sync_status += " · backup retry pending"
         self._append_edframe_catalog_log(
             f"Offline catalog current · {local_count:,} markets"
+        )
+        self.connectionChanged.emit()
+        self.miningChanged.emit()
+
+
+    @Slot()
+    def syncEdFrameStationOffers(self):
+        """Incrementally retain public outfitting and shipyard inventories."""
+        if (
+            not getattr(self, "_edframe_catalog_enabled", True)
+            or getattr(self, "_shutdown_complete", False)
+            or getattr(self, "_edframe_station_offer_sync_busy", False)
+        ):
+            return
+        store = getattr(self, "_mining_market_store", None)
+        if store is None:
+            return
+        cursor = store.metadata("edframe_station_offer_sync_cursor", "")
+        continuing = bool(getattr(
+            self, "_edframe_station_offer_sync_continue", False
+        ))
+        self._edframe_station_offer_sync_continue = False
+        if not continuing:
+            self._edframe_station_offer_sync_rows = 0
+        request = {
+            "id": uuid.uuid4().hex,
+            "cursor": cursor,
+            "generation": getattr(self, "_profile_generation", 0),
+        }
+        self._active_edframe_station_offer_sync_request = request
+        self._edframe_station_offer_sync_busy = True
+        self._edframe_station_offer_sync_status = (
+            "Initial station offer sync…" if not cursor
+            else "Checking outfitting and shipyard changes…"
+        )
+        self.connectionChanged.emit()
+        self.miningChanged.emit()
+
+        def worker():
+            result = dict(request)
+            try:
+                page = fetch_edframe_station_offer_delta(
+                    cursor=cursor, get=requests.get,
+                )
+                result.update(
+                    _merge_edframe_station_offer_delta_page(store, page)
+                )
+                result["success"] = True
+            except Exception as exc:
+                result.update({
+                    "success": False,
+                    "error": f"{type(exc).__name__}: {exc}",
+                })
+            self.edFrameStationOfferSyncFinished.emit(result)
+
+        if not self._start_network_worker(worker, "edframe-station-offer-sync"):
+            self._active_edframe_station_offer_sync_request = None
+            self._edframe_station_offer_sync_busy = False
+            self._edframe_station_offer_sync_status = (
+                "Paused during shutdown · retained station offers stay active"
+            )
+            self.connectionChanged.emit()
+            self.miningChanged.emit()
+
+
+    @Slot(object)
+    def _finish_edframe_station_offer_sync(self, result):
+        request = getattr(
+            self, "_active_edframe_station_offer_sync_request", None
+        )
+        if not request or result.get("id") != request.get("id"):
+            return
+        self._active_edframe_station_offer_sync_request = None
+        self._edframe_station_offer_sync_busy = False
+        if (
+            not getattr(self, "_edframe_catalog_enabled", True)
+            or result.get("generation") != getattr(self, "_profile_generation", 0)
+        ):
+            return
+        store = getattr(self, "_mining_market_store", None)
+        if store is None:
+            return
+        if not result.get("success"):
+            error = str(result.get("error") or "unknown error")
+            self._edframe_station_offer_sync_status = (
+                "Sync paused · retained local station offers remain active"
+            )
+            store.record_source_result(
+                "ED-Frame station offer sync", success=False, error=error,
+            )
+            self._append_edframe_catalog_log(
+                f"Station offer sync paused · {error}"
+            )
+            self.connectionChanged.emit()
+            self.miningChanged.emit()
+            return
+        ingested = int(result.get("ingested", 0) or 0)
+        self._edframe_station_offer_sync_rows = int(getattr(
+            self, "_edframe_station_offer_sync_rows", 0
+        ) or 0) + ingested
+        summary = dict(result.get("localSummary") or {})
+        self._edframe_catalog_stats.update({
+            "localOfferStations": int(summary.get("stations", 0) or 0),
+            "localOutfittingStations": int(
+                summary.get("outfittingStations", 0) or 0
+            ),
+            "localShipyardStations": int(
+                summary.get("shipyardStations", 0) or 0
+            ),
+        })
+        if result.get("hasMore"):
+            self._edframe_station_offer_sync_status = (
+                f"Syncing · {self._edframe_station_offer_sync_rows:,} "
+                "inventories merged"
+            )
+            self.connectionChanged.emit()
+            self.miningChanged.emit()
+            self._edframe_station_offer_sync_continue = True
+            QTimer.singleShot(75, self.syncEdFrameStationOffers)
+            return
+        store.record_source_result(
+            "ED-Frame station offer sync", success=True,
+        )
+        backup_ok = (
+            self._schedule_mining_market_backup()
+            if self._edframe_station_offer_sync_rows else True
+        )
+        self._edframe_station_offer_sync_status = (
+            f"Up to date · {int(summary.get('outfittingStations', 0) or 0):,} "
+            "outfitting · "
+            f"{int(summary.get('shipyardStations', 0) or 0):,} shipyards · "
+            f"{self._edframe_station_offer_sync_rows:,} changes merged"
+        )
+        if not backup_ok:
+            self._edframe_station_offer_sync_status += " · backup retry pending"
+        self._append_edframe_catalog_log(
+            "Station offers current · "
+            f"{int(summary.get('stations', 0) or 0):,} local stations"
         )
         self.connectionChanged.emit()
         self.miningChanged.emit()

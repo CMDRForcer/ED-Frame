@@ -12,6 +12,8 @@ anonymous public catalog facts ED-Frame can reuse:
 - complete public `commodity/3` rows for every commodity: mean, buy and sell
   prices, stock, demand, brackets, status flags, observation time and receipt
   time.
+- complete public `outfitting/2` and `shipyard/2` inventories, keyed by Market
+  ID and atomically replaced only by an equally new or newer observation;
 - current public BGS snapshots and supported FSS signal observations used by
   State Finds. BGS snapshots are retained for 24 hours; signals retain their
   reported lifetime and are never extended by the server.
@@ -49,9 +51,12 @@ removed. Mining evidence and system geography are deliberately retained.
 - `GET /v1/status`
 - `GET /v1/systems/suggest?q=Cube`
 - `GET /v1/stations/search?system=Cubeo&landing_pad=L`
+- `GET /v1/station-offers/search?module=int_fuelscoop_size8_class5`
+- `GET /v1/station-offers/search?ship=anaconda`
 - `GET /v1/markets/search?commodity=platinum`
 - `GET /v1/sites/search?commodity=platinum`
 - `GET /v1/sync/markets`
+- `GET /v1/sync/station-offers`
 - `GET /v1/sync/state-finds`
 
 Market and site search accept optional `x`, `y`, `z` and `max_distance`
