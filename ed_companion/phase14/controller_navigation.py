@@ -1284,7 +1284,7 @@ class NavigationMixin:
             # evidence-backed secondary resources and exact-station markets.
             market_query["commodity"] = "allcommodities"
         markets = self._mining_market_rows_for_query(market_query)
-        return plan_mining_routes(
+        routes = plan_mining_routes(
             candidates, commodity, optimization,
             min_demand=min_demand,
             max_market_age_hours=max_market_age_hours,
@@ -1307,6 +1307,49 @@ class NavigationMixin:
                 *getattr(self, "_mining_powerplay_observations", []),
             ],
         )
+        verification_states = getattr(
+            self, "_mining_market_verification_states", {},
+        )
+        for row in routes:
+            if not isinstance(row, dict) or not row.get(
+                "sameSystemSaleRequired"
+            ):
+                continue
+            route_commodity = mining_commodity_id(
+                row.get("selectedCommodity") or commodity
+            )
+            system = str(row.get("system") or "").strip()
+            key = f"{system.casefold()}\x1f{route_commodity}"
+            row["marketVerificationKey"] = key
+            state = dict(verification_states.get(key) or {})
+            check_state = str(state.get("state") or "")
+            if row.get("marketStatus") != "NO_MARKET_DATA":
+                continue
+            if check_state == "QUEUED":
+                row.update({
+                    "verificationStatus": "NOT_YET_CHECKED",
+                    "powerplayVerificationState": "NOT_YET_CHECKED",
+                    "powerplayVerificationLabel": "NOT YET CHECKED",
+                    "verificationGroupLabel": "MARKET DATA NOT YET CHECKED",
+                    "pendingReason": (
+                        "Market lookup is queued; it was not queried in this "
+                        "verification pass because the six-target budget was full"
+                    ),
+                })
+            elif check_state == "CHECKING":
+                row.update({
+                    "verificationStatus": "MARKET_CHECK_RUNNING",
+                    "powerplayVerificationState": "MARKET_CHECK_RUNNING",
+                    "powerplayVerificationLabel": "MARKET CHECK RUNNING",
+                    "verificationGroupLabel": "MARKET CHECK RUNNING",
+                    "pendingReason": "Market lookup is running in this verification pass",
+                })
+            elif check_state == "NO_DATA":
+                row["pendingReason"] = str(
+                    state.get("reason")
+                    or "Server returned no market data for this system and commodity"
+                )
+        return routes
 
 
     def _mining_find_page(
@@ -3610,7 +3653,7 @@ class NavigationMixin:
         now = datetime.now(timezone.utc)
         now_epoch = time.time()
         cache = getattr(self, "_mining_verification_cache", {})
-        targets = []
+        powerplay_targets = []
         seen = set()
         cached = 0
         for row in route_rows:
@@ -3629,9 +3672,14 @@ class NavigationMixin:
             ):
                 cached += 1
                 continue
-            targets.append({
+            powerplay_targets.append({
                 "systemAddress": address,
                 "system": str(row.get("system") or ""),
+                "commodity": str(row.get("selectedCommodity") or commodity_id),
+                "marketId": int(row.get("diagnosticMarketId", 0) or 0),
+                "source": str(row.get("diagnosticMarketSource") or ""),
+                "filterResult": str(row.get("marketStatus") or "UNKNOWN"),
+                "finalReason": str(row.get("pendingReason") or ""),
             })
 
         market_cache = getattr(
@@ -3640,6 +3688,8 @@ class NavigationMixin:
         market_targets = []
         market_seen = set()
         market_cached = 0
+        market_candidates = []
+        budget_market_keys = set()
         if commodity_id:
             pending_market_rows = []
             for row in route_rows:
@@ -3668,17 +3718,15 @@ class NavigationMixin:
                 elif commodity_id not in route_commodities:
                     route_commodities.append(commodity_id)
                 if system and route_commodities:
-                    pending_market_rows.append((system, route_commodities))
+                    pending_market_rows.append((system, route_commodities, row))
             max_options = max((
-                len(options) for _system, options in pending_market_rows
+                len(options) for _system, options, _row in pending_market_rows
             ), default=0)
             # Round-robin keeps the request budget useful: first verify one
             # concrete commodity for several visible systems, then try each
             # route's secondary commodities if capacity remains.
             for option_index in range(max_options):
-                for system, route_commodities in pending_market_rows:
-                    if len(market_targets) >= 6:
-                        break
+                for system, route_commodities, row in pending_market_rows:
                     if option_index >= len(route_commodities):
                         continue
                     route_commodity = route_commodities[option_index]
@@ -3686,23 +3734,64 @@ class NavigationMixin:
                     if key in market_seen:
                         continue
                     market_seen.add(key)
-                    retry_after = float(
-                        (market_cache.get(key) or {}).get(
-                            "retryAfter", 0.0,
-                        ) or 0.0
-                    )
-                    if retry_after > now_epoch:
-                        market_cached += 1
-                        continue
-                    market_targets.append({
+                    market_candidates.append({
                         "system": system,
                         "commodity": route_commodity,
                         "key": key,
+                        "marketId": int(
+                            row.get("diagnosticMarketId", 0) or 0
+                        ),
+                        "source": str(
+                            row.get("diagnosticMarketSource") or ""
+                        ),
+                        "filterResult": str(
+                            row.get("marketStatus") or "NO_MARKET_DATA"
+                        ),
+                        "finalReason": str(row.get("pendingReason") or ""),
                     })
-                if len(market_targets) >= 6:
-                    break
 
-        total = len(seen) + len(market_seen)
+            verification_states = dict(getattr(
+                self, "_mining_market_verification_states", {},
+            ))
+            for target in market_candidates:
+                key = target["key"]
+                retry_after = float(
+                    (market_cache.get(key) or {}).get(
+                        "retryAfter", 0.0,
+                    ) or 0.0
+                )
+                if retry_after > now_epoch:
+                    market_cached += 1
+                    budget_market_keys.add(key)
+                    cached_state = str(
+                        (market_cache.get(key) or {}).get("state") or ""
+                    )
+                    if cached_state:
+                        verification_states[key] = {
+                            "state": cached_state,
+                            "reason": str(
+                                (market_cache.get(key) or {}).get("reason") or ""
+                            ),
+                        }
+                    continue
+                if len(market_targets) < 6:
+                    market_targets.append(target)
+                    budget_market_keys.add(key)
+                    verification_states[key] = {
+                        "state": "CHECKING",
+                        "reason": "Market lookup is running in this verification pass",
+                    }
+                else:
+                    verification_states[key] = {
+                        "state": "QUEUED",
+                        "reason": (
+                            "Market lookup was not queried in this pass because "
+                            "the six-target budget was full"
+                        ),
+                    }
+            self._mining_market_verification_states = verification_states
+
+        total = len(seen) + len(budget_market_keys if commodity_id else ())
         completed = cached + market_cached
         self._mining_verification_total = total
         self._mining_verification_completed = completed
@@ -3713,7 +3802,7 @@ class NavigationMixin:
             )
             self.miningVerificationChanged.emit()
             return
-        if not targets and not market_targets:
+        if not powerplay_targets and not market_targets:
             self._mining_verification_status = (
                 f"Top routes current · {completed}/{total} "
                 + ("checks" if market_seen else "systems")
@@ -3729,7 +3818,8 @@ class NavigationMixin:
             "generation": self._profile_generation,
             "path": str(self.mining_catalog_file),
             "origin": list(origin.get("coordinates") or []),
-            "targets": targets,
+            "targets": powerplay_targets,
+            "powerplayTargets": powerplay_targets,
             "marketTargets": market_targets,
             "commodity": commodity_id,
             "maxMarketAgeHours": int(max_market_age_hours or 0),
@@ -3744,6 +3834,43 @@ class NavigationMixin:
             f"Verifying top routes · {completed}/{total} checks"
         )
         self.miningVerificationChanged.emit()
+        if market_candidates:
+            mining_changed = getattr(self, "miningChanged", None)
+            if mining_changed is not None:
+                try:
+                    mining_changed.emit()
+                except RuntimeError:
+                    pass
+
+        def log_target(queue_name, target, response_status, **updates):
+            if not getattr(self, "_debug_mode", False):
+                return
+            record = {
+                "queue": queue_name,
+                "system": str(target.get("system") or ""),
+                "commodity": str(target.get("commodity") or commodity_id),
+                "marketId": int(
+                    updates.get("marketId", target.get("marketId", 0)) or 0
+                ),
+                "source": str(
+                    updates.get("source", target.get("source", "")) or ""
+                ),
+                "responseStatus": str(response_status or "UNKNOWN"),
+                "filterResult": str(
+                    updates.get(
+                        "filterResult", target.get("filterResult", "UNKNOWN")
+                    ) or "UNKNOWN"
+                ),
+                "finalReason": str(
+                    updates.get(
+                        "finalReason", target.get("finalReason", "")
+                    ) or ""
+                ),
+            }
+            self._write_log(
+                "Mining verification target · "
+                + json.dumps(record, ensure_ascii=False, sort_keys=True)
+            )
 
         def fetch_target(target):
             address = target["systemAddress"]
@@ -3784,14 +3911,15 @@ class NavigationMixin:
             market_succeeded = []
             market_failed = []
             completed = int(request["completed"])
-            if targets:
+            market_outcomes = []
+            if powerplay_targets:
                 with ThreadPoolExecutor(
-                    max_workers=min(2, len(targets)),
+                    max_workers=min(2, len(powerplay_targets)),
                     thread_name_prefix="mining-verify",
                 ) as pool:
                     futures = {
                         pool.submit(fetch_target, target): target
-                        for target in targets
+                        for target in powerplay_targets
                     }
                     for future in as_completed(futures):
                         target = futures[future]
@@ -3799,12 +3927,29 @@ class NavigationMixin:
                             address, candidates = future.result()
                             succeeded.append(address)
                             incoming.extend(candidates)
+                            source = str(
+                                (candidates[0] if candidates else {}).get(
+                                    "source"
+                                ) or target.get("source") or ""
+                            )
+                            log_target(
+                                "powerplay", target, "FOUND",
+                                source=source,
+                                finalReason=(
+                                    target.get("finalReason")
+                                    or "Powerplay/catalog evidence refreshed"
+                                ),
+                            )
                         except Exception as exc:
                             failed.append({
                                 "systemAddress": target["systemAddress"],
                                 "system": target["system"],
                                 "error": f"{type(exc).__name__}: {exc}",
                             })
+                            log_target(
+                                "powerplay", target, "ERROR",
+                                finalReason=f"{type(exc).__name__}: {exc}",
+                            )
                         completed += 1
                         self.miningVerificationProgress.emit({
                             "id": request["id"],
@@ -3827,12 +3972,42 @@ class NavigationMixin:
                     )
                     market_rows.extend(rows)
                     market_succeeded.append(target["key"])
+                    first = rows[0] if rows else {}
+                    outcome_state = "FOUND" if rows else "NO_DATA"
+                    outcome_reason = (
+                        f"Server returned {len(rows)} market row(s)"
+                        if rows else
+                        "Server returned no market data for this system and commodity"
+                    )
+                    market_outcomes.append({
+                        "key": target["key"],
+                        "state": outcome_state,
+                        "reason": outcome_reason,
+                    })
+                    log_target(
+                        "market", target, outcome_state,
+                        marketId=first.get("marketId", target.get("marketId", 0)),
+                        source=first.get("source", target.get("source", "")),
+                        filterResult=(
+                            "RECHECK AFTER INGEST" if rows else "NO_MARKET_DATA"
+                        ),
+                        finalReason=outcome_reason,
+                    )
                 except Exception as exc:
                     market_failed.append({
                         "key": target["key"],
                         "system": target["system"],
                         "error": f"{type(exc).__name__}: {exc}",
                     })
+                    market_outcomes.append({
+                        "key": target["key"],
+                        "state": "ERROR",
+                        "reason": f"{type(exc).__name__}: {exc}",
+                    })
+                    log_target(
+                        "market", target, "ERROR",
+                        finalReason=f"{type(exc).__name__}: {exc}",
+                    )
                 completed += 1
                 self.miningVerificationProgress.emit({
                     "id": request["id"],
@@ -3848,6 +4023,7 @@ class NavigationMixin:
                 "markets": market_rows,
                 "marketSucceeded": market_succeeded,
                 "marketFailed": market_failed,
+                "marketOutcomes": market_outcomes,
             })
             self.miningVerificationFinished.emit(result)
 
@@ -3897,6 +4073,11 @@ class NavigationMixin:
         succeeded = list(result.get("succeeded") or [])
         market_failed = list(result.get("marketFailed") or [])
         market_succeeded = list(result.get("marketSucceeded") or [])
+        market_outcomes = {
+            str(item.get("key") or ""): dict(item)
+            for item in result.get("marketOutcomes") or []
+            if isinstance(item, dict) and item.get("key")
+        }
         now_epoch = time.time()
         cache = getattr(self, "_mining_verification_cache", {})
         for address in succeeded:
@@ -3912,12 +4093,39 @@ class NavigationMixin:
             self, "_mining_powerplay_market_verification_cache", {},
         )
         for key in market_succeeded:
-            market_cache[str(key)] = {"retryAfter": now_epoch + 3600}
+            outcome = market_outcomes.get(str(key), {})
+            state = str(outcome.get("state") or "FOUND")
+            reason = str(outcome.get("reason") or "")
+            market_cache[str(key)] = {
+                "retryAfter": now_epoch + 3600,
+                "state": state,
+                "reason": reason,
+            }
         for failure in market_failed:
             key = str(failure.get("key") or "")
             if key:
-                market_cache[key] = {"retryAfter": now_epoch + 600}
+                market_cache[key] = {
+                    "retryAfter": now_epoch + 600,
+                    "state": "ERROR",
+                    "reason": str(failure.get("error") or ""),
+                }
         self._mining_powerplay_market_verification_cache = market_cache
+        verification_states = dict(getattr(
+            self, "_mining_market_verification_states", {},
+        ))
+        for key, outcome in market_outcomes.items():
+            verification_states[key] = {
+                "state": str(outcome.get("state") or "FOUND"),
+                "reason": str(outcome.get("reason") or ""),
+            }
+        for failure in market_failed:
+            key = str(failure.get("key") or "")
+            if key:
+                verification_states[key] = {
+                    "state": "ERROR",
+                    "reason": str(failure.get("error") or ""),
+                }
+        self._mining_market_verification_states = verification_states
         changed = False
         incoming = [
             row for row in result.get("candidates", [])
@@ -3996,8 +4204,9 @@ class NavigationMixin:
                 f"Top routes current · {total}/{total} systems verified"
             )
         self.miningVerificationChanged.emit()
-        if changed:
+        if changed or market_outcomes or market_failed:
             self.miningChanged.emit()
+        if changed:
             self.stateChanged.emit()
 
         pending = getattr(self, "_pending_mining_verification", None)
@@ -4090,6 +4299,7 @@ class NavigationMixin:
         self._mining_verification_failures = 0
         self._mining_verification_cache = {}
         self._mining_powerplay_market_verification_cache = {}
+        self._mining_market_verification_states = {}
         self._active_edframe_catalog_sync_request = None
         self._edframe_catalog_sync_busy = False
         self._edframe_catalog_sync_rows = 0

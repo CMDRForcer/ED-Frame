@@ -74,6 +74,7 @@ class MiningFinderProjectionTests(unittest.TestCase):
         controller.miningVerificationChanged = Mock()
         controller.miningVerificationProgress = Mock()
         controller.miningVerificationFinished = Mock()
+        controller.miningChanged = Mock()
         routes = [{
             "system": f"System {index // 2}",
             "systemAddress": index // 2 + 1,
@@ -140,13 +141,13 @@ class MiningFinderProjectionTests(unittest.TestCase):
             "sameSystemSaleRequired": True, "marketKnown": False,
         }], "Origin", "Platinum", 1, 5000, "LARGE")
 
-        self.assertEqual(
-            controller._active_mining_verification_request["marketTargets"],
-            [{
-                "system": "Cubeo", "commodity": "platinum",
-                "key": "cubeo\x1fplatinum",
-            }],
-        )
+        targets = controller._active_mining_verification_request[
+            "marketTargets"
+        ]
+        self.assertEqual(len(targets), 1)
+        self.assertEqual(targets[0]["system"], "Cubeo")
+        self.assertEqual(targets[0]["commodity"], "platinum")
+        self.assertEqual(targets[0]["key"], "cubeo\x1fplatinum")
         with patch(
             "ed_companion.phase14.controller_navigation.fetch_market_imports",
             return_value=[{
@@ -162,6 +163,123 @@ class MiningFinderProjectionTests(unittest.TestCase):
         result = controller.miningVerificationFinished.emit.call_args.args[0]
         self.assertEqual(result["marketSucceeded"], ["cubeo\x1fplatinum"])
         self.assertEqual(result["markets"][0]["station"], "Chelomey Orbital")
+        self.assertEqual(result["marketOutcomes"][0]["state"], "FOUND")
+
+    def test_market_verification_budget_marks_remaining_targets_queued(self):
+        controller = CockpitController.__new__(CockpitController)
+        controller._mining_verification_busy = False
+        controller._mining_verification_cache = {}
+        controller._mining_powerplay_market_verification_cache = {}
+        controller._profile_generation = 3
+        controller.profile_context = Mock(key="alpha")
+        controller.mining_catalog_file = Path("mining.json")
+        controller._known_mining_origin = Mock(return_value={})
+        controller._start_network_worker = Mock(return_value=True)
+        controller.miningVerificationChanged = Mock()
+        controller.miningVerificationProgress = Mock()
+        controller.miningVerificationFinished = Mock()
+        controller.miningChanged = Mock()
+        routes = [{
+            "system": f"Pending {index}", "systemAddress": index + 1,
+            "optimization": "POWERPLAY MERITS",
+            "sameSystemSaleRequired": True,
+            "marketMatchesFilters": False,
+            "marketStatus": "NO_MARKET_DATA",
+            "selectedCommodity": "platinum",
+            "pendingReason": "No local market data",
+        } for index in range(8)]
+
+        controller.verifyMiningRoutes(
+            routes, "Origin", "Platinum", 1, 5000, "LARGE",
+        )
+
+        request = controller._active_mining_verification_request
+        self.assertEqual(len(request["marketTargets"]), 6)
+        self.assertEqual(
+            request["powerplayTargets"], request["targets"],
+        )
+        states = controller._mining_market_verification_states
+        self.assertEqual(
+            sum(item["state"] == "CHECKING" for item in states.values()), 6,
+        )
+        self.assertEqual(
+            sum(item["state"] == "QUEUED" for item in states.values()), 2,
+        )
+        controller._start_network_worker.assert_called_once()
+
+    def test_route_projection_exposes_queued_market_lookup(self):
+        controller = CockpitController.__new__(CockpitController)
+        controller._mining_find_page = Mock(return_value=[])
+        controller._mining_market_rows_for_query = Mock(return_value=[])
+        controller._mining_powerplay_catalog = {}
+        controller._mining_powerplay_observations = []
+        controller._mining_market_verification_states = {
+            "cubeo\x1fplatinum": {"state": "QUEUED"},
+        }
+        projected = [{
+            "system": "Cubeo", "selectedCommodity": "platinum",
+            "sameSystemSaleRequired": True,
+            "marketStatus": "NO_MARKET_DATA",
+            "powerplayVerificationState": "NO_MARKET_DATA",
+        }]
+        with patch(
+            "ed_companion.phase14.controller_navigation.plan_mining_routes",
+            return_value=projected,
+        ):
+            rows = controller.miningPlanRoutes(
+                "Cubeo", "Platinum", 100, "ALL RESERVES", "ANY RING",
+                True, "LASER", "POWERPLAY MERITS", 5000, 500000, 1, 30,
+                False, False, False, False, "LARGE", "Aisling Duval",
+                "REINFORCE", "ANY", "ANY",
+            )
+
+        self.assertEqual(rows[0]["verificationStatus"], "NOT_YET_CHECKED")
+        self.assertIn("six-target budget", rows[0]["pendingReason"])
+
+    def test_empty_market_response_is_logged_and_recorded_as_no_data(self):
+        controller = CockpitController.__new__(CockpitController)
+        controller._mining_verification_busy = False
+        controller._mining_verification_cache = {}
+        controller._mining_powerplay_market_verification_cache = {}
+        controller._profile_generation = 3
+        controller.profile_context = Mock(key="alpha")
+        controller.mining_catalog_file = Path("mining.json")
+        controller._known_mining_origin = Mock(return_value={})
+        workers = []
+        controller._start_network_worker = (
+            lambda target, _name: workers.append(target) or True
+        )
+        controller.miningVerificationChanged = Mock()
+        controller.miningVerificationProgress = Mock()
+        controller.miningVerificationFinished = Mock()
+        controller.miningChanged = Mock()
+        controller._debug_mode = True
+        controller._write_log = Mock()
+
+        controller.verifyMiningRoutes([{
+            "system": "Empty", "optimization": "POWERPLAY MERITS",
+            "sameSystemSaleRequired": True,
+            "marketMatchesFilters": False,
+            "marketStatus": "NO_MARKET_DATA",
+            "selectedCommodity": "platinum",
+            "pendingReason": "No local market data",
+        }], "Origin", "Platinum", 1, 5000, "LARGE")
+        with patch(
+            "ed_companion.phase14.controller_navigation.fetch_market_imports",
+            return_value=[],
+        ):
+            workers[0]()
+
+        result = controller.miningVerificationFinished.emit.call_args.args[0]
+        self.assertEqual(result["marketOutcomes"], [{
+            "key": "empty\x1fplatinum", "state": "NO_DATA",
+            "reason": (
+                "Server returned no market data for this system and commodity"
+            ),
+        }])
+        log = controller._write_log.call_args.args[0]
+        self.assertIn('"responseStatus": "NO_DATA"', log)
+        self.assertIn('"filterResult": "NO_MARKET_DATA"', log)
 
     def test_powerplay_market_check_is_persisted_without_replacing_ui_cache(self):
         with TemporaryDirectory() as directory:

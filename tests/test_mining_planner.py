@@ -32,6 +32,204 @@ def candidate(system, distance, target="HOTSPOT", **extra):
 
 
 class MiningPlannerTests(unittest.TestCase):
+    def test_verification_contract_covers_all_market_powerplay_pairs(self):
+        expected = {
+            (planner_module.MARKET_VERIFIED,
+             planner_module.POWERPLAY_VERIFIED): "VERIFIED",
+            (planner_module.MARKET_TOO_OLD,
+             planner_module.POWERPLAY_VERIFIED): "KNOWN",
+            (planner_module.MARKET_OUTSIDE_FILTERS,
+             planner_module.POWERPLAY_VERIFIED): "KNOWN",
+            (planner_module.NO_MARKET_DATA,
+             planner_module.POWERPLAY_VERIFIED): "KNOWN",
+            (planner_module.MARKET_VERIFIED,
+             planner_module.POWERPLAY_DATA_MISSING): "POWERPLAY_DATA_MISSING",
+            (planner_module.MARKET_TOO_OLD,
+             planner_module.POWERPLAY_DATA_MISSING): "MARKET_TOO_OLD",
+            (planner_module.MARKET_OUTSIDE_FILTERS,
+             planner_module.POWERPLAY_DATA_MISSING): "MARKET_OUTSIDE_FILTERS",
+            (planner_module.NO_MARKET_DATA,
+             planner_module.POWERPLAY_DATA_MISSING): "NO_MARKET_DATA",
+        }
+        for market_status in (
+            planner_module.MARKET_VERIFIED,
+            planner_module.MARKET_TOO_OLD,
+            planner_module.MARKET_OUTSIDE_FILTERS,
+            planner_module.NO_MARKET_DATA,
+        ):
+            for powerplay_status in (
+                planner_module.POWERPLAY_VERIFIED,
+                planner_module.POWERPLAY_DATA_MISSING,
+                planner_module.NOT_ELIGIBLE,
+            ):
+                with self.subTest(
+                    market=market_status, powerplay=powerplay_status,
+                ):
+                    result = planner_module._verification_status(
+                        market_status, powerplay_status,
+                        market_reason="market reason",
+                        powerplay_reason="powerplay reason",
+                    )
+                    self.assertEqual(
+                        result["state"],
+                        "INELIGIBLE" if powerplay_status
+                        == planner_module.NOT_ELIGIBLE else expected[
+                            (market_status, powerplay_status)
+                        ],
+                    )
+                    self.assertTrue(result["reason"])
+
+    def test_market_boundaries_and_specific_filter_reasons(self):
+        base = {
+            "commodity": "platinum", "station": "Boundary Hub",
+            "system": "Boundary", "sellPrice": 200000,
+            "landingPadSize": "L", "observedAt": "2026-09-30T11:00:00Z",
+        }
+        for demand in (5000, 500000):
+            result = planner_module._market_filter_assessment(
+                {**base, "demand": demand}, landing_pad="LARGE",
+                min_demand=5000, max_demand=500000,
+                max_market_age_hours=1, now=NOW,
+            )
+            self.assertEqual(result["status"], planner_module.MARKET_VERIFIED)
+            self.assertTrue(result["matchesFilters"])
+
+        stale = planner_module._market_filter_assessment(
+            {**base, "demand": 5000,
+             "observedAt": "2026-09-30T10:59:59Z"},
+            landing_pad="LARGE", min_demand=5000, max_demand=500000,
+            max_market_age_hours=1, now=NOW,
+        )
+        self.assertEqual(stale["status"], planner_module.MARKET_TOO_OLD)
+        self.assertIn("AGE", stale["reasonCodes"])
+
+        cases = [
+            ({**base, "demand": 4999}, "DEMAND"),
+            ({**base, "demand": 500001}, "DEMAND"),
+            ({**base, "demand": 5000, "landingPadSize": "M"}, "PAD"),
+            ({**base, "demand": 5000, "fleetCarrier": True}, "CARRIER"),
+        ]
+        for market, code in cases:
+            with self.subTest(code=code):
+                result = planner_module._market_filter_assessment(
+                    market, landing_pad="LARGE", min_demand=5000,
+                    max_demand=500000, max_market_age_hours=1, now=NOW,
+                )
+                self.assertEqual(
+                    result["status"], planner_module.MARKET_OUTSIDE_FILTERS,
+                )
+                self.assertIn(code, result["reasonCodes"])
+
+    def test_diagnostic_examples_have_honest_independent_statuses(self):
+        now = datetime(2026, 10, 3, 16, 30, tzinfo=timezone.utc)
+        candidates = [
+            candidate("HIP 11402", 10, ring="HIP 11402 A 2 B Ring"),
+            candidate("HIP 32145", 20, ring="HIP 32145 4 A Ring"),
+            candidate("HIP 32145", 20, ring="HIP 32145 4 B Ring"),
+            candidate(
+                "Col 285 Sector GV-D b13-4", 30,
+                ring="Col 285 Sector GV-D b13-4 3 a",
+            ),
+        ]
+        markets = [{
+            "marketId": 4360741123, "commodity": "platinum",
+            "system": "HIP 11402", "station": "Raimi Hub",
+            "sellPrice": 297710, "demand": 8679,
+            "landingPadSize": "L", "observedAt": "2026-10-03T16:00:02Z",
+        }, {
+            "marketId": 4280268035, "commodity": "platinum",
+            "system": "HIP 32145", "station": "Conklin Landing",
+            "sellPrice": 59972, "demand": 208803,
+            "landingPadSize": "L", "observedAt": "2026-10-03T16:11:32Z",
+        }, {
+            "marketId": 4212636675, "commodity": "platinum",
+            "system": "Col 285 Sector GV-D b13-4",
+            "station": "Einäugiger Glatzenaal", "sellPrice": 54548,
+            "demand": 81484, "landingPadSize": "L",
+            "observedAt": "2026-10-03T15:49:30Z",
+        }]
+        planned = plan_mining_routes(
+            candidates, "Platinum", OPTIMIZE_MERITS,
+            min_demand=5000, max_demand=500000,
+            max_market_age_hours=1, landing_pad="LARGE",
+            power="Aisling Duval", power_goal="REINFORCE",
+            markets=markets, powerplay_systems=[{
+                "system": "HIP 11402", "power": "Aisling Duval",
+                "controllingPower": "Aisling Duval", "powerState": "Stronghold",
+            }], now=now,
+        )
+        by_ring = {row["ring"]: row for row in planned}
+        self.assertEqual(
+            by_ring["HIP 11402 A 2 B Ring"]["verificationStatus"], "VERIFIED",
+        )
+        for ring in (
+            "HIP 32145 4 A Ring", "HIP 32145 4 B Ring",
+            "Col 285 Sector GV-D b13-4 3 a",
+        ):
+            self.assertEqual(
+                by_ring[ring]["marketStatus"], planner_module.MARKET_VERIFIED,
+            )
+            self.assertEqual(
+                by_ring[ring]["verificationStatus"],
+                planner_module.POWERPLAY_DATA_MISSING,
+            )
+            self.assertIn("Market fresh", by_ring[ring]["pendingReason"])
+
+    def test_reconstructed_thirty_route_status_distribution(self):
+        candidates = []
+        markets = []
+        powerplay = []
+        for index in range(30):
+            system = f"Distribution {index}"
+            candidates.append(candidate(system, index + 1))
+            if index < 5:
+                powerplay.append({
+                    "system": system, "power": "Aisling Duval",
+                    "controllingPower": "Aisling Duval",
+                    "powerState": "Stronghold",
+                })
+            if index < 14:
+                markets.append({
+                    "commodity": "platinum", "system": system,
+                    "station": f"Hub {index}", "sellPrice": 200000 + index,
+                    "demand": 10000, "landingPadSize": "L",
+                    "observedAt": "2026-09-30T11:30:00Z",
+                })
+            elif index < 17:
+                markets.append({
+                    "commodity": "platinum", "system": system,
+                    "station": f"Old Hub {index}", "sellPrice": 200000,
+                    "demand": 10000, "landingPadSize": "L",
+                    "observedAt": "2026-09-30T10:59:59Z",
+                })
+            elif index < 23:
+                markets.append({
+                    "commodity": "platinum", "system": system,
+                    "station": f"Low Hub {index}", "sellPrice": 200000,
+                    "demand": 4999, "landingPadSize": "L",
+                    "observedAt": "2026-09-30T11:30:00Z",
+                })
+        planned = plan_mining_routes(
+            candidates, "Platinum", OPTIMIZE_MERITS,
+            min_demand=5000, max_demand=500000,
+            max_market_age_hours=1, landing_pad="LARGE",
+            power="Aisling Duval", power_goal="REINFORCE",
+            markets=markets, powerplay_systems=powerplay,
+            result_limit=30, now=NOW,
+        )
+        counts = {}
+        for row in planned:
+            counts[row["verificationStatus"]] = (
+                counts.get(row["verificationStatus"], 0) + 1
+            )
+        self.assertEqual(counts, {
+            "VERIFIED": 5,
+            planner_module.POWERPLAY_DATA_MISSING: 9,
+            planner_module.MARKET_TOO_OLD: 3,
+            planner_module.MARKET_OUTSIDE_FILTERS: 6,
+            planner_module.NO_MARKET_DATA: 7,
+        })
+
     def test_market_diagnostics_distinguish_filtered_from_missing_data(self):
         diagnostics = market_filter_diagnostics(
             [{
@@ -239,11 +437,11 @@ class MiningPlannerTests(unittest.TestCase):
         )
         self.assertEqual(
             [row["powerplayVerificationState"] for row in planned],
-            ["VERIFIED", "PENDING", "INELIGIBLE"],
+            ["VERIFIED", "NO_MARKET_DATA", "INELIGIBLE"],
         )
         self.assertEqual(
             planned[1]["powerplayVerificationLabel"],
-            "MARKET CHECK PENDING",
+            "NO MARKET DATA",
         )
 
     def test_all_commodities_selects_a_concrete_ring_and_market_pair(self):
@@ -300,7 +498,7 @@ class MiningPlannerTests(unittest.TestCase):
         self.assertEqual(planned[0]["marketReliabilityState"], "MISSING")
         self.assertIsNone(planned[0]["profitScore"])
         self.assertEqual(
-            planned[0]["powerplayVerificationState"], "PENDING",
+            planned[0]["powerplayVerificationState"], "MARKET_TOO_OLD",
         )
 
     def test_plain_mining_result_survives_without_market_claims(self):
@@ -925,8 +1123,11 @@ class MiningFinderUiContractTests(unittest.TestCase):
         self.assertIn('appWindow.t("mining.rings_only", "RINGS ONLY")', qml)
         self.assertIn('cockpit.verifyMiningRoutes(', qml)
         self.assertIn('"POWERPLAY VERIFIED"', qml)
-        self.assertIn('"MARKET CHECK PENDING"', qml)
-        self.assertIn('section.property: "powerplayVerificationLabel"', qml)
+        self.assertNotIn('"MARKET CHECK PENDING"', qml)
+        self.assertIn('"POWERPLAY DATA MISSING"', qml)
+        self.assertIn('"MARKET TOO OLD"', qml)
+        self.assertIn('"NO MARKET DATA"', qml)
+        self.assertIn('section.property: "verificationGroupLabel"', qml)
         self.assertIn("stationDistanceLs", qml)
         self.assertIn("selectedCommodityName", qml)
         self.assertIn("marketQualityStatus", qml)

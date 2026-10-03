@@ -26,6 +26,15 @@ OPTIMIZATION_MODES = (
     OPTIMIZE_DISTANCE,
 )
 
+MARKET_VERIFIED = "MARKET_VERIFIED"
+MARKET_TOO_OLD = "MARKET_TOO_OLD"
+MARKET_OUTSIDE_FILTERS = "MARKET_OUTSIDE_FILTERS"
+NO_MARKET_DATA = "NO_MARKET_DATA"
+
+POWERPLAY_VERIFIED = "POWERPLAY_VERIFIED"
+POWERPLAY_DATA_MISSING = "POWERPLAY_DATA_MISSING"
+NOT_ELIGIBLE = "NOT_ELIGIBLE"
+
 
 def _number(value: Any, default: float = 0.0) -> float:
     try:
@@ -174,6 +183,153 @@ def _market_is_fresh(
     return max_age_hours <= 0 or age <= max_age_hours * 3600, age
 
 
+def _readable_age(age_seconds: int | None) -> str:
+    if age_seconds is None:
+        return "unknown age"
+    minutes = max(0, int(age_seconds)) // 60
+    if minutes < 60:
+        return f"{minutes} min"
+    hours, remaining = divmod(minutes, 60)
+    return f"{hours} h {remaining} min" if remaining else f"{hours} h"
+
+
+def _market_filter_assessment(
+    market: dict[str, Any], *, landing_pad: str, min_demand: int,
+    max_demand: int, max_market_age_hours: int, now: datetime,
+) -> dict[str, Any]:
+    """Describe every active market filter without changing eligibility."""
+    fresh, age = _market_is_fresh(market, max_market_age_hours, now)
+    demand = int(market.get("demand", 0) or 0)
+    demand_infinite = bool(market.get("demandInfinite"))
+    minimum = max(0, int(min_demand or 0))
+    maximum = max(0, int(max_demand or 0))
+    demand_matches = demand_infinite or (
+        demand >= minimum and (maximum <= 0 or demand <= maximum)
+    )
+    pad_matches = _pad_matches(market, landing_pad)
+    carrier_matches = market.get("fleetCarrier") is not True
+    reasons = []
+    reason_codes = []
+    if not fresh:
+        reason_codes.append("AGE")
+        reasons.append(
+            f"Market data is {_readable_age(age)} old; active limit is "
+            f"{max_market_age_hours} h"
+            if max_market_age_hours > 0
+            else "Market observation time is unavailable"
+        )
+    if not demand_matches:
+        reason_codes.append("DEMAND")
+        if demand < minimum:
+            reasons.append(
+                f"Demand {demand:,} T is below active minimum {minimum:,} T"
+            )
+        else:
+            reasons.append(
+                f"Demand {demand:,} T is above active maximum {maximum:,} T"
+            )
+    if not pad_matches:
+        reason_codes.append("PAD")
+        actual = str(
+            market.get("landingPadSize")
+            or market.get("landing_pad_size") or "UNKNOWN"
+        ).upper()
+        reasons.append(
+            f"Station pad {actual} does not satisfy active "
+            f"{str(landing_pad or 'ANY').upper()} pad filter"
+        )
+    if not carrier_matches:
+        reason_codes.append("CARRIER")
+        reasons.append("Fleet carriers are excluded by the active filter")
+
+    matches = fresh and demand_matches and pad_matches and carrier_matches
+    status = MARKET_VERIFIED if matches else (
+        MARKET_TOO_OLD if not fresh else MARKET_OUTSIDE_FILTERS
+    )
+    return {
+        "status": status,
+        "fresh": fresh,
+        "ageSeconds": age,
+        "matchesAge": fresh,
+        "matchesDemand": demand_matches,
+        "matchesPad": pad_matches,
+        "matchesCarrier": carrier_matches,
+        "matchesFilters": matches,
+        "reasonCodes": reason_codes,
+        "reason": "; ".join(reasons),
+    }
+
+
+def _verification_status(
+    market_status: str, powerplay_status: str, *, market_reason: str = "",
+    powerplay_reason: str = "",
+) -> dict[str, Any]:
+    """Combine independent market and Powerplay facts for presentation."""
+    if powerplay_status == NOT_ELIGIBLE:
+        return {
+            "state": "INELIGIBLE",
+            "label": "NOT ELIGIBLE",
+            "group": "NOT ELIGIBLE",
+            "rank": 5,
+            "reason": powerplay_reason or "Powerplay route is not eligible",
+        }
+    if powerplay_status == POWERPLAY_VERIFIED:
+        if market_status == MARKET_VERIFIED:
+            return {
+                "state": "VERIFIED",
+                "label": "VERIFIED",
+                "group": "POWERPLAY VERIFIED",
+                "rank": 0,
+                "reason": powerplay_reason or "Market and Powerplay route verified",
+            }
+        return {
+            "state": "KNOWN",
+            "label": "ROUTE KNOWN",
+            "group": "POWERPLAY ROUTE KNOWN · MARKET DATA LIMITED",
+            "rank": 1,
+            "reason": market_reason or "Powerplay route known; market data limited",
+        }
+    if market_status == MARKET_VERIFIED:
+        return {
+            "state": POWERPLAY_DATA_MISSING,
+            "label": "POWERPLAY DATA MISSING",
+            "group": "POWERPLAY DATA MISSING",
+            "rank": 2,
+            "reason": powerplay_reason or "Powerplay evidence is missing",
+        }
+    if market_status == MARKET_TOO_OLD:
+        return {
+            "state": MARKET_TOO_OLD,
+            "label": "MARKET TOO OLD",
+            "group": "MARKET DATA MISSING / STALE",
+            "rank": 3,
+            "reason": market_reason or "Market data is older than the active limit",
+        }
+    if market_status == MARKET_OUTSIDE_FILTERS:
+        label = "MARKET OUTSIDE FILTERS"
+        upper_reason = str(market_reason or "").upper()
+        if "DEMAND" in upper_reason:
+            label = "DEMAND OUT OF RANGE"
+        elif "PAD" in upper_reason:
+            label = "PAD FILTER MISMATCH"
+        elif "CARRIER" in upper_reason:
+            label = "CARRIER EXCLUDED"
+        return {
+            "state": MARKET_OUTSIDE_FILTERS,
+            "label": label,
+            "group": "OUTSIDE FILTERS",
+            "rank": 4,
+            "reason": market_reason or "Market is outside active filters",
+        }
+    return {
+        "state": NO_MARKET_DATA,
+        "label": "NO MARKET DATA",
+        "group": "MARKET DATA MISSING / STALE",
+        "rank": 3,
+        "reason": market_reason or "No verified market observation is available",
+    }
+
+
 def _eligible_markets(
     markets: Iterable[dict[str, Any]], *, landing_pad: str,
     min_demand: int, max_demand: int, max_market_age_hours: int,
@@ -183,27 +339,34 @@ def _eligible_markets(
     """Apply query-wide market filters once instead of once per ring."""
     result = []
     for source in markets or []:
-        if not isinstance(source, dict) or source.get("fleetCarrier") is True \
-                or not _pad_matches(source, landing_pad):
+        if not isinstance(source, dict):
             continue
         market = dict(source)
-        fresh, age = _market_is_fresh(market, max_market_age_hours, now)
-        market["fresh"] = fresh
-        market["ageSeconds"] = age
-        demand = int(market.get("demand", 0) or 0)
-        demand_matches = bool(market.get("demandInfinite")) or (
-            demand >= max(0, int(min_demand or 0))
-            and (
-                max(0, int(max_demand or 0)) <= 0
-                or demand <= int(max_demand)
-            )
+        assessment = _market_filter_assessment(
+            market,
+            landing_pad=landing_pad,
+            min_demand=min_demand,
+            max_demand=max_demand,
+            max_market_age_hours=max_market_age_hours,
+            now=now,
         )
-        market["matchesAge"] = fresh
-        market["matchesDemand"] = demand_matches
-        market["matchesFilters"] = fresh and demand_matches
-        if enforce_age and max_market_age_hours > 0 and not fresh:
+        market.update({
+            "fresh": assessment["fresh"],
+            "ageSeconds": assessment["ageSeconds"],
+            "matchesAge": assessment["matchesAge"],
+            "matchesDemand": assessment["matchesDemand"],
+            "matchesPad": assessment["matchesPad"],
+            "matchesCarrier": assessment["matchesCarrier"],
+            "matchesFilters": assessment["matchesFilters"],
+            "marketFilterReasonCodes": assessment["reasonCodes"],
+            "marketFilterReason": assessment["reason"],
+        })
+        if not assessment["matchesCarrier"] or not assessment["matchesPad"]:
             continue
-        if enforce_demand and not demand_matches:
+        if enforce_age and max_market_age_hours > 0 \
+                and not assessment["fresh"]:
+            continue
+        if enforce_demand and not assessment["matchesDemand"]:
             continue
         result.append(market)
     return result
@@ -715,6 +878,34 @@ def plan_mining_routes(
     )
     powerplay_catalog = _powerplay_index(powerplay_systems)
     projected_shared_markets = _market_rows({}, commodity_id, markets)
+
+    def assessed_market(source_market: dict[str, Any]) -> dict[str, Any]:
+        assessed = dict(source_market)
+        assessment = _market_filter_assessment(
+            assessed,
+            landing_pad=landing_pad,
+            min_demand=min_demand,
+            max_demand=max_demand,
+            max_market_age_hours=max_market_age_hours,
+            now=now,
+        )
+        assessed.update({
+            "fresh": assessment["fresh"],
+            "ageSeconds": assessment["ageSeconds"],
+            "matchesAge": assessment["matchesAge"],
+            "matchesDemand": assessment["matchesDemand"],
+            "matchesPad": assessment["matchesPad"],
+            "matchesCarrier": assessment["matchesCarrier"],
+            "matchesFilters": assessment["matchesFilters"],
+            "marketStatus": assessment["status"],
+            "marketFilterReasonCodes": assessment["reasonCodes"],
+            "marketFilterReason": assessment["reason"],
+        })
+        return assessed
+
+    assessed_shared_markets = [
+        assessed_market(market) for market in projected_shared_markets
+    ]
     shared_market_rows = _eligible_markets(
         projected_shared_markets,
         landing_pad=landing_pad,
@@ -750,6 +941,28 @@ def plan_mining_routes(
         shared_by_system[_system_key(shared_market.get("system"))].append(
             shared_market
         )
+    diagnostic_by_system: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    diagnostic_by_commodity: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    diagnostic_rank = {
+        MARKET_VERIFIED: 0,
+        MARKET_TOO_OLD: 1,
+        MARKET_OUTSIDE_FILTERS: 2,
+    }
+    for diagnostic_market in assessed_shared_markets:
+        diagnostic_by_system[
+            _system_key(diagnostic_market.get("system"))
+        ].append(diagnostic_market)
+        diagnostic_by_commodity[
+            str(diagnostic_market.get("commodity") or "").casefold()
+        ].append(diagnostic_market)
+    for bucket in [
+        *diagnostic_by_system.values(), *diagnostic_by_commodity.values(),
+    ]:
+        bucket.sort(key=lambda item: (
+            diagnostic_rank.get(item.get("marketStatus"), 3),
+            -int(item.get("sellPrice", 0) or 0),
+            -int(item.get("demand", 0) or 0),
+        ))
     shared_fallback_order = sorted(
         shared_market_rows,
         key=lambda item: (
@@ -1018,6 +1231,49 @@ def plan_mining_routes(
         ))
         return annotated[0]
 
+    def best_diagnostic_market(
+        row: dict[str, Any], local_rows: Iterable[dict[str, Any]],
+    ) -> dict[str, Any]:
+        """Return the best known raw market without making it route-eligible."""
+        commodity_ids = set(_candidate_commodity_ids(row, commodity))
+        pool = [assessed_market(item) for item in local_rows]
+        if same_system_sale_required:
+            pool.extend(diagnostic_by_system.get(
+                _system_key(row.get("system")), ()
+            ))
+        else:
+            for candidate_commodity in commodity_ids:
+                bucket = diagnostic_by_commodity.get(candidate_commodity, ())
+                if bucket:
+                    pool.append(bucket[0])
+        compatible = []
+        mine_system = _system_key(row.get("system"))
+        seen = set()
+        for item in pool:
+            item_commodity = str(item.get("commodity") or "").casefold()
+            if commodity_ids and item_commodity not in commodity_ids:
+                continue
+            if same_system_sale_required and (
+                _system_key(item.get("system")) != mine_system
+            ):
+                continue
+            identity = (
+                int(_number(item.get("marketId"))),
+                _system_key(item.get("system")),
+                str(item.get("station") or "").casefold(),
+                item_commodity,
+            )
+            if identity in seen:
+                continue
+            seen.add(identity)
+            compatible.append(item)
+        compatible.sort(key=lambda item: (
+            diagnostic_rank.get(item.get("marketStatus"), 3),
+            -int(item.get("sellPrice", 0) or 0),
+            -int(item.get("demand", 0) or 0),
+        ))
+        return compatible[0] if compatible else {}
+
     prepared: list[dict[str, Any]] = []
     for source in candidates or []:
         if not isinstance(source, dict):
@@ -1046,8 +1302,9 @@ def plan_mining_routes(
         }:
             continue
         candidate_markets = []
+        projected_local_markets = _market_rows(row, commodity_id)
         local_markets = _eligible_markets(
-            _market_rows(row, commodity_id),
+            projected_local_markets,
             landing_pad=landing_pad,
             min_demand=min_demand,
             max_demand=max_demand,
@@ -1065,6 +1322,21 @@ def plan_mining_routes(
             item, optimization
         ))
         market = candidate_markets[0] if candidate_markets else {}
+        diagnostic_market = market or best_diagnostic_market(
+            row, projected_local_markets,
+        )
+        market_status = (
+            MARKET_VERIFIED if market
+            else str(diagnostic_market.get("marketStatus") or NO_MARKET_DATA)
+        )
+        market_reason = str(
+            diagnostic_market.get("marketFilterReason") or ""
+        )
+        if market_status == NO_MARKET_DATA:
+            market_reason = (
+                f"No verified {mining_commodity_name(commodity_id)} market "
+                f"data is available for {str(row.get('system') or 'this system')}"
+            )
         candidate_commodities = _candidate_commodity_ids(row, commodity)
         selected_commodity = (
             mining_commodity_id(market.get("commodity"))
@@ -1101,6 +1373,21 @@ def plan_mining_routes(
             "marketReceivedAt": str(market.get("receivedAt") or ""),
             "marketStatusFlags": list(market.get("statusFlags") or []),
             "marketKnown": bool(market),
+            "marketDataKnown": bool(diagnostic_market),
+            "marketStatus": market_status,
+            "marketFilterReason": market_reason,
+            "marketFilterReasonCodes": list(
+                diagnostic_market.get("marketFilterReasonCodes") or []
+            ),
+            "diagnosticMarketId": int(_number(
+                diagnostic_market.get("marketId")
+            )),
+            "diagnosticMarketSource": str(
+                diagnostic_market.get("source") or ""
+            ),
+            "diagnosticMarketAgeSeconds": diagnostic_market.get(
+                "ageSeconds"
+            ),
             "marketMatchesFilters": bool(market.get("matchesFilters")),
             "marketPriceFresh": bool(market.get("fresh")),
             "marketReliabilityState": (
@@ -1111,7 +1398,7 @@ def plan_mining_routes(
                 "CURRENT PRICE AND DEMAND VERIFIED"
                 if market.get("matchesFilters")
                 else "MARKET KNOWN · PRICE OR DEMAND OUTSIDE ACTIVE LIMITS"
-                if market else "MARKET CHECK PENDING"
+                if market else "NO MARKET DATA"
             ),
             "selectedCommodity": selected_commodity,
             "selectedCommodityName": (
@@ -1194,29 +1481,51 @@ def plan_mining_routes(
         )
         merit_score = row.pop("_meritScore")
         if optimization == OPTIMIZE_MERITS:
-            if _number(merit_score, -1.0) > 0:
-                if row.get("marketMatchesFilters"):
-                    verification_state = "VERIFIED"
-                    verification_label = "POWERPLAY VERIFIED"
-                    verification_rank = 0
-                else:
-                    verification_state = "KNOWN"
-                    verification_label = (
-                        "POWERPLAY ROUTE KNOWN · MARKET DATA LIMITED"
+            powerplay_status = (
+                POWERPLAY_VERIFIED
+                if _number(merit_score, -1.0) > 0
+                else POWERPLAY_DATA_MISSING
+                if merit_score is None
+                else NOT_ELIGIBLE
+            )
+            if powerplay_status == POWERPLAY_DATA_MISSING:
+                if row.get("marketStatus") == MARKET_VERIFIED:
+                    age = _readable_age(row.get("marketAgeSeconds"))
+                    powerplay_reason = (
+                        f"Market fresh ({age}), but no Powerplay evidence for "
+                        f"{str(power or 'the selected power')} in "
+                        f"{str(row.get('system') or 'this system')}"
                     )
-                    verification_rank = 1
-            elif merit_score is None:
-                verification_state = "PENDING"
-                verification_label = "MARKET CHECK PENDING"
-                verification_rank = 2
+                else:
+                    powerplay_reason = str(
+                        row.get("meritStatus") or "Powerplay evidence is missing"
+                    )
             else:
-                verification_state = "INELIGIBLE"
-                verification_label = "MINING ONLY · NOT POWERPLAY ELIGIBLE"
-                verification_rank = 3
+                powerplay_reason = str(row.get("meritStatus") or "")
+            combined = _verification_status(
+                str(row.get("marketStatus") or NO_MARKET_DATA),
+                powerplay_status,
+                market_reason=str(row.get("marketFilterReason") or ""),
+                powerplay_reason=powerplay_reason,
+            )
+            verification_state = combined["state"]
+            verification_label = combined["label"]
+            verification_group = combined["group"]
+            verification_rank = combined["rank"]
+            pending_reason = combined["reason"]
         else:
+            powerplay_status = (
+                POWERPLAY_VERIFIED
+                if _number(merit_score, -1.0) > 0
+                else POWERPLAY_DATA_MISSING
+                if merit_score is None
+                else NOT_ELIGIBLE
+            )
             verification_state = "NOT_APPLICABLE"
             verification_label = "MINING ROUTES"
+            verification_group = "MINING ROUTES"
             verification_rank = 0
+            pending_reason = str(row.get("marketFilterReason") or "")
         score_parts = {
             "yield": row["yieldScore"], "data": row["dataScore"],
             "profit": profit_score, "merit": merit_score,
@@ -1248,6 +1557,10 @@ def plan_mining_routes(
             "overallStars": _stars(overall),
             "powerplayVerificationState": verification_state,
             "powerplayVerificationLabel": verification_label,
+            "verificationStatus": verification_state,
+            "verificationGroupLabel": verification_group,
+            "powerplayStatus": powerplay_status,
+            "pendingReason": pending_reason,
             "powerplayVerificationRank": verification_rank,
             "resPreferred": bool(prefer_res and (
                 row.get("resType") or row.get("resourceExtractionSite")

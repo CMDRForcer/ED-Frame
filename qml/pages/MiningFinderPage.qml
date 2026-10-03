@@ -339,20 +339,41 @@ Item {
                   + names.join(", ") : ""
     }
     function verificationColor(row) {
-        let state = String(row.powerplayVerificationState || "")
+        let state = String(row && row.powerplayVerificationState !== undefined
+                           ? row.powerplayVerificationState : "")
         if (state === "VERIFIED") return green
         if (state === "INELIGIBLE") return muted
+        if (state === "POWERPLAY_DATA_MISSING") return cyan
         return orange
     }
     function verificationShortLabel(row) {
-        let state = String(row.powerplayVerificationState || "")
+        if (!row) return appWindow.t("status.unknown", "UNKNOWN")
+        let explicitLabel = row.powerplayVerificationLabel === undefined
+                || row.powerplayVerificationLabel === null
+                ? "" : String(row.powerplayVerificationLabel)
+        if (explicitLabel) return explicitLabel
+        let state = row.powerplayVerificationState === undefined
+                || row.powerplayVerificationState === null
+                ? "" : String(row.powerplayVerificationState)
         if (state === "VERIFIED")
             return appWindow.t("mining.powerplay_verified", "VERIFIED")
         if (state === "KNOWN")
             return appWindow.t("mining.powerplay_known", "ROUTE KNOWN")
         if (state === "INELIGIBLE")
             return appWindow.t("mining.powerplay_ineligible", "NOT ELIGIBLE")
-        return appWindow.t("mining.powerplay_pending", "CHECK PENDING")
+        if (state === "POWERPLAY_DATA_MISSING") return "POWERPLAY DATA MISSING"
+        if (state === "MARKET_TOO_OLD") return "MARKET TOO OLD"
+        if (state === "MARKET_OUTSIDE_FILTERS") return "MARKET OUTSIDE FILTERS"
+        if (state === "NO_MARKET_DATA") return "NO MARKET DATA"
+        if (state === "NOT_YET_CHECKED") return "NOT YET CHECKED"
+        if (state === "MARKET_CHECK_RUNNING") return "MARKET CHECK RUNNING"
+        return appWindow.t("status.unknown", "UNKNOWN")
+    }
+    function verificationReason(row) {
+        if (!row || row.pendingReason === undefined
+                || row.pendingReason === null)
+            return ""
+        return String(row.pendingReason)
     }
     function routeIndex(row) {
         for (let index = 0; index < resultRows.length; ++index) {
@@ -1211,6 +1232,10 @@ Item {
                         color: inputBackground
                         border.width: 1
                         border.color: verificationColor(bestRoute)
+                        ToolTip.visible: bestVerificationHover.hovered
+                                             && verificationReason(bestRoute) !== ""
+                        ToolTip.text: verificationReason(bestRoute)
+                        HoverHandler { id: bestVerificationHover }
                         Label {
                             id: powerplayVerificationLabel
                             anchors.centerIn: parent
@@ -1427,7 +1452,7 @@ Item {
             Layout.fillWidth: true; Layout.fillHeight: true
             spacing: 5; clip: true
             model: alternativeRows
-            section.property: "powerplayVerificationLabel"
+            section.property: "verificationGroupLabel"
             section.criteria: ViewSection.FullString
             section.delegate: Rectangle {
                 width: routesList.width
@@ -1440,9 +1465,11 @@ Item {
                     anchors.verticalCenter: parent.verticalCenter
                     text: section
                     color: section === "POWERPLAY VERIFIED" ? green
-                           : (section === "MARKET CHECK PENDING"
-                              || section === "POWERPLAY ROUTE KNOWN · MARKET DATA LIMITED"
-                              ? orange : muted)
+                           : (section === "POWERPLAY DATA MISSING" ? cyan
+                              : (section === "OUTSIDE FILTERS"
+                                 || section === "MARKET DATA MISSING / STALE"
+                                 || section === "POWERPLAY ROUTE KNOWN · MARKET DATA LIMITED"
+                                 ? orange : muted))
                     font.pixelSize: 10
                     font.bold: true
                 }
@@ -1476,6 +1503,7 @@ Item {
                     Label { Layout.minimumWidth: routePriceWidth; Layout.preferredWidth: routePriceWidth; Layout.maximumWidth: routePriceWidth; text: modelData.marketKnown ? formatNumber(modelData.sellPrice) + " CR" : "—"; color: modelData.marketMatchesFilters ? green : (modelData.marketKnown ? orange : muted); font.pixelSize: 10; font.bold: true }
                     Label { Layout.minimumWidth: routeDemandWidth; Layout.preferredWidth: routeDemandWidth; Layout.maximumWidth: routeDemandWidth; text: modelData.marketKnown ? (modelData.demandInfinite ? "∞" : formatNumber(modelData.demand) + " T") : "—"; color: textPrimary; font.pixelSize: 10; font.bold: true }
                     Label {
+                        id: routeVerificationStatus
                         Layout.minimumWidth: routeStatusWidth
                         Layout.preferredWidth: routeStatusWidth
                         Layout.maximumWidth: routeStatusWidth
@@ -1486,6 +1514,11 @@ Item {
                                ? verificationColor(modelData)
                                : (modelData.stale ? orange : green)
                         font.pixelSize: 9; font.bold: true
+                        elide: Text.ElideRight
+                        ToolTip.visible: routeVerificationHover.hovered
+                                             && verificationReason(modelData) !== ""
+                        ToolTip.text: verificationReason(modelData)
+                        HoverHandler { id: routeVerificationHover }
                     }
                     Label { Layout.minimumWidth: routeSelectWidth; Layout.preferredWidth: routeSelectWidth; Layout.maximumWidth: routeSelectWidth; text: appWindow.t("mining.use_route", "USE"); color: routeHover.hovered ? cyan : textSecondary; font.pixelSize: 10; font.bold: true; horizontalAlignment: Text.AlignHCenter }
                 }
