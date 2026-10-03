@@ -12,10 +12,10 @@ class ConnectionSourceTabTests(unittest.TestCase):
     def test_each_remote_catalog_source_has_its_own_tab(self):
         qml = (ROOT / "Main.qml").read_text(encoding="utf-8")
         for label in (
-            'text: "EDDN"',
-            'text: "ED-FRAME"',
-            'text: "SPANSH"',
-            'text: "EDSM"',
+            'text: window.t("connections.eddn_source_tab", "EDDN")',
+            'text: window.t("connections.edframe_tab", "ED-FRAME")',
+            'text: window.t("connections.spansh_source_tab", "SPANSH")',
+            'text: window.t("connections.edsm_tab", "EDSM")',
         ):
             self.assertIn(label, qml)
         self.assertNotIn('"EDDN & STATE FINDS"', qml)
