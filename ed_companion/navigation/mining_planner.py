@@ -11,7 +11,7 @@ from datetime import datetime, timezone
 from math import sqrt
 from typing import Any, Iterable
 
-from .mining_commodities import mining_commodity_id
+from .mining_commodities import mining_commodity_id, mining_commodity_name
 from .mining_finder import is_belt_candidate
 
 
@@ -105,15 +105,17 @@ def _market_rows(
         *(shared_markets or []),
     ]
     result = []
+    all_commodities = commodity_id in {"", "allcommodities"}
     for market in rows if isinstance(rows, list) else []:
         if not isinstance(market, dict):
             continue
         market_commodity = mining_commodity_id(
             market.get("commodity") or market.get("name")
         )
-        if commodity_id and market_commodity != commodity_id:
+        if not all_commodities and market_commodity != commodity_id:
             continue
         projected = dict(market)
+        projected["commodity"] = market_commodity
         projected["sellPrice"] = max(0, int(_number(
             market.get("sellPrice") or market.get("sell_price")
         )))
@@ -175,27 +177,33 @@ def _market_is_fresh(
 def _eligible_markets(
     markets: Iterable[dict[str, Any]], *, landing_pad: str,
     min_demand: int, max_demand: int, max_market_age_hours: int,
-    now: datetime,
+    now: datetime, enforce_age: bool = True,
+    enforce_demand: bool = True,
 ) -> list[dict[str, Any]]:
     """Apply query-wide market filters once instead of once per ring."""
     result = []
     for source in markets or []:
-        if not isinstance(source, dict) or not _pad_matches(source, landing_pad):
+        if not isinstance(source, dict) or source.get("fleetCarrier") is True \
+                or not _pad_matches(source, landing_pad):
             continue
         market = dict(source)
         fresh, age = _market_is_fresh(market, max_market_age_hours, now)
         market["fresh"] = fresh
         market["ageSeconds"] = age
-        if max_market_age_hours > 0 and not fresh:
-            continue
         demand = int(market.get("demand", 0) or 0)
-        if not market.get("demandInfinite") and demand < max(0, int(min_demand or 0)):
+        demand_matches = bool(market.get("demandInfinite")) or (
+            demand >= max(0, int(min_demand or 0))
+            and (
+                max(0, int(max_demand or 0)) <= 0
+                or demand <= int(max_demand)
+            )
+        )
+        market["matchesAge"] = fresh
+        market["matchesDemand"] = demand_matches
+        market["matchesFilters"] = fresh and demand_matches
+        if enforce_age and max_market_age_hours > 0 and not fresh:
             continue
-        if (
-            max(0, int(max_demand or 0)) > 0
-            and not market.get("demandInfinite")
-            and demand > int(max_demand)
-        ):
+        if enforce_demand and not demand_matches:
             continue
         result.append(market)
     return result
@@ -298,9 +306,16 @@ def market_filter_diagnostics(
 
 def _market_sort_key(market: dict[str, Any], optimization: str) -> tuple:
     if optimization == OPTIMIZE_MERITS:
+        merit_score = market.get("meritScore")
+        verification_rank = (
+            0 if _number(merit_score, -1.0) > 0
+            else 1 if merit_score is None
+            else 2
+        )
         return (
-            market.get("meritScore") is None,
-            -_number(market.get("meritScore")),
+            verification_rank,
+            not bool(market.get("matchesFilters")),
+            -_number(merit_score),
             -int(market.get("sellPrice", 0) or 0),
             -int(market.get("demand", 0) or 0),
         )
@@ -323,6 +338,156 @@ def _spatial_cell(coordinates: Any, size: float = 30.0) -> tuple[int, int, int] 
         return tuple(int(float(value) // size) for value in coordinates)
     except (TypeError, ValueError):
         return None
+
+
+def _candidate_commodity_ids(
+    row: dict[str, Any], requested: str,
+) -> list[str]:
+    """Return concrete mineable commodities in evidence-preference order."""
+    cached = row.get("_candidateCommodityIds")
+    if isinstance(cached, list):
+        return cached
+    requested_id = mining_commodity_id(requested)
+    if requested_id not in {"", "allcommodities"}:
+        return [requested_id]
+    result = []
+    seen = set()
+    sources = [
+        *(row.get("candidateCommodities") or []),
+        *(row.get("yieldStats") or []),
+        *(row.get("hotspots") or []),
+    ]
+    for source in sources:
+        value = source.get("id") or source.get("commodity") \
+            if isinstance(source, dict) else source
+        commodity_id = mining_commodity_id(value)
+        if commodity_id and commodity_id != "allcommodities" \
+                and commodity_id not in seen:
+            result.append(commodity_id)
+            seen.add(commodity_id)
+    return result
+
+
+def _same_market_location(
+    left: dict[str, Any], right: dict[str, Any],
+) -> bool:
+    """Return whether two observations describe the same sell station."""
+    if not left or not right:
+        return False
+    left_market = int(_number(left.get("marketId")))
+    right_market = int(_number(right.get("marketId")))
+    if left_market > 0 and right_market > 0:
+        return left_market == right_market
+    return (
+        _system_key(left.get("system")) == _system_key(right.get("system"))
+        and str(left.get("station") or "").strip().casefold()
+        == str(right.get("station") or "").strip().casefold()
+        and bool(str(left.get("station") or "").strip())
+    )
+
+
+def _market_station_key(market: dict[str, Any]) -> tuple[str, str] | None:
+    system = _system_key(market.get("system"))
+    station = str(market.get("station") or "").strip().casefold()
+    return (system, station) if system and station else None
+
+
+def _secondary_resources(
+    row: dict[str, Any], primary_commodity: str,
+    route_market: dict[str, Any], eligible_markets: Iterable[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """Build evidence-backed secondary resources and same-station sales.
+
+    Ring-type possibilities are deliberately excluded: MORE RESOURCES must
+    only claim a secondary commodity when a hotspot or local Journal sample
+    actually supports it. Market facts are attached only when the selected
+    sell station has a qualifying observation for that exact commodity.
+    """
+    primary_id = mining_commodity_id(primary_commodity)
+    resources: dict[str, dict[str, Any]] = {}
+
+    def resource(identifier: str) -> dict[str, Any]:
+        return resources.setdefault(identifier, {
+            "id": identifier,
+            "name": mining_commodity_name(identifier),
+            "hotspot": False,
+            "localYield": False,
+            "prospectorHits": 0,
+            "refinedCount": 0,
+            "averageProportion": None,
+        })
+
+    for source in row.get("yieldStats") or []:
+        if not isinstance(source, dict):
+            continue
+        identifier = mining_commodity_id(source.get("commodity"))
+        if not identifier or identifier == primary_id:
+            continue
+        item = resource(identifier)
+        item["localYield"] = True
+        item["prospectorHits"] = max(
+            int(item["prospectorHits"]),
+            int(_number(source.get("prospectorHits"))),
+        )
+        item["refinedCount"] = max(
+            int(item["refinedCount"]),
+            int(_number(source.get("refinedCount"))),
+        )
+        proportion = source.get("averageProportion")
+        if proportion is not None:
+            item["averageProportion"] = max(
+                _number(item.get("averageProportion")), _number(proportion),
+            )
+
+    for source in row.get("hotspots") or []:
+        if not isinstance(source, dict):
+            continue
+        identifier = mining_commodity_id(source.get("commodity"))
+        if not identifier or identifier == primary_id:
+            continue
+        resource(identifier)["hotspot"] = True
+
+    markets_by_commodity: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    if route_market:
+        for source in eligible_markets or []:
+            if not isinstance(source, dict) or not _same_market_location(
+                source, route_market,
+            ):
+                continue
+            identifier = mining_commodity_id(source.get("commodity"))
+            if identifier:
+                markets_by_commodity[identifier].append(source)
+
+    result = []
+    for identifier, item in resources.items():
+        evidence = []
+        if item["localYield"]:
+            evidence.append("LOCAL YIELD")
+        if item["hotspot"]:
+            evidence.append("HOTSPOT")
+        matching_markets = markets_by_commodity.get(identifier, [])
+        matching_markets.sort(key=lambda market: (
+            -int(market.get("sellPrice", 0) or 0),
+            -int(market.get("demand", 0) or 0),
+        ))
+        market = matching_markets[0] if matching_markets else {}
+        item.update({
+            "evidence": evidence,
+            "evidenceLabel": " + ".join(evidence),
+            "marketKnown": bool(market),
+            "sellPrice": int(market.get("sellPrice", 0) or 0),
+            "demand": int(market.get("demand", 0) or 0),
+            "demandInfinite": bool(market.get("demandInfinite")),
+            "marketAgeSeconds": market.get("ageSeconds"),
+        })
+        result.append(item)
+
+    result.sort(key=lambda item: (
+        not bool(item.get("localYield")),
+        not bool(item.get("hotspot")),
+        str(item.get("name") or "").casefold(),
+    ))
+    return result
 
 
 def _power_key(value: Any) -> str:
@@ -440,17 +605,18 @@ def _merit_status(
     target_system = _system_key(market.get("system"))
     source_state = str(source.get("powerState") or "").strip()
     source_controller = _power_key(source.get("controllingPower"))
-    source_catalog_power = _power_key(source.get("power"))
-    controls_source = (
-        source_controller == selected_power
-        or (not source_controller and source_catalog_power == selected_power)
-    )
+    # EDSM's daily dump contains one row for every Power present in a system.
+    # Presence is useful for contesting/range context but is not proof of
+    # control.  Only an explicit ControllingPower may confirm the source.
+    controls_source = source_controller == selected_power
     goal = str(power_goal or "").casefold()
     if goal == "reinforce":
         if source_system != target_system:
             return "NOT ELIGIBLE · MINE AND SELL IN THE SAME SYSTEM", 0.0, None
         if not source_state:
             return "UNKNOWN · SOURCE POWER STATE MISSING", None, None
+        if not source_controller:
+            return "UNKNOWN · CONTROLLING POWER MISSING", None, None
         if not controls_source:
             return "NOT ELIGIBLE · POWER DOES NOT CONTROL SOURCE", 0.0, None
         if source_state.casefold() == "headquarters":
@@ -485,6 +651,8 @@ def _merit_status(
     if goal == "acquire":
         if not source_state:
             return "UNKNOWN · SOURCE POWER STATE MISSING", None, None
+        if not source_controller:
+            return "UNKNOWN · CONTROLLING POWER MISSING", None, None
         if not controls_source:
             return "NOT ELIGIBLE · POWER DOES NOT CONTROL SOURCE", 0.0, None
         source_state_key = source_state.casefold()
@@ -541,15 +709,42 @@ def plan_mining_routes(
     if optimization not in OPTIMIZATION_MODES:
         optimization = OPTIMIZE_YIELD
     commodity_id = mining_commodity_id(commodity)
+    all_commodities = commodity_id in {"", "allcommodities"}
+    requested_commodity_name = (
+        "" if all_commodities else mining_commodity_name(commodity_id)
+    )
     powerplay_catalog = _powerplay_index(powerplay_systems)
+    projected_shared_markets = _market_rows({}, commodity_id, markets)
     shared_market_rows = _eligible_markets(
-        _market_rows({}, commodity_id, markets),
+        projected_shared_markets,
         landing_pad=landing_pad,
         min_demand=min_demand,
         max_demand=max_demand,
         max_market_age_hours=max_market_age_hours,
         now=now,
     )
+    if prefer_secondary:
+        projected_secondary_markets = (
+            projected_shared_markets if all_commodities
+            else _market_rows({}, "allcommodities", markets)
+        )
+        secondary_shared_markets = _eligible_markets(
+            projected_secondary_markets,
+            landing_pad=landing_pad,
+            min_demand=min_demand,
+            max_demand=max_demand,
+            max_market_age_hours=max_market_age_hours,
+            now=now,
+        )
+    else:
+        secondary_shared_markets = []
+    secondary_market_index: dict[
+        tuple[str, str], list[dict[str, Any]]
+    ] = defaultdict(list)
+    for secondary_market in secondary_shared_markets:
+        station_key = _market_station_key(secondary_market)
+        if station_key is not None:
+            secondary_market_index[station_key].append(secondary_market)
     shared_by_system: dict[str, list[dict[str, Any]]] = defaultdict(list)
     for shared_market in shared_market_rows:
         shared_by_system[_system_key(shared_market.get("system"))].append(
@@ -562,6 +757,10 @@ def plan_mining_routes(
             -int(item.get("demand", 0) or 0),
         ),
     )
+    shared_fallback_rank = {
+        id(market): index
+        for index, market in enumerate(shared_fallback_order)
+    }
     shared_optimization_order = sorted(
         shared_market_rows,
         key=lambda item: _market_sort_key(item, optimization),
@@ -570,29 +769,99 @@ def plan_mining_routes(
         market for market in shared_market_rows
         if market.get("meritEligible") is True
     ]
+    goal = str(power_goal or "").casefold()
     acquire_spatial: dict[tuple[int, int, int], list[dict[str, Any]]] = (
         defaultdict(list)
     )
-    for shared_market in shared_market_rows:
-        target = _market_power_fact(shared_market, power, powerplay_catalog)
-        if str(target.get("powerState") or "").casefold() != "unoccupied":
-            continue
-        cell = _spatial_cell(target.get("coordinates"))
-        if cell is not None:
-            acquire_spatial[cell].append(shared_market)
+    acquire_unknown_targets = []
+    acquire_unknown_without_source_coordinates = []
+    if optimization == OPTIMIZE_MERITS and goal == "acquire":
+        for shared_market in shared_market_rows:
+            target = _market_power_fact(
+                shared_market, power, powerplay_catalog
+            )
+            explicit = shared_market.get("meritEligible")
+            target_state = str(target.get("powerState") or "").casefold()
+            if explicit is None and (
+                not target_state
+                or (
+                    target_state == "unoccupied"
+                    and _spatial_cell(target.get("coordinates")) is None
+                )
+            ):
+                acquire_unknown_targets.append(shared_market)
+            if explicit is None and target_state in {"", "unoccupied"}:
+                acquire_unknown_without_source_coordinates.append(
+                    shared_market
+                )
+            if target_state != "unoccupied":
+                continue
+            cell = _spatial_cell(target.get("coordinates"))
+            if cell is not None:
+                acquire_spatial[cell].append(shared_market)
+        acquire_unknown_targets.sort(
+            key=lambda market: shared_fallback_rank[id(market)]
+        )
+        acquire_unknown_without_source_coordinates.sort(
+            key=lambda market: shared_fallback_rank[id(market)]
+        )
+        explicit_shared_merits.sort(
+            key=lambda market: _market_sort_key(market, OPTIMIZE_MERITS)
+        )
 
     requested_ring = str(ring_filter or "ANY RING").casefold()
     requested_state = str(system_state or "ANY").strip().casefold()
-    goal = str(power_goal or "").casefold()
     same_system_sale_required = (
         optimization == OPTIMIZE_MERITS
         and goal in {"reinforce", "undermine"}
     )
 
+    def market_pool_indexes(rows):
+        by_commodity = defaultdict(list)
+        by_commodity_state = defaultdict(list)
+        members = set()
+        rank = {}
+        for index, market in enumerate(rows):
+            members.add(id(market))
+            rank[id(market)] = index
+            market_commodity = mining_commodity_id(market.get("commodity"))
+            if not market_commodity:
+                continue
+            by_commodity[market_commodity].append(market)
+            target = _market_power_fact(market, power, powerplay_catalog)
+            route_state = str(
+                market.get("systemState") or target.get("systemState") or ""
+            ).strip().casefold()
+            if route_state:
+                by_commodity_state[(market_commodity, route_state)].append(
+                    market
+                )
+        return by_commodity, by_commodity_state, members, rank
+
+    empty_market_indexes = ({}, {}, set(), {})
+    if optimization == OPTIMIZE_MERITS and goal == "acquire":
+        fallback_indexes = market_pool_indexes(shared_fallback_order)
+        explicit_merit_indexes = market_pool_indexes(explicit_shared_merits)
+        unknown_target_indexes = market_pool_indexes(acquire_unknown_targets)
+        unknown_no_source_indexes = market_pool_indexes(
+            acquire_unknown_without_source_coordinates
+        )
+    else:
+        fallback_indexes = empty_market_indexes
+        explicit_merit_indexes = empty_market_indexes
+        unknown_target_indexes = empty_market_indexes
+        unknown_no_source_indexes = empty_market_indexes
+
     def annotate_market(
         row: dict[str, Any], source_market: dict[str, Any],
     ) -> dict[str, Any] | None:
         market = dict(source_market)
+        candidate_commodities = set(_candidate_commodity_ids(row, commodity))
+        market_commodity = mining_commodity_id(market.get("commodity"))
+        if all_commodities and (
+            not market_commodity or market_commodity not in candidate_commodities
+        ):
+            return None
         if same_system_sale_required:
             mine_system = _system_key(row.get("system"))
             sell_system = _system_key(market.get("system"))
@@ -624,6 +893,47 @@ def plan_mining_routes(
         market["systemState"] = route_state
         return market
 
+    def first_indexed_market(
+        row: dict[str, Any], indexes,
+    ) -> dict[str, Any] | None:
+        """Return the best compatible fallback without rescanning the catalog."""
+        by_commodity, by_commodity_state, members, rank = indexes
+        commodity_ids = _candidate_commodity_ids(row, commodity)
+        candidates = {}
+        for candidate_commodity in commodity_ids:
+            bucket = (
+                by_commodity.get(candidate_commodity, ())
+                if requested_state in {"", "any"}
+                else by_commodity_state.get(
+                    (candidate_commodity, requested_state), ()
+                )
+            )
+            if bucket:
+                candidates[id(bucket[0])] = bucket[0]
+
+        # A market without its own state may inherit the candidate's state
+        # when mining and selling in one system.  Preserve that edge case
+        # without making every route scan the complete market catalog.
+        if requested_state not in {"", "any"} and str(
+            row.get("systemState") or ""
+        ).strip().casefold() == requested_state:
+            for source_market in shared_by_system.get(
+                _system_key(row.get("system")), ()
+            ):
+                if id(source_market) in members:
+                    candidates[id(source_market)] = source_market
+
+        for source_market in sorted(
+            candidates.values(),
+            key=lambda market: rank.get(
+                id(market), len(rank)
+            ),
+        ):
+            market = annotate_market(row, source_market)
+            if market is not None:
+                return market
+        return None
+
     def best_shared_market(row: dict[str, Any]) -> dict[str, Any] | None:
         if not shared_market_rows:
             return None
@@ -640,22 +950,26 @@ def plan_mining_routes(
             candidate_pool.extend(shared_by_system.get(source_system, ()))
         elif goal == "acquire":
             candidate_pool.extend(explicit_shared_merits)
+            explicit_market = first_indexed_market(
+                row, explicit_merit_indexes
+            )
+            if explicit_market is not None:
+                return explicit_market
             source = _candidate_power_fact(row, power, powerplay_catalog)
             selected_power = _power_key(power)
             source_state = str(source.get("powerState") or "").casefold()
             source_controller = _power_key(source.get("controllingPower"))
-            source_catalog_power = _power_key(source.get("power"))
-            controls_source = (
-                source_controller == selected_power
-                or (
-                    not source_controller
-                    and source_catalog_power == selected_power
-                )
-            )
+            controls_source = source_controller == selected_power
             radius = 20.0 if source_state == "fortified" else (
                 30.0 if source_state in {"stronghold", "headquarters"} else 0.0
             )
             cell = _spatial_cell(source.get("coordinates"))
+            # Source-side failures do not depend on the target market.  One
+            # indexed compatible market is enough to produce the exact same
+            # status; the previous full fallback scan made ACQUIRE O(rings ×
+            # markets) and could block the GUI for more than a minute.
+            if not source_state or not controls_source or not radius:
+                return first_indexed_market(row, fallback_indexes)
             if controls_source and radius and cell is not None:
                 for dx in (-1, 0, 1):
                     for dy in (-1, 0, 1):
@@ -679,18 +993,16 @@ def plan_mining_routes(
                 ))
                 return confirmed[0]
 
-            # Without a confirmed target, preserve the original preference:
-            # known ineligible evidence sorts ahead of unknown evidence.
-            best_unknown = None
-            for source_market in shared_fallback_order:
-                market = annotate_market(row, source_market)
-                if market is None:
-                    continue
-                if market.get("meritScore") is not None:
-                    return market
-                if best_unknown is None:
-                    best_unknown = market
-            return best_unknown
+            # A route whose evidence can still be completed is more useful
+            # than one that is already known to be ineligible.
+            unknown_indexes = (
+                unknown_target_indexes if cell is not None
+                else unknown_no_source_indexes
+            )
+            best_unknown = first_indexed_market(row, unknown_indexes)
+            return best_unknown or first_indexed_market(
+                row, fallback_indexes
+            )
         else:
             candidate_pool.extend(explicit_shared_merits)
             candidate_pool.extend(shared_fallback_order[:1])
@@ -713,6 +1025,10 @@ def plan_mining_routes(
         if rings_only and is_belt_candidate(source):
             continue
         row = dict(source)
+        row["_candidateCommodityIds"] = (
+            _candidate_commodity_ids(row, commodity)
+            if all_commodities else [commodity_id]
+        )
         if requested_state in {"", "any"} and require_system_state and not (
             row.get("systemState") or row.get("systemStates")
             or row.get("states")
@@ -749,6 +1065,11 @@ def plan_mining_routes(
             item, optimization
         ))
         market = candidate_markets[0] if candidate_markets else {}
+        candidate_commodities = _candidate_commodity_ids(row, commodity)
+        selected_commodity = (
+            mining_commodity_id(market.get("commodity"))
+            if all_commodities else commodity_id
+        ) or (candidate_commodities[0] if candidate_commodities else "")
         missing_merit_status = (
             "UNKNOWN · SAME-SYSTEM SELL MARKET NOT VERIFIED"
             if same_system_sale_required else "UNKNOWN"
@@ -763,7 +1084,43 @@ def plan_mining_routes(
             "marketObservedAt": str(market.get("observedAt") or ""),
             "marketSource": str(market.get("source") or ""),
             "marketAgeSeconds": market.get("ageSeconds"),
+            "stationDistanceLs": market.get("distanceToArrivalLs"),
+            "stationType": str(market.get("stationType") or ""),
+            "landingPadSize": str(market.get("landingPadSize") or ""),
+            "stationServices": list(market.get("services") or []),
+            "stationEconomies": list(market.get("economies") or []),
+            "primaryEconomy": str(market.get("primaryEconomy") or ""),
+            "stationGovernment": str(market.get("government") or ""),
+            "controllingFaction": str(
+                market.get("controllingFaction") or ""
+            ),
+            "fleetCarrier": market.get("fleetCarrier"),
+            "carrierDockingAccess": str(
+                market.get("carrierDockingAccess") or ""
+            ),
+            "marketReceivedAt": str(market.get("receivedAt") or ""),
+            "marketStatusFlags": list(market.get("statusFlags") or []),
             "marketKnown": bool(market),
+            "marketMatchesFilters": bool(market.get("matchesFilters")),
+            "marketPriceFresh": bool(market.get("fresh")),
+            "marketReliabilityState": (
+                "CURRENT" if market.get("matchesFilters")
+                else "KNOWN" if market else "MISSING"
+            ),
+            "marketQualityStatus": (
+                "CURRENT PRICE AND DEMAND VERIFIED"
+                if market.get("matchesFilters")
+                else "MARKET KNOWN · PRICE OR DEMAND OUTSIDE ACTIVE LIMITS"
+                if market else "MARKET CHECK PENDING"
+            ),
+            "selectedCommodity": selected_commodity,
+            "selectedCommodityName": (
+                mining_commodity_name(selected_commodity)
+                if all_commodities
+                else requested_commodity_name
+                if selected_commodity else "Unknown commodity"
+            ),
+            "candidateCommodities": candidate_commodities,
             "sameSystemSaleRequired": same_system_sale_required,
             "meritStatus": str(
                 market.get("meritStatus") or missing_merit_status
@@ -773,18 +1130,45 @@ def plan_mining_routes(
         })
         yield_score = _yield_score(row)
         data_score = _data_score(row)
-        secondary_ids = {
-            mining_commodity_id(item.get("commodity"))
-            for field in ("hotspots", "yieldStats")
-            for item in row.get(field, [])
-            if isinstance(item, dict) and mining_commodity_id(
-                item.get("commodity")
-            ) not in {"", commodity_id}
-        }
+        station_key = _market_station_key(market)
+        secondary_route_markets = list(
+            secondary_market_index.get(station_key, ())
+            if station_key is not None else ()
+        )
+        if prefer_secondary and row.get("markets"):
+            secondary_route_markets = [
+                *secondary_route_markets,
+                *_eligible_markets(
+                    _market_rows(row, "allcommodities"),
+                    landing_pad=landing_pad,
+                    min_demand=min_demand,
+                    max_demand=max_demand,
+                    max_market_age_hours=max_market_age_hours,
+                    now=now,
+                ),
+            ]
+        secondary_resources = _secondary_resources(
+            row, selected_commodity, market, secondary_route_markets,
+        )
+        secondary_evidence_score = sum(
+            (2 if item.get("localYield") else 0)
+            + (1 if item.get("hotspot") else 0)
+            for item in secondary_resources
+        )
         row["yieldScore"] = round(yield_score, 2)
         row["dataScore"] = round(data_score, 2)
-        row["secondaryCommodityCount"] = len(secondary_ids)
-        row["secondaryPreferred"] = bool(prefer_secondary and secondary_ids)
+        row["secondaryCommodities"] = secondary_resources
+        row["secondaryCommodityNames"] = [
+            item["name"] for item in secondary_resources
+        ]
+        row["secondaryCommodityCount"] = len(secondary_resources)
+        row["secondaryMarketCount"] = sum(
+            bool(item.get("marketKnown")) for item in secondary_resources
+        )
+        row["secondaryEvidenceScore"] = secondary_evidence_score
+        row["secondaryPreferred"] = bool(
+            prefer_secondary and secondary_resources
+        )
         row["_meritScore"] = market.get("meritScore")
         prepared.append(row)
 
@@ -796,8 +1180,9 @@ def plan_mining_routes(
     ]
     max_distance = max(distances, default=1.0) or 1.0
     for row in prepared:
+        row.pop("_candidateCommodityIds", None)
         profit_score = None
-        if row["marketKnown"] and max_price > 0:
+        if row["marketKnown"] and row["marketMatchesFilters"] and max_price > 0:
             price_part = row["sellPrice"] / max_price
             demand_part = row["demand"] / max_demand if max_demand else 0.0
             profit_score = max(0.0, min(5.0, 5.0 * (
@@ -808,6 +1193,30 @@ def plan_mining_routes(
             1.0, 5.0 * (1.0 - _number(distance) / (max_distance * 1.25))
         )
         merit_score = row.pop("_meritScore")
+        if optimization == OPTIMIZE_MERITS:
+            if _number(merit_score, -1.0) > 0:
+                if row.get("marketMatchesFilters"):
+                    verification_state = "VERIFIED"
+                    verification_label = "POWERPLAY VERIFIED"
+                    verification_rank = 0
+                else:
+                    verification_state = "KNOWN"
+                    verification_label = (
+                        "POWERPLAY ROUTE KNOWN · MARKET DATA LIMITED"
+                    )
+                    verification_rank = 1
+            elif merit_score is None:
+                verification_state = "PENDING"
+                verification_label = "MARKET CHECK PENDING"
+                verification_rank = 2
+            else:
+                verification_state = "INELIGIBLE"
+                verification_label = "MINING ONLY · NOT POWERPLAY ELIGIBLE"
+                verification_rank = 3
+        else:
+            verification_state = "NOT_APPLICABLE"
+            verification_label = "MINING ROUTES"
+            verification_rank = 0
         score_parts = {
             "yield": row["yieldScore"], "data": row["dataScore"],
             "profit": profit_score, "merit": merit_score,
@@ -837,6 +1246,9 @@ def plan_mining_routes(
             "meritStars": _stars(merit_score),
             "dataStars": _stars(row["dataScore"]),
             "overallStars": _stars(overall),
+            "powerplayVerificationState": verification_state,
+            "powerplayVerificationLabel": verification_label,
+            "powerplayVerificationRank": verification_rank,
             "resPreferred": bool(prefer_res and (
                 row.get("resType") or row.get("resourceExtractionSite")
             )),
@@ -849,11 +1261,18 @@ def plan_mining_routes(
         OPTIMIZE_YIELD: "yieldScore",
     }[optimization]
     prepared.sort(key=lambda row: (
+        int(row.get("powerplayVerificationRank", 0) or 0)
+        if optimization == OPTIMIZE_MERITS else 0,
         row.get(score_key) is None,
         -_number(row.get(score_key), -1.0),
+        not bool(row.get("marketMatchesFilters")),
         -_number(row.get("overallScore")),
         not bool(row.get("resPreferred")),
         not bool(row.get("secondaryPreferred")),
+        -_number(row.get("secondaryMarketCount"))
+        if prefer_secondary else 0.0,
+        -_number(row.get("secondaryEvidenceScore"))
+        if prefer_secondary else 0.0,
         row.get("distanceLy") is None,
         _number(row.get("distanceLy")),
         str(row.get("system") or "").casefold(),

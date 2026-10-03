@@ -11,6 +11,9 @@ from .mining_contract import MINING_FRESHNESS_SECONDS
 from .mining_commodities import RHINO_SURFACE, mining_commodity_id
 
 SPANSH_DUMP_URL = "https://spansh.co.uk/api/dump/{system_address}"
+EDFRAME_CATALOG_SITES_URL = (
+    "https://vps-20b25c36.vps.ovh.net/v1/sites/search"
+)
 
 MINING_EVIDENCE_RANK = {
     "STALE": 0,
@@ -28,6 +31,8 @@ MINING_BODY_TYPES = frozenset({
     "planetaryring", "stellarring", "asteroidcluster",
 })
 
+MINING_CATALOG_IDENTITY_VERSION = 2
+
 
 def fetch_spansh_system_dump(system_address: int, get: Any, timeout: int = 20):
     """Fetch one documented public-system dump without sending private data."""
@@ -44,6 +49,68 @@ def fetch_spansh_system_dump(system_address: int, get: Any, timeout: int = 20):
     if not isinstance(system, dict) or int(system.get("id64") or 0) != address:
         raise ValueError("Spansh returned no matching system dump")
     return payload
+
+
+def project_edframe_mining_candidates(
+    payload: Any, origin: Any = None,
+) -> list[dict[str, Any]]:
+    """Project anonymous rows from the central ED-Frame mining catalog."""
+    rows = payload.get("results") if isinstance(payload, dict) else None
+    if not isinstance(rows, list):
+        raise ValueError("ED-Frame mining catalog returned invalid data")
+    result = []
+    for source in rows:
+        if not isinstance(source, dict):
+            continue
+        system = _text(source.get("system"))
+        ring = _text(source.get("ring"))
+        coordinates = _coordinates([
+            source.get("x"), source.get("y"), source.get("z"),
+        ])
+        if not system or not ring:
+            continue
+        result.append({
+            "system": system,
+            "systemAddress": source.get("systemAddress"),
+            "coordinates": coordinates,
+            "distanceLy": _distance(origin, coordinates),
+            "body": _text(source.get("body")),
+            "bodyId": source.get("bodyId"),
+            "ring": ring,
+            "miningSiteType": (
+                "BELT" if "belt cluster" in ring.casefold() else "RING"
+            ),
+            "ringType": _text(source.get("ringType")),
+            "reserveLevel": _text(source.get("reserveLevel")),
+            "distanceToArrivalLs": source.get("distanceToArrivalLs"),
+            "hotspots": _signal_rows(source.get("hotspots")),
+            "evidence": _text(source.get("evidence")) or "LIVE_REPORTED",
+            "observedAt": _text(source.get("observedAt")),
+            "learnedAt": _text(source.get("receivedAt"))
+                         or _text(source.get("observedAt")),
+            "source": "ED-Frame live catalog · " + (
+                _text(source.get("source")) or "EDDN"
+            ),
+            "markets": [],
+        })
+    return result
+
+
+def fetch_edframe_mining_candidates(
+    system: str, get: Any, *, commodity: str = "", origin: Any = None,
+    timeout: int = 20,
+) -> list[dict[str, Any]]:
+    """Fetch one system from the central catalog without identity data."""
+    requested = _text(system)
+    if not requested:
+        raise ValueError("A system name is required")
+    params: dict[str, Any] = {"system": requested, "limit": 200}
+    commodity_id = mining_commodity_id(commodity)
+    if commodity_id and commodity_id != "allcommodities":
+        params["commodity"] = commodity_id
+    response = get(EDFRAME_CATALOG_SITES_URL, params=params, timeout=timeout)
+    response.raise_for_status()
+    return project_edframe_mining_candidates(response.json(), origin)
 
 
 def _text(value: Any) -> str:
@@ -102,18 +169,45 @@ def _timestamp(value: Any) -> datetime | None:
     return parsed.astimezone(timezone.utc)
 
 
+def _canonical_mining_site_name(value: Any) -> str:
+    """Normalize equivalent Journal/EDDN/Spansh ring spellings.
+
+    Public sources alternate between e.g. ``Delkar 7 a`` and
+    ``Delkar 7 A Ring``.  Body ids are also not consistently present, so the
+    stable identity is the system plus the normalized site name; body metadata
+    is merged into that identity instead of splitting it.
+    """
+    name = " ".join(_text(value).split()).casefold()
+    if name.endswith(" ring"):
+        name = name[:-5].rstrip()
+    return name
+
+
 def _candidate_identity(candidate: dict[str, Any]) -> tuple[Any, ...]:
-    system = candidate.get("systemAddress")
-    system_key = ("address", system) if system is not None else (
-        "name", _text(candidate.get("system")).casefold()
+    try:
+        system_address = int(candidate.get("systemAddress") or 0)
+    except (TypeError, ValueError):
+        system_address = 0
+    system_key = (
+        ("address", system_address) if system_address > 0
+        else ("name", _text(candidate.get("system")).casefold())
     )
-    body = candidate.get("bodyId")
-    body_key = ("id", body) if body is not None else (
-        "name", _text(candidate.get("body")).casefold()
-    )
-    return system_key + body_key + (
-        _text(candidate.get("ring")).casefold(),
-    )
+    site_name = _canonical_mining_site_name(candidate.get("ring"))
+    system_name = " ".join(_text(candidate.get("system")).split()).casefold()
+    # Fully qualified Frontier ring names already contain their body context.
+    # For rare source rows that only say "A Ring", retain a body discriminator
+    # so two different bodies in the same system are never over-merged.
+    if system_name and not (
+        site_name == system_name or site_name.startswith(system_name + " ")
+    ):
+        body_name = " ".join(
+            _text(candidate.get("body")).split()
+        ).casefold()
+        if body_name:
+            return system_key + ("body", body_name, site_name)
+        if candidate.get("bodyId") is not None:
+            return system_key + ("body-id", candidate.get("bodyId"), site_name)
+    return system_key + (site_name,)
 
 
 def is_belt_candidate(candidate: dict[str, Any]) -> bool:
@@ -363,7 +457,10 @@ def _signal_rows(signals: Any) -> list[dict[str, Any]]:
         iterable = signals.items()
     elif isinstance(signals, list):
         iterable = (
-            (row.get("Type"), row.get("Count"))
+            (
+                row.get("Type") or row.get("commodity"),
+                row.get("Count") if "Count" in row else row.get("count"),
+            )
             for row in signals if isinstance(row, dict)
         )
     else:
@@ -416,6 +513,9 @@ def project_local_mining_evidence(
     refined: dict[str, dict[str, Any]] = {}
     active_srv = ""
     active_ring = ""
+    controlling_power = ""
+    powerplay_state = ""
+    powers: list[str] = []
 
     def ensure_ring(
         ring_name: str, body_id: Any, observed_at: str, source: str,
@@ -435,6 +535,9 @@ def project_local_mining_evidence(
                 "ringType": "",
                 "reserveLevel": "",
                 "distanceToArrivalLs": None,
+                "controllingPower": controlling_power,
+                "powerState": powerplay_state,
+                "powers": list(powers),
                 "hotspots": [],
                 "evidence": "LOCAL_CONFIRMED",
                 "observedAt": observed_at,
@@ -486,6 +589,12 @@ def project_local_mining_evidence(
             system = _text(event.get("StarSystem")) or system
             system_address = event.get("SystemAddress", system_address)
             star_pos = _coordinates(event.get("StarPos")) or star_pos
+            controlling_power = _text(event.get("ControllingPower"))
+            powerplay_state = _text(event.get("PowerplayState"))
+            powers = [
+                _text(value) for value in event.get("Powers", []) or []
+                if _text(value)
+            ]
             body_type = _text(event.get("BodyType")).casefold()
             site_name = _text(event.get("Body") or event.get("BodyName"))
             if name == "Location" and body_type in MINING_BODY_TYPES and site_name:
@@ -674,6 +783,12 @@ def project_eddn_mining_candidates(
         "StarSystem": _text(message.get("StarSystem")),
         "SystemAddress": message.get("SystemAddress"),
         "StarPos": _coordinates(message.get("StarPos")),
+        "ControllingPower": _text(message.get("ControllingPower")),
+        "PowerplayState": _text(message.get("PowerplayState")),
+        "Powers": [
+            _text(value) for value in message.get("Powers", []) or []
+            if _text(value)
+        ],
     }
     event = {
         "event": event_name,

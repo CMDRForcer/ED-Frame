@@ -1,0 +1,10 @@
+[Unit]
+Description=Weekly ED-Frame catalog maintenance
+
+[Timer]
+OnCalendar=Sun *-*-* 04:31:00 UTC
+RandomizedDelaySec=1h
+Persistent=true
+
+[Install]
+WantedBy=timers.target

@@ -373,6 +373,12 @@ class UiSettingsMixin:
             "spansh_last_refresh": getattr(
                 self, "_spansh_last_refresh", ""
             ),
+            "edframe_catalog_enabled": getattr(
+                self, "_edframe_catalog_enabled", True
+            ),
+            "edframe_catalog_last_success": getattr(
+                self, "_edframe_catalog_last_success", ""
+            ),
             "background_mode": self._background_mode,
             "autostart_enabled": self._autostart_enabled,
             "trader_preference": self._trader_preference,

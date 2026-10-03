@@ -7169,31 +7169,6 @@ ApplicationWindow {
                     "retryable": false
                 })
             }
-            var spanshStatus = String(cockpit.spanshCatalogSyncStatus || "")
-            if (spanshStatus && spanshStatus.toLowerCase() !== "ready") {
-                rows.push({
-                    "id": "",
-                    "title": window.t("connections.spansh", "SPANSH CATALOGS"),
-                    "status": cockpit.spanshCatalogSyncBusy ? "UPDATING" : "READY",
-                    "detail": spanshStatus,
-                    "meta": window.t("connections.catalog_status", "CATALOG STATUS"),
-                    "retryable": false
-                })
-            }
-            var edsmStatus = String(cockpit.miningPowerplaySyncStatus || "")
-            if (edsmStatus && edsmStatus.toLowerCase() !== "ready") {
-                rows.push({
-                    "id": "",
-                    "title": window.t("connections.edsm_title", "EDSM POWERPLAY CATALOG"),
-                    "status": cockpit.miningPowerplaySyncBusy
-                              ? "UPDATING"
-                              : (cockpit.miningPowerplaySystemCount > 0
-                                 ? "READY" : "NOT LOADED"),
-                    "detail": edsmStatus,
-                    "meta": window.t("connections.catalog_status", "CATALOG STATUS"),
-                    "retryable": false
-                })
-            }
             var queue = cockpit.eddnQueue || []
             for (var index = 0; index < queue.length; index++) {
                 var job = queue[index]
@@ -7244,14 +7219,17 @@ ApplicationWindow {
                 spacing: 8
                 CockpitButton { text: "INARA"; selected: connectionsPage.connectionMode === 0; onClicked: connectionsPage.connectionMode = 0 }
                 CockpitButton { text: window.t("connections.frontier_tab", "FRONTIER CAPI"); selected: connectionsPage.connectionMode === 2; accentColor: cyan; onClicked: connectionsPage.connectionMode = 2 }
-                CockpitButton { text: window.t("connections.eddn_tab", "EDDN & STATE FINDS"); selected: connectionsPage.connectionMode === 1; accentColor: green; onClicked: connectionsPage.connectionMode = 1 }
-                CockpitButton { text: window.t("connections.spansh_tab", "SPANSH & EDSM"); selected: connectionsPage.connectionMode === 3; accentColor: orange; onClicked: connectionsPage.connectionMode = 3 }
+                CockpitButton { text: "EDDN"; selected: connectionsPage.connectionMode === 1; accentColor: green; onClicked: connectionsPage.connectionMode = 1 }
+                CockpitButton { text: "ED-FRAME"; selected: connectionsPage.connectionMode === 3; accentColor: cyan; onClicked: connectionsPage.connectionMode = 3 }
+                CockpitButton { text: "SPANSH"; selected: connectionsPage.connectionMode === 4; accentColor: orange; onClicked: connectionsPage.connectionMode = 4 }
+                CockpitButton { text: "EDSM"; selected: connectionsPage.connectionMode === 5; accentColor: cyan; onClicked: connectionsPage.connectionMode = 5 }
+                CockpitButton { text: window.t("connections.local_data_tab", "LOCAL DATA"); selected: connectionsPage.connectionMode === 6; accentColor: orange; onClicked: connectionsPage.connectionMode = 6 }
             }
         }
 
         GridLayout {
             Layout.fillWidth: true
-            columns: Math.max(1, cockpit.serviceStatus.length)
+            columns: width < 1250 ? 3 : Math.max(1, cockpit.serviceStatus.length)
             columnSpacing: 12
             rowSpacing: 8
             Repeater {
@@ -7808,7 +7786,8 @@ ApplicationWindow {
 
         Item {
             anchors.fill: parent
-            visible: connectionsPage.connectionMode === 3
+            visible: connectionsPage.connectionMode >= 3
+                     && connectionsPage.connectionMode <= 6
 
             ShadowCard {
                 anchors.fill: parent
@@ -7824,14 +7803,145 @@ ApplicationWindow {
                         width: spanshCatalogScroll.availableWidth
                         spacing: 13
                         Label {
-                            text: window.t("connections.spansh_title", "SPANSH, EDSM & MINING DATA")
-                            color: orange; font.pixelSize: 15; font.bold: true
+                            text: connectionsPage.connectionMode === 3
+                                  ? window.t("connections.edframe_title", "ED-FRAME CATALOG SERVER")
+                                  : connectionsPage.connectionMode === 4
+                                    ? window.t("connections.spansh_title", "SPANSH CATALOGS")
+                                    : connectionsPage.connectionMode === 5
+                                      ? window.t("connections.edsm_title", "EDSM POWERPLAY CATALOG")
+                                      : window.t("connections.local_data_title", "LOCAL OFFLINE CATALOG")
+                            color: connectionsPage.connectionMode === 4 ? orange : cyan
+                            font.pixelSize: 15; font.bold: true
                         }
                         Label {
-                            text: window.t("connections.spansh_help", "Updates Material Traders, Human/Guardian Tech Brokers and the current system's Mining Finder rings. Existing verified data remains usable if a refresh fails.")
+                            text: connectionsPage.connectionMode === 3
+                                  ? window.t("connections.edframe_help", "The ED-Frame server supplies anonymous public market, station and mining updates. Disabling it never deletes retained local data.")
+                                  : connectionsPage.connectionMode === 4
+                                    ? window.t("connections.spansh_help", "Spansh supplies Material Trader, Tech Broker and ring catalog observations. Only Spansh-backed refreshes are controlled here.")
+                                    : connectionsPage.connectionMode === 5
+                                      ? window.t("connections.edsm_help", "EDSM supplies the daily Powerplay system catalog used to verify merit routes. Only EDSM data is shown and refreshed here.")
+                                      : window.t("connections.local_data_help", "The offline catalog merges retained observations from enabled sources and remains usable when every network source is unavailable.")
                             color: textSecondary; wrapMode: Text.WordWrap; Layout.fillWidth: true
                         }
                         Rectangle {
+                            visible: connectionsPage.connectionMode === 3
+                            Layout.fillWidth: true
+                            Layout.preferredHeight: edFrameStatusColumn.implicitHeight + 28
+                            radius: 10; color: panelRaised
+                            border.width: 1
+                            border.color: cockpit.edFrameCatalogOnline ? green
+                                          : cockpit.edFrameCatalogBusy ? cyan : orange
+                            ColumnLayout {
+                                id: edFrameStatusColumn
+                                anchors.fill: parent; anchors.margins: 14; spacing: 8
+                                RowLayout {
+                                    Layout.fillWidth: true
+                                    Label {
+                                        text: window.t("connections.edframe_title", "ED-FRAME CATALOG SERVER")
+                                        color: cyan; font.pixelSize: 11; font.bold: true
+                                    }
+                                    Item { Layout.fillWidth: true }
+                                    Label {
+                                        text: !cockpit.edFrameCatalogEnabled
+                                              ? window.t("status.disabled", "DISABLED")
+                                              : cockpit.edFrameCatalogBusy
+                                                ? window.t("status.checking", "CHECKING…")
+                                                : cockpit.edFrameCatalogOnline
+                                                  ? window.t("status.online", "ONLINE")
+                                                  : window.t("status.offline", "OFFLINE")
+                                        color: cockpit.edFrameCatalogOnline ? green
+                                               : cockpit.edFrameCatalogBusy ? cyan : orange
+                                        font.pixelSize: 10; font.bold: true
+                                    }
+                                }
+                                Label {
+                                    text: cockpit.edFrameCatalogStatus
+                                    color: textSecondary; wrapMode: Text.WordWrap
+                                    Layout.fillWidth: true
+                                }
+                                Label {
+                                    visible: cockpit.edFrameCatalogOnline
+                                    text: window.tf(
+                                        "connections.edframe_counts",
+                                        "%1 SYSTEMS · %2 STATIONS · %3 MARKETS · %4 MINING SITES · %5 COMMODITIES",
+                                        [cockpit.edFrameCatalogStats.systems || 0,
+                                         cockpit.edFrameCatalogStats.stations >= 0
+                                           ? cockpit.edFrameCatalogStats.stations : "—",
+                                         cockpit.edFrameCatalogStats.markets || 0,
+                                         cockpit.edFrameCatalogStats.sites || 0,
+                                         cockpit.edFrameCatalogStats.commodities || 0])
+                                    color: textPrimary; font.pixelSize: 9; font.bold: true
+                                    wrapMode: Text.WordWrap; Layout.fillWidth: true
+                                }
+                                Label {
+                                    visible: cockpit.edFrameCatalogOnline
+                                    text: window.tf(
+                                        "connections.edframe_completeness",
+                                        "COMMODITY DETAILS %1% · STATION TYPE %2% · LANDING PAD %3% · SERVICES %4%",
+                                        [cockpit.edFrameCatalogStats.marketDetailPercent || 0,
+                                         cockpit.edFrameCatalogStats.stationTypePercent >= 0
+                                           ? cockpit.edFrameCatalogStats.stationTypePercent : "—",
+                                         cockpit.edFrameCatalogStats.stationLandingPadPercent >= 0
+                                           ? cockpit.edFrameCatalogStats.stationLandingPadPercent : "—",
+                                         cockpit.edFrameCatalogStats.stationServicesPercent >= 0
+                                           ? cockpit.edFrameCatalogStats.stationServicesPercent : "—"])
+                                    color: muted; font.pixelSize: 9
+                                    wrapMode: Text.WordWrap; Layout.fillWidth: true
+                                }
+                                Label {
+                                    visible: Boolean(cockpit.edFrameCatalogLastSuccess)
+                                    text: window.t("connections.edframe_last_success", "LAST SUCCESS")
+                                          + " · " + cockpit.edFrameCatalogLastSuccess
+                                    color: muted; font.pixelSize: 9; font.bold: true
+                                    wrapMode: Text.WordWrap; Layout.fillWidth: true
+                                }
+                                RowLayout {
+                                    Layout.fillWidth: true; spacing: 12
+                                    CheckBox {
+                                        Layout.fillWidth: true
+                                        text: window.t(
+                                            "connections.edframe_enable",
+                                            "Use the ED-Frame server to update the local offline catalog")
+                                        checked: cockpit.edFrameCatalogEnabled
+                                        onToggled: cockpit.setEdFrameCatalogEnabled(checked)
+                                    }
+                                    CockpitButton {
+                                        text: cockpit.edFrameCatalogBusy
+                                              ? window.t("status.checking", "CHECKING…")
+                                              : window.t("connections.check_now", "CHECK NOW")
+                                        enabled: cockpit.edFrameCatalogEnabled
+                                                 && !cockpit.edFrameCatalogBusy
+                                        onClicked: cockpit.refreshEdFrameCatalogStatus()
+                                    }
+                                }
+                                Rectangle {
+                                    Layout.fillWidth: true
+                                    Layout.preferredHeight: edFrameLogColumn.implicitHeight + 20
+                                    radius: 7; color: panel
+                                    visible: cockpit.edFrameCatalogLog.length > 0
+                                    ColumnLayout {
+                                        id: edFrameLogColumn
+                                        anchors.fill: parent; anchors.margins: 10; spacing: 3
+                                        Label {
+                                            text: window.t("connections.edframe_log", "RECENT SERVER ACTIVITY")
+                                            color: muted; font.pixelSize: 9; font.bold: true
+                                        }
+                                        Repeater {
+                                            model: Math.min(5, cockpit.edFrameCatalogLog.length)
+                                            Label {
+                                                required property int index
+                                                Layout.fillWidth: true
+                                                text: String(cockpit.edFrameCatalogLog[index] || "")
+                                                color: textSecondary; font.pixelSize: 9
+                                                elide: Text.ElideRight
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        Rectangle {
+                            visible: connectionsPage.connectionMode === 4
                             Layout.fillWidth: true
                             Layout.preferredHeight: spanshStatusColumn.implicitHeight + 28
                             radius: 10; color: panelRaised
@@ -7854,12 +7964,28 @@ ApplicationWindow {
                                     text: cockpit.spanshCatalogSyncStatus
                                     color: textSecondary; wrapMode: Text.WordWrap; Layout.fillWidth: true
                                 }
-                                Rectangle { Layout.fillWidth: true; height: 1; color: borderTone }
+                                Label {
+                                    visible: Boolean(cockpit.spanshLastRefresh)
+                                    text: window.t("connections.spansh_last_refresh", "LAST REFRESH STARTED") + " · " + cockpit.spanshLastRefresh
+                                    color: muted; font.pixelSize: 9; font.bold: true
+                                }
+                            }
+                        }
+                        Rectangle {
+                            visible: connectionsPage.connectionMode === 5
+                            Layout.fillWidth: true
+                            Layout.preferredHeight: edsmStatusColumn.implicitHeight + 28
+                            radius: 10; color: panelRaised
+                            border.width: 1
+                            border.color: cockpit.miningPowerplaySyncBusy ? cyan : borderTone
+                            ColumnLayout {
+                                id: edsmStatusColumn
+                                anchors.fill: parent; anchors.margins: 14; spacing: 8
                                 RowLayout {
                                     Layout.fillWidth: true
                                     Label {
-                                        text: window.t("connections.edsm_title", "EDSM POWERPLAY CATALOG")
-                                        color: cyan; font.pixelSize: 10; font.bold: true
+                                        text: window.t("connections.catalog_status", "CATALOG STATUS")
+                                        color: muted; font.pixelSize: 9; font.bold: true
                                     }
                                     Item { Layout.fillWidth: true }
                                     Label {
@@ -7877,7 +8003,8 @@ ApplicationWindow {
                                 }
                                 Label {
                                     text: cockpit.miningPowerplaySyncStatus
-                                    color: textSecondary; wrapMode: Text.WordWrap; Layout.fillWidth: true
+                                    color: textSecondary; wrapMode: Text.WordWrap
+                                    Layout.fillWidth: true
                                 }
                                 RowLayout {
                                     Layout.fillWidth: true
@@ -7885,8 +8012,7 @@ ApplicationWindow {
                                         text: window.tf(
                                             "connections.edsm_system_links",
                                             "%1 POWERPLAY SYSTEM LINKS",
-                                            [cockpit.miningPowerplaySystemCount]
-                                        )
+                                            [cockpit.miningPowerplaySystemCount])
                                         color: textPrimary; font.pixelSize: 9; font.bold: true
                                     }
                                     Item { Layout.fillWidth: true }
@@ -7897,19 +8023,24 @@ ApplicationWindow {
                                         color: muted; font.pixelSize: 9; font.bold: true
                                     }
                                 }
-                                Label {
-                                    visible: Boolean(cockpit.spanshLastRefresh)
-                                    text: window.t("connections.spansh_last_refresh", "LAST REFRESH STARTED") + " · " + cockpit.spanshLastRefresh
-                                    color: muted; font.pixelSize: 9; font.bold: true
-                                }
                             }
                         }
+                        CockpitButton {
+                            visible: connectionsPage.connectionMode === 5
+                            text: cockpit.miningPowerplaySyncBusy
+                                  ? window.t("status.updating", "UPDATING…")
+                                  : window.t("connections.update_edsm", "UPDATE EDSM CATALOG")
+                            enabled: !cockpit.miningPowerplaySyncBusy
+                            selected: true; Layout.fillWidth: true
+                            onClicked: cockpit.refreshMiningPowerplayCatalog()
+                        }
                         RowLayout {
+                            visible: connectionsPage.connectionMode === 4
                             Layout.fillWidth: true; spacing: 12
                             CheckBox {
                                 id: spanshAutoRefreshBox
                                 Layout.fillWidth: true
-                                text: window.t("connections.spansh_auto_refresh", "Refresh community catalogs automatically")
+                                text: window.t("connections.spansh_auto_refresh", "Refresh Spansh catalogs automatically")
                                 checked: cockpit.spanshAutoRefresh
                                 onToggled: cockpit.setSpanshAutoRefresh(checked, Number(spanshIntervalBox.currentValue))
                             }
@@ -7925,28 +8056,36 @@ ApplicationWindow {
                             }
                         }
                         CockpitButton {
+                            visible: connectionsPage.connectionMode === 4
                             text: cockpit.spanshCatalogSyncBusy
                                   ? window.t("status.updating", "UPDATING…")
-                                  : window.t("connections.update_spansh", "UPDATE ALL COMMUNITY CATALOGS")
+                                  : window.t("connections.update_spansh", "UPDATE SPANSH CATALOGS")
                             enabled: !cockpit.spanshCatalogSyncBusy
                             selected: true; Layout.fillWidth: true
                             onClicked: cockpit.updateSpanshCatalogs()
                         }
-                        Rectangle { Layout.fillWidth: true; height: 1; color: borderTone }
+                        Rectangle {
+                            visible: connectionsPage.connectionMode === 6
+                            Layout.fillWidth: true; height: 1; color: borderTone
+                        }
                         Label {
-                            text: window.t("connections.mining_sources", "MINING FINDER DATA SOURCES")
+                            visible: connectionsPage.connectionMode === 6
+                            text: window.t("connections.mining_sources", "MINING FINDER OFFLINE DATA")
                             color: cyan; font.pixelSize: 11; font.bold: true
                         }
                         Label {
-                            text: window.t("connections.mining_sources_help", "Spansh supplies public ring and reserve observations for the current system. Sale price, demand and age are loaded on each route search from EDData's EDDN commodity index. Yield and Powerplay merits remain unknown until their own evidence exists.")
+                            visible: connectionsPage.connectionMode === 6
+                            text: window.t("connections.local_mining_data_help", "Retained ring, market and Powerplay observations are stored locally per profile. Resetting removes the local Mining Finder catalog, not any external account or source.")
                             color: textSecondary; wrapMode: Text.WordWrap; Layout.fillWidth: true
                         }
                         Label {
+                            visible: connectionsPage.connectionMode === 6
                             text: cockpit.miningMarketSyncStatus
                             color: cockpit.miningMarketSyncBusy ? cyan : muted
                             wrapMode: Text.WordWrap; Layout.fillWidth: true; font.pixelSize: 10
                         }
                         CockpitButton {
+                            visible: connectionsPage.connectionMode === 6
                             text: window.t("connections.reset_mining_catalog", "RESET MINING CATALOG")
                             accentColor: orange; Layout.fillWidth: true
                             onClicked: miningCatalogResetDialog.open()

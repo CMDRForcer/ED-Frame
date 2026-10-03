@@ -1,0 +1,95 @@
+name: edframe-catalog
+
+services:
+  db:
+    image: postgres:17-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB}
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    command:
+      - postgres
+      - -c
+      - shared_buffers=256MB
+      - -c
+      - effective_cache_size=1GB
+      - -c
+      - max_connections=50
+      - -c
+      - work_mem=4MB
+    mem_limit: 1200m
+    networks: [backend]
+
+  api:
+    build:
+      context: ../..
+      dockerfile: server/catalog_service/Dockerfile
+    restart: unless-stopped
+    environment: &database_environment
+      POSTGRES_HOST: db
+      POSTGRES_PORT: "5432"
+      POSTGRES_DB: ${POSTGRES_DB}
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+    depends_on:
+      db:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/healthz', timeout=3)"]
+      interval: 15s
+      timeout: 5s
+      retries: 10
+    mem_limit: 700m
+    networks: [backend]
+
+  collector:
+    build:
+      context: ../..
+      dockerfile: server/catalog_service/Dockerfile
+    restart: unless-stopped
+    command: ["python", "-m", "edframe_catalog.collector"]
+    environment:
+      <<: *database_environment
+      EDDN_RELAY_URL: tcp://eddn.edcd.io:9500
+    depends_on:
+      db:
+        condition: service_healthy
+    mem_limit: 700m
+    networks: [backend]
+
+  caddy:
+    image: caddy:2.10-alpine
+    restart: unless-stopped
+    environment:
+      CATALOG_HOST: ${CATALOG_HOST}
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on:
+      api:
+        condition: service_healthy
+    mem_limit: 192m
+    networks: [backend]
+
+volumes:
+  postgres_data:
+  caddy_data:
+  caddy_config:
+
+networks:
+  backend:
+    internal: false
+

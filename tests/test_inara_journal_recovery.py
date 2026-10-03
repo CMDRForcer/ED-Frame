@@ -1,4 +1,5 @@
 import json
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from tempfile import TemporaryDirectory
 import unittest
@@ -41,21 +42,31 @@ class InaraJournalRecoveryTests(unittest.TestCase):
 
     def _journals(self, root, count=7):
         paths = []
+        newest = datetime.now(timezone.utc).replace(
+            hour=10, minute=0, second=0, microsecond=0,
+        )
+
+        def timestamp(start, seconds):
+            return (
+                start + timedelta(seconds=seconds)
+            ).isoformat(timespec="seconds").replace("+00:00", "Z")
+
         for index in range(count):
             path = root / f"Journal.{index + 1:02d}.log"
+            session_start = newest - timedelta(days=count - index - 1)
             events = [
                 {
-                    "timestamp": f"2026-09-{index + 1:02d}T10:00:00Z",
+                    "timestamp": timestamp(session_start, 0),
                     "event": "Fileheader", "gameversion": "4.2.0.0",
                     "build": "r0",
                 },
                 {
-                    "timestamp": f"2026-09-{index + 1:02d}T10:00:01Z",
+                    "timestamp": timestamp(session_start, 1),
                     "event": "LoadGame", "Commander": "Recovery Test",
                     "FID": "F-RECOVERY", "Horizons": True, "Odyssey": True,
                 },
                 {
-                    "timestamp": f"2026-09-{index + 1:02d}T10:00:02Z",
+                    "timestamp": timestamp(session_start, 2),
                     "event": "FSDJump", "StarSystem": f"Recovery {index}",
                     "StarPos": [float(index), 2.0, 3.0],
                     "SystemAddress": 1000 + index,

@@ -1,0 +1,11 @@
+[Unit]
+Description=Maintain the ED-Frame catalog database
+Requires=docker.service
+After=docker.service
+
+[Service]
+Type=oneshot
+ExecStart=/opt/edframe-catalog/server/catalog_service/ops/catalog-maintenance.sh
+Nice=15
+IOSchedulingClass=best-effort
+IOSchedulingPriority=7

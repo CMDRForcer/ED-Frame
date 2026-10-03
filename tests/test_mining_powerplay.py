@@ -9,6 +9,8 @@ from ed_companion.navigation.mining_powerplay import (
     MiningPowerplayError,
     fetch_powerplay_catalog,
     powerplay_catalog_is_fresh,
+    merge_powerplay_observations,
+    project_powerplay_observations,
     project_powerplay_catalog,
 )
 
@@ -40,6 +42,7 @@ class MiningPowerplayCatalogTests(unittest.TestCase):
             "system": "Niflhel", "systemAddress": 1234,
             "coordinates": [1.0, 2.0, 3.0],
             "power": "Aisling Duval", "powerState": "Stronghold",
+            "powerRelationship": "PRESENCE", "controlKnown": False,
             "systemState": "Boom",
             "observedAt": "2026-10-01T00:00:00+00:00",
             "source": "EDSM daily PowerPlay catalog",
@@ -52,6 +55,52 @@ class MiningPowerplayCatalogTests(unittest.TestCase):
 
         self.assertEqual(projected[0]["system"], "Cubeo")
         self.assertEqual(projected[0]["powerState"], "Headquarters")
+        self.assertFalse(projected[0]["controlKnown"])
+        self.assertNotIn("controllingPower", projected[0])
+
+    def test_eddn_location_preserves_explicit_control_separately_from_presence(self):
+        rows = project_powerplay_observations({
+            "$schemaRef": "https://eddn.edcd.io/schemas/journal/1",
+            "message": {
+                "event": "FSDJump", "timestamp": "2026-10-02T12:00:00Z",
+                "StarSystem": "HR 6948", "SystemAddress": 99,
+                "StarPos": [1, 2, 3], "ControllingPower": "Yuri Grom",
+                "Powers": ["Yuri Grom", "Aisling Duval"],
+                "PowerplayState": "Exploited",
+            },
+        })
+
+        self.assertEqual(len(rows), 2)
+        by_power = {row["power"]: row for row in rows}
+        self.assertEqual(
+            by_power["Yuri Grom"]["powerRelationship"], "CONTROL"
+        )
+        self.assertEqual(
+            by_power["Aisling Duval"]["powerRelationship"], "PRESENCE"
+        )
+        self.assertEqual(
+            by_power["Aisling Duval"]["controllingPower"], "Yuri Grom"
+        )
+
+    def test_powerplay_observation_merge_keeps_newest_fact(self):
+        base = project_powerplay_observations({
+            "event": "Location", "timestamp": "2026-10-01T12:00:00Z",
+            "StarSystem": "Test", "SystemAddress": 10,
+            "ControllingPower": "Aisling Duval",
+            "Powers": ["Aisling Duval"], "PowerplayState": "Fortified",
+        })
+        newer = project_powerplay_observations({
+            "event": "FSDJump", "timestamp": "2026-10-02T12:00:00Z",
+            "StarSystem": "Test", "SystemAddress": 10,
+            "ControllingPower": "Yuri Grom", "Powers": ["Aisling Duval"],
+            "PowerplayState": "Exploited",
+        })
+
+        merged = merge_powerplay_observations(base, newer)
+
+        aisling = next(row for row in merged if row["power"] == "Aisling Duval")
+        self.assertEqual(aisling["controllingPower"], "Yuri Grom")
+        self.assertEqual(aisling["powerState"], "Exploited")
 
     def test_fetch_uses_anonymous_bounded_daily_dump(self):
         calls = []

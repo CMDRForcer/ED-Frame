@@ -123,6 +123,9 @@ from ed_companion.navigation.mining_finder import (
     project_eddn_mining_candidates,
     project_spansh_mining_candidates,
 )
+from ed_companion.navigation.mining_powerplay import (
+    project_powerplay_observations,
+)
 from ed_companion.navigation.mining_commodities import (
     MINING_COMMODITIES,
     RHINO_SURFACE,
@@ -1399,6 +1402,13 @@ class EddnMixin:
         self._pending_hge_observations.extend(extract_signal_finds(payload))
         self._pending_mining_candidates.extend(
             project_eddn_mining_candidates(
+                payload, datetime.now(timezone.utc).isoformat(timespec="seconds")
+            )
+        )
+        if not hasattr(self, "_pending_mining_powerplay_observations"):
+            self._pending_mining_powerplay_observations = []
+        self._pending_mining_powerplay_observations.extend(
+            project_powerplay_observations(
                 payload, datetime.now(timezone.utc).isoformat(timespec="seconds")
             )
         )

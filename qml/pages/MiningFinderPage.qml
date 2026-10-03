@@ -142,6 +142,41 @@ Item {
             && !Boolean(marketDiagnostics.cacheMatches)
     readonly property var bestRoute: resultRows.length
             ? resultRows[activeRouteIndex] : ({})
+    readonly property var catalogCoverage: cockpit.miningCacheSummary || ({})
+    readonly property var routeCoverage: {
+        let rows = resultRows
+        if (searchRevision === 0)
+            return {"percent": -1, "marketPercent": -1, "meritPercent": -1}
+        if (!rows.length)
+            return {"percent": 0, "marketPercent": 0, "meritPercent": 0}
+        let known = 0
+        let possible = 0
+        let markets = 0
+        let merits = 0
+        let meritRequired = appliedOptimization === "POWERPLAY MERITS"
+        for (let index = 0; index < rows.length; ++index) {
+            let row = rows[index]
+            possible += meritRequired ? 6 : 5
+            known += Boolean(row.system && (row.ring || row.body)) ? 1 : 0
+            known += row.distanceLy !== null
+                    && row.distanceLy !== undefined ? 1 : 0
+            known += Boolean(row.selectedCommodityName
+                             || appliedCommodityFilter !== "ALL COMMODITIES") ? 1 : 0
+            known += Boolean(row.targetMatch) ? 1 : 0
+            known += Boolean(row.marketKnown) ? 1 : 0
+            markets += Boolean(row.marketKnown) ? 1 : 0
+            if (meritRequired) {
+                known += Boolean(row.meritKnown) ? 1 : 0
+                merits += Boolean(row.meritKnown) ? 1 : 0
+            }
+        }
+        return {
+            "percent": Math.round(100 * known / possible),
+            "marketPercent": Math.round(100 * markets / rows.length),
+            "meritPercent": meritRequired
+                              ? Math.round(100 * merits / rows.length) : -1
+        }
+    }
     readonly property var alternativeRows: {
         let rows = []
         for (let index = 0; index < resultRows.length; ++index)
@@ -171,7 +206,7 @@ Item {
     readonly property int routeSaleWidth: 250
     readonly property int routePriceWidth: 110
     readonly property int routeDemandWidth: 100
-    readonly property int routeStatusWidth: 90
+    readonly property int routeStatusWidth: 126
     readonly property int routeSelectWidth: 64
 
     objectName: "qa-page-mining-finder"
@@ -186,10 +221,23 @@ Item {
     function formatNumber(value) {
         return Number(value || 0).toLocaleString(Qt.locale(), "f", 0)
     }
+    function compactNumber(value) {
+        let number = Number(value || 0)
+        if (number >= 1000000)
+            return (number / 1000000).toLocaleString(Qt.locale(), "f", 1) + "M"
+        if (number >= 1000)
+            return (number / 1000).toLocaleString(Qt.locale(), "f", 1) + "K"
+        return formatNumber(number)
+    }
     function formatDistance(value) {
         return value === null || value === undefined
                 ? appWindow.t("status.distance_unknown", "Unknown")
                 : Number(value).toLocaleString(Qt.locale(), "f", 1) + " LY"
+    }
+    function formatLs(value) {
+        return value === null || value === undefined
+                ? appWindow.t("status.distance_unknown", "Unknown")
+                : formatNumber(value) + " LS"
     }
     function formatAge(seconds) {
         if (seconds === null || seconds === undefined)
@@ -207,23 +255,104 @@ Item {
                 ? String(row.station || row.sellSystem || "MARKET CONFIRMED")
                 : appWindow.t("mining.market_missing", "NO VERIFIED MARKET DATA")
     }
+    function marketRouteName(row) {
+        let market = marketName(row)
+        if (!row.marketKnown) return market
+        let system = String(row.sellSystem || "").trim()
+        if (!system || system.toLowerCase() === market.toLowerCase())
+            return market
+        return system + " · " + market
+    }
+    function marketStationSummary(row) {
+        let details = []
+        let pad = String(row.landingPadSize || "").toUpperCase()
+        if (pad) details.push(pad + " PAD")
+        let type = String(row.stationType || "").trim()
+        if (type) details.push(type)
+        if (row.stationDistanceLs !== null
+                && row.stationDistanceLs !== undefined)
+            details.push(formatLs(row.stationDistanceLs))
+        return details.join(" · ")
+    }
     function marketFiltersBlockRoute() {
         return marketDiagnostics.cacheMatches
                 && Number(marketDiagnostics.total || 0) > 0
                 && Number(marketDiagnostics.eligible || 0) === 0
     }
     function marketDetail(row) {
+        let commodity = String(row.selectedCommodityName
+                               || appliedCommodityFilter)
         if (!row.marketKnown && row.sameSystemSaleRequired)
-            return appWindow.tf("mining.market_same_system_help", "%1 requires a verified %2 market in %3 matching the active pad, demand and age filters", [appliedPowerGoal, appliedCommodityFilter, String(row.system || appWindow.t("status.unknown", "UNKNOWN"))])
+            return appWindow.tf("mining.market_same_system_help", "%1 requires a verified %2 market in %3; the targeted check is pending", [appliedPowerGoal, commodity, String(row.system || appWindow.t("status.unknown", "UNKNOWN"))])
         if (!row.marketKnown && marketFiltersBlockRoute())
             return String(marketDiagnostics.summary || "")
         if (!row.marketKnown)
             return appWindow.t("mining.market_missing_help", "Mining location remains usable · profit and merit ratings stay unknown")
-        return formatNumber(row.sellPrice) + " CR/T  ·  "
+        let stationSummary = marketStationSummary(row)
+        let stationDetail = stationSummary ? "  ·  " + stationSummary : ""
+        let quality = row.marketMatchesFilters ? "" : String(
+                          row.marketQualityStatus || "MARKET KNOWN") + "  ·  "
+        return quality + formatNumber(row.sellPrice) + " CR/T  ·  "
                 + (row.demandInfinite
                    ? appWindow.t("mining.demand_infinite", "∞ DEMAND")
                    : appWindow.tf("mining.demand_value", "%1 T DEMAND", [formatNumber(row.demand)]))
-                + "  ·  " + formatAge(row.marketAgeSeconds)
+                + stationDetail + "  ·  " + formatAge(row.marketAgeSeconds)
+    }
+    function secondaryMiningSummary(row) {
+        let resources = row.secondaryCommodities || []
+        if (!resources.length)
+            return appWindow.t("mining.no_secondary_evidence", "NO ADDITIONAL RESOURCE EVIDENCE")
+        let labels = []
+        for (let index = 0; index < resources.length; ++index) {
+            let resource = resources[index]
+            let detail = String(resource.evidenceLabel || "")
+            if (resource.averageProportion !== null
+                    && resource.averageProportion !== undefined)
+                detail += (detail ? " · " : "")
+                        + Number(resource.averageProportion).toLocaleString(
+                            Qt.locale(), "f", 1) + "% AVG"
+            labels.push(String(resource.name || "UNKNOWN")
+                        + (detail ? " (" + detail + ")" : ""))
+        }
+        return appWindow.t("mining.also_found", "ALSO") + ": "
+                + labels.join(" · ")
+    }
+    function secondarySaleSummary(row) {
+        let resources = row.secondaryCommodities || []
+        if (!resources.length)
+            return appWindow.t("mining.no_secondary_sale", "NO ADDITIONAL RESOURCES TO CHECK")
+        let labels = []
+        for (let index = 0; index < resources.length; ++index) {
+            let resource = resources[index]
+            labels.push(String(resource.name || "UNKNOWN") + " "
+                        + (resource.marketKnown
+                           ? formatNumber(resource.sellPrice) + " CR/T"
+                           : appWindow.t("mining.sale_unverified", "SALE UNVERIFIED")))
+        }
+        return appWindow.t("mining.also_at_station", "ALSO AT THIS STATION")
+                + ": " + labels.join(" · ")
+    }
+    function secondaryCompactSummary(row) {
+        let names = row.secondaryCommodityNames || []
+        return names.length
+                ? appWindow.t("mining.also_found", "ALSO") + ": "
+                  + names.join(", ") : ""
+    }
+    function verificationColor(row) {
+        let state = String(row.powerplayVerificationState || "")
+        if (state === "VERIFIED") return green
+        if (state === "INELIGIBLE") return muted
+        return orange
+    }
+    function verificationShortLabel(row) {
+        let state = String(row.powerplayVerificationState || "")
+        if (state === "VERIFIED")
+            return appWindow.t("mining.powerplay_verified", "VERIFIED")
+        if (state === "KNOWN")
+            return appWindow.t("mining.powerplay_known", "ROUTE KNOWN")
+        if (state === "INELIGIBLE")
+            return appWindow.t("mining.powerplay_ineligible", "NOT ELIGIBLE")
+        return appWindow.t("mining.powerplay_pending", "CHECK PENDING")
     }
     function routeIndex(row) {
         for (let index = 0; index < resultRows.length; ++index) {
@@ -317,7 +446,11 @@ Item {
         Qt.callLater(function() {
             cockpit.verifyMiningRoutes(
                         miningFinderPage.resultRows,
-                        miningFinderPage.appliedStartSystem)
+                        miningFinderPage.appliedStartSystem,
+                        miningFinderPage.appliedCommodityFilter,
+                        miningFinderPage.appliedMaxMarketAgeHours,
+                        miningFinderPage.appliedMinDemand,
+                        miningFinderPage.appliedLandingPad)
         })
         _miningRevisionSnapshot = cockpit.miningRevision
     }
@@ -405,9 +538,8 @@ Item {
     ColumnLayout {
         id: pageContent
         objectName: "qa-mining-content"
-        width: Math.min(miningFinderPage.availableWorkspaceWidth, 1580)
+        width: miningFinderPage.availableWorkspaceWidth
         x: miningFinderPage.sidebarWidth + miningFinderPage.pageMargin
-           + Math.max(0, (miningFinderPage.availableWorkspaceWidth - width) / 2)
         anchors.top: parent.top
         anchors.bottom: parent.bottom
         anchors.topMargin: miningFinderPage.pageMargin
@@ -426,6 +558,90 @@ Item {
                     ? appWindow.t("mining.refreshing", "REFRESHING…")
                     : appWindow.tf("mining.live_results", "%1 RESULTS", [resultRows.length])
         statusTone: cockpit.miningSyncBusy ? orange : green
+        StatusBadge {
+            id: catalogCoverageBadge
+            compact: true
+            visible: Number(catalogCoverage.total || 0) > 0
+            statusText: appWindow.tf(
+                "mining.catalog_quality_badge",
+                "LOCAL %1 · DATA %2% · ROUTES %3",
+                [compactNumber(catalogCoverage.total),
+                 Number(catalogCoverage.recordCompleteness || 0),
+                 routeCoverage.percent < 0
+                 ? "—" : String(routeCoverage.percent) + "%"])
+            tone: Number(catalogCoverage.recordCompleteness || 0) >= 85
+                  && (routeCoverage.percent < 0 || routeCoverage.percent >= 75)
+                  ? green
+                  : Number(catalogCoverage.recordCompleteness || 0) >= 65
+                    ? cyan : orange
+            ToolTip.visible: catalogCoverageHover.hovered
+            ToolTip.delay: 250
+            ToolTip.text: appWindow.t(
+                "mining.catalog_quality_scope",
+                "Stored-record completeness — not total galaxy coverage")
+                + "\n" + appWindow.tf(
+                "mining.catalog_quality_counts",
+                "%1 rings in %2 systems · %3 markets · %4 Powerplay links",
+                [formatNumber(catalogCoverage.total),
+                 formatNumber(catalogCoverage.systems),
+                 formatNumber(catalogCoverage.marketTotal),
+                 formatNumber(catalogCoverage.powerplayTotal)])
+                + "\n" + appWindow.tf(
+                "mining.catalog_quality_fields",
+                "Coordinates %1% · ring names %2% · ring types %3% · reserves %4% · resource evidence %5% · current %6%",
+                [
+                 Number(catalogCoverage.coordinatesPercent || 0),
+                 Number(catalogCoverage.ringPercent || 0),
+                 Number(catalogCoverage.ringTypePercent || 0),
+                 Number(catalogCoverage.reservePercent || 0),
+                 Number(catalogCoverage.resourceEvidencePercent || 0),
+                 Number(catalogCoverage.currentPercent || 0)])
+                + "\n" + appWindow.tf(
+                "mining.catalog_quality_routes",
+                "Current routes: market %1 · Powerplay %2",
+                [
+                 routeCoverage.marketPercent < 0
+                 ? "—" : String(routeCoverage.marketPercent) + "%",
+                 routeCoverage.meritPercent < 0
+                 ? "—" : String(routeCoverage.meritPercent) + "%"])
+            HoverHandler { id: catalogCoverageHover }
+        }
+        StatusBadge {
+            id: edFrameServerBadge
+            compact: true
+            statusText: !cockpit.edFrameCatalogEnabled
+                        ? appWindow.t("mining.server_off", "SERVER OFF · LOCAL ACTIVE")
+                        : cockpit.edFrameCatalogBusy
+                          ? appWindow.t("mining.server_checking", "SERVER · CHECKING…")
+                          : cockpit.edFrameCatalogOnline
+                            ? appWindow.tf(
+                                "mining.server_online",
+                                "SERVER ONLINE · %1 MARKETS",
+                                [compactNumber(cockpit.edFrameCatalogStats.markets || 0)])
+                            : appWindow.t(
+                                "mining.server_offline",
+                                "SERVER OFFLINE · LOCAL ACTIVE")
+            tone: cockpit.edFrameCatalogOnline ? green
+                  : cockpit.edFrameCatalogBusy ? cyan : orange
+            ToolTip.visible: edFrameServerHover.hovered
+            ToolTip.delay: 250
+            ToolTip.text: cockpit.edFrameCatalogStatus
+                              + (cockpit.edFrameCatalogLastSuccess
+                                 ? "\n" + appWindow.t(
+                                     "mining.server_last_success",
+                                     "Last successful contact")
+                                   + " · " + cockpit.edFrameCatalogLastSuccess
+                                 : "")
+            HoverHandler { id: edFrameServerHover }
+        }
+        StatusBadge {
+            compact: true
+            statusText: appWindow.t("mining.current_action", "ACTION")
+                        + " · " + cockpit.miningCurrentAction
+            tone: cockpit.miningSyncBusy || cockpit.miningMarketSyncBusy
+                  || cockpit.miningVerificationBusy
+                  || cockpit.edFrameCatalogBusy ? orange : cyan
+        }
     }
 
     Rectangle {
@@ -959,9 +1175,9 @@ Item {
 
     RowLayout {
         Layout.fillWidth: true
-        Layout.minimumHeight: 220
-        Layout.preferredHeight: 250
-        Layout.maximumHeight: 250
+        Layout.minimumHeight: 250
+        Layout.preferredHeight: 280
+        Layout.maximumHeight: 280
         spacing: 10
         visible: resultRows.length > 0 && !marketQueryPending
 
@@ -978,14 +1194,31 @@ Item {
                             text: activeRouteIndex === 0
                                   ? appWindow.t("mining.best_for_goal", "BEST ROUTE FOR YOUR GOAL")
                                   : appWindow.t("mining.selected_route", "SELECTED ROUTE")
-                            color: orange; font.pixelSize: 9; font.bold: true
+                            color: orange; font.pixelSize: 10; font.bold: true
                         }
-                        Label { text: appliedCommodityFilter + " · " + appliedMiningMethod + " · " + String(bestRoute.ringTypeName || "UNKNOWN RING"); color: textPrimary; font.pixelSize: 16; font.bold: true; elide: Text.ElideRight; Layout.fillWidth: true }
+                        Label { text: String(bestRoute.selectedCommodityName || appliedCommodityFilter) + " · " + appliedMiningMethod + " · " + String(bestRoute.ringTypeName || "UNKNOWN RING"); color: textPrimary; font.pixelSize: 16; font.bold: true; elide: Text.ElideRight; Layout.fillWidth: true }
                     }
-                    Label { text: appWindow.tf("mining.overall_rating", "OVERALL %1 / 5", [Number(bestRoute.overallScore || 0).toLocaleString(Qt.locale(), "f", 1)]); color: green; font.pixelSize: 10; font.bold: true }
+                    Rectangle {
+                        visible: appliedOptimization === "POWERPLAY MERITS"
+                        implicitWidth: powerplayVerificationLabel.implicitWidth + 16
+                        implicitHeight: 26
+                        radius: 6
+                        color: inputBackground
+                        border.width: 1
+                        border.color: verificationColor(bestRoute)
+                        Label {
+                            id: powerplayVerificationLabel
+                            anchors.centerIn: parent
+                            text: verificationShortLabel(bestRoute)
+                            color: verificationColor(bestRoute)
+                            font.pixelSize: 9
+                            font.bold: true
+                        }
+                    }
+                    Label { text: appWindow.tf("mining.overall_rating", "OVERALL %1 / 5", [Number(bestRoute.overallScore || 0).toLocaleString(Qt.locale(), "f", 1)]); color: green; font.pixelSize: 11; font.bold: true }
                     Button {
                         id: copyBestSystemButton
-                        implicitWidth: 104; implicitHeight: 30
+                        implicitWidth: 104; implicitHeight: 32
                         text: appWindow.t("mining.copy_mine", "COPY MINE")
                         onClicked: cockpit.copySystem(String(bestRoute.system || ""))
                         contentItem: Label {
@@ -993,7 +1226,7 @@ Item {
                             color: copyBestSystemButton.hovered ? textPrimary : textSecondary
                             horizontalAlignment: Text.AlignHCenter
                             verticalAlignment: Text.AlignVCenter
-                            font.pixelSize: 8; font.bold: true
+                            font.pixelSize: 9; font.bold: true
                         }
                         background: Rectangle {
                             radius: 6; color: copyBestSystemButton.hovered ? appWindow.hover : inputBackground
@@ -1002,7 +1235,7 @@ Item {
                     }
                     Button {
                         id: copySellSystemButton
-                        implicitWidth: 104; implicitHeight: 30
+                        implicitWidth: 104; implicitHeight: 32
                         text: appWindow.t("mining.copy_sell", "COPY SELL")
                         visible: Boolean(bestRoute.marketKnown && bestRoute.sellSystem)
                         onClicked: cockpit.copySystem(String(bestRoute.sellSystem || ""))
@@ -1011,7 +1244,7 @@ Item {
                             color: copySellSystemButton.hovered ? textPrimary : textSecondary
                             horizontalAlignment: Text.AlignHCenter
                             verticalAlignment: Text.AlignVCenter
-                            font.pixelSize: 8; font.bold: true
+                            font.pixelSize: 9; font.bold: true
                         }
                         background: Rectangle {
                             radius: 6; color: copySellSystemButton.hovered ? appWindow.hover : inputBackground
@@ -1022,20 +1255,22 @@ Item {
                 RowLayout {
                     Layout.fillWidth: true; spacing: 8
                     Rectangle {
-                        Layout.fillWidth: true; Layout.preferredHeight: 60; radius: 8; color: backgroundSecondary
+                        Layout.fillWidth: true; Layout.preferredHeight: appliedPreferSecondary ? 84 : 66; radius: 8; color: backgroundSecondary
                         ColumnLayout { anchors.fill: parent; anchors.margins: 7; spacing: 2
-                            Label { text: appWindow.t("mining.mine_step", "1 · MINE"); color: cyan; font.pixelSize: 9; font.bold: true }
-                            Label { text: String(bestRoute.system || "UNKNOWN") + " · " + String(bestRoute.ring || bestRoute.body || ""); color: textPrimary; font.pixelSize: 11; font.bold: true; Layout.fillWidth: true; elide: Text.ElideRight }
-                            Label { text: String(bestRoute.reserveName || "UNKNOWN") + " · " + formatDistance(bestRoute.distanceLy); color: textSecondary; font.pixelSize: 9; Layout.fillWidth: true; elide: Text.ElideRight }
+                            Label { text: appWindow.t("mining.mine_step", "1 · MINE"); color: cyan; font.pixelSize: 10; font.bold: true }
+                            Label { text: String(bestRoute.system || "UNKNOWN") + " · " + String(bestRoute.ring || bestRoute.body || ""); color: textPrimary; font.pixelSize: 12; font.bold: true; Layout.fillWidth: true; elide: Text.ElideRight }
+                            Label { text: String(bestRoute.selectedCommodityName || appliedCommodityFilter) + " · " + String(bestRoute.reserveName || "UNKNOWN") + " · " + formatDistance(bestRoute.distanceLy); color: textSecondary; font.pixelSize: 10; Layout.fillWidth: true; elide: Text.ElideRight }
+                            Label { visible: appliedPreferSecondary; text: secondaryMiningSummary(bestRoute); color: cyan; font.pixelSize: 9; Layout.fillWidth: true; elide: Text.ElideRight }
                         }
                     }
                     Label { text: appWindow.t("mining.route_arrow", "→"); color: orange; font.pixelSize: 19; font.bold: true }
                     Rectangle {
-                        Layout.fillWidth: true; Layout.preferredHeight: 60; radius: 8; color: backgroundSecondary
+                        Layout.fillWidth: true; Layout.preferredHeight: appliedPreferSecondary ? 84 : 66; radius: 8; color: backgroundSecondary
                         ColumnLayout { anchors.fill: parent; anchors.margins: 7; spacing: 2
-                            Label { text: appWindow.t("mining.sell_step", "2 · SELL"); color: cyan; font.pixelSize: 9; font.bold: true }
-                            Label { text: marketName(bestRoute); color: bestRoute.marketKnown ? textPrimary : orange; font.pixelSize: 11; font.bold: true; Layout.fillWidth: true; elide: Text.ElideRight }
-                            Label { text: marketDetail(bestRoute); color: textSecondary; font.pixelSize: 9; Layout.fillWidth: true; elide: Text.ElideRight }
+                            Label { text: appWindow.t("mining.sell_step", "2 · SELL"); color: cyan; font.pixelSize: 10; font.bold: true }
+                            Label { text: marketRouteName(bestRoute); color: bestRoute.marketKnown ? textPrimary : orange; font.pixelSize: 12; font.bold: true; Layout.fillWidth: true; elide: Text.ElideRight }
+                            Label { text: marketDetail(bestRoute); color: textSecondary; font.pixelSize: 10; Layout.fillWidth: true; elide: Text.ElideRight }
+                            Label { visible: appliedPreferSecondary; text: secondarySaleSummary(bestRoute); color: orange; font.pixelSize: 9; Layout.fillWidth: true; elide: Text.ElideRight }
                         }
                     }
                 }
@@ -1050,10 +1285,10 @@ Item {
                         ]
                         delegate: Rectangle {
                             required property var modelData
-                            Layout.fillWidth: true; Layout.preferredHeight: 38; radius: 7; color: inputBackground
+                            Layout.fillWidth: true; Layout.preferredHeight: 42; radius: 7; color: inputBackground
                             ColumnLayout { anchors.fill: parent; anchors.margins: 5; spacing: 1
-                                Label { text: modelData.label; color: muted; font.pixelSize: 8; font.bold: true }
-                                Label { text: modelData.value || "—"; color: orange; font.pixelSize: 12; font.bold: true }
+                                Label { text: modelData.label; color: muted; font.pixelSize: 9; font.bold: true }
+                                Label { text: modelData.value || "—"; color: orange; font.pixelSize: 13; font.bold: true }
                             }
                         }
                     }
@@ -1069,12 +1304,12 @@ Item {
                         ]
                         delegate: Rectangle {
                             required property var modelData
-                            Layout.fillWidth: true; Layout.preferredHeight: 36
+                            Layout.fillWidth: true; Layout.preferredHeight: 40
                             radius: 7; color: backgroundSecondary
                             ColumnLayout {
                                 anchors.fill: parent; anchors.margins: 5; spacing: 1
-                                Label { text: modelData.label; color: muted; font.pixelSize: 8; font.bold: true }
-                                Label { text: modelData.value; color: textPrimary; font.pixelSize: 10; font.bold: true }
+                                Label { text: modelData.label; color: muted; font.pixelSize: 9; font.bold: true }
+                                Label { text: modelData.value; color: textPrimary; font.pixelSize: 11; font.bold: true }
                             }
                         }
                     }
@@ -1088,25 +1323,25 @@ Item {
             border.width: 1; border.color: borderTone
             ColumnLayout {
                 anchors.fill: parent; anchors.margins: 10; spacing: 5
-                Label { text: appWindow.t("mining.why_route", "WHY THIS ROUTE?"); color: orange; font.pixelSize: 9; font.bold: true }
+                Label { text: appWindow.t("mining.why_route", "WHY THIS ROUTE?"); color: orange; font.pixelSize: 10; font.bold: true }
                 Repeater {
                     model: [
                         {"ok": bestRoute.meritKnown, "title": appWindow.t("mining.reason_merit", "Powerplay suitability"), "detail": (bestRoute.meritKnown || (bestRoute.sameSystemSaleRequired && !bestRoute.marketKnown)) ? bestRoute.meritStatus : (miningFinderPage.marketFiltersBlockRoute() ? appWindow.t("mining.reason_merit_filtered", "Unknown — active market filters leave no sell route to verify") : appWindow.t("mining.reason_merit_unknown", "Unknown — no merit claim is made"))},
                         {"ok": bestRoute.targetMatch === "LOCAL_YIELD" || bestRoute.targetMatch === "HOTSPOT", "title": appWindow.t("mining.reason_method", "Mining evidence"), "detail": bestRoute.targetMatchName || "—"},
-                        {"ok": bestRoute.marketKnown, "title": appWindow.t("mining.reason_market", "Market demand"), "detail": bestRoute.marketKnown ? (bestRoute.demandInfinite ? "∞" : formatNumber(bestRoute.demand) + " T") + " · " + String(bestRoute.marketSource || "EDDN") : miningFinderPage.marketDetail(bestRoute)},
+                        {"ok": bestRoute.marketKnown, "title": appWindow.t("mining.reason_market", "Market demand"), "detail": bestRoute.marketKnown ? String(bestRoute.marketQualityStatus || "MARKET KNOWN") + " · " + (bestRoute.demandInfinite ? "∞" : formatNumber(bestRoute.demand) + " T") + " · " + String(bestRoute.marketSource || "EDDN") : miningFinderPage.marketDetail(bestRoute)},
                         {"ok": !bestRoute.stale, "title": appWindow.t("mining.reason_age", "Data freshness"), "detail": bestRoute.confirmationStatus || "—"}
                     ]
                     delegate: RowLayout {
                         required property var modelData
                         Layout.fillWidth: true
                         Layout.fillHeight: false
-                        Layout.minimumHeight: 36
-                        Layout.maximumHeight: 42
+                        Layout.minimumHeight: 38
+                        Layout.maximumHeight: 46
                         spacing: 7
-                        Label { text: modelData.ok ? "✓" : "!"; color: modelData.ok ? green : orange; font.pixelSize: 13; font.bold: true }
+                        Label { text: modelData.ok ? "✓" : "!"; color: modelData.ok ? green : orange; font.pixelSize: 14; font.bold: true }
                         ColumnLayout { Layout.fillWidth: true; spacing: 1
-                            Label { text: modelData.title; color: textPrimary; font.pixelSize: 10; font.bold: true }
-                            Label { Layout.fillWidth: true; text: modelData.detail; color: textSecondary; font.pixelSize: 9; elide: Text.ElideRight }
+                            Label { text: modelData.title; color: textPrimary; font.pixelSize: 11; font.bold: true }
+                            Label { Layout.fillWidth: true; text: modelData.detail; color: textSecondary; font.pixelSize: 10; elide: Text.ElideRight }
                         }
                     }
                 }
@@ -1128,15 +1363,23 @@ Item {
             anchors.centerIn: parent
             symbol: "◇"
             title: marketQueryPending
-                   ? appWindow.t("mining.market_loading", "CHECKING SAME-SYSTEM MARKETS")
+                   ? (!Boolean(marketDiagnostics.originKnown)
+                      ? appWindow.t("mining.origin_loading", "RESOLVING START SYSTEM")
+                      : appWindow.t("mining.market_loading", "CHECKING SAME-SYSTEM MARKETS"))
                    : (searchRevision === 0
                       ? appWindow.t("mining.empty_initial", "READY TO PLAN A MINING ROUTE")
-                      : appWindow.t("mining.empty", "NO MATCHING MINING EVIDENCE"))
+                      : (!Boolean(marketDiagnostics.originKnown)
+                         ? appWindow.t("mining.origin_unknown", "START SYSTEM COULD NOT BE RESOLVED")
+                         : appWindow.t("mining.empty", "NO MATCHING MINING EVIDENCE")))
             detail: marketQueryPending
-                    ? appWindow.t("mining.market_loading_help", "EDDN market evidence is loading. Routes appear only after the current search can be evaluated.")
+                    ? (!Boolean(marketDiagnostics.originKnown)
+                       ? appWindow.t("mining.origin_loading_help", "Coordinates are loading so the selected search radius can be applied safely.")
+                       : appWindow.t("mining.market_loading_help", "EDDN market evidence is loading. Routes appear only after the current search can be evaluated."))
                     : (searchRevision === 0
                        ? appWindow.t("mining.empty_initial_help", "Choose your goal and filters above, then select FIND BEST ROUTE. Market and Powerplay data load when the search starts.")
-                       : appWindow.t("mining.empty_unified_help", "Widen the radius or relax hotspot, reserve and method filters. Unknown market data never hides a valid mining location."))
+                       : (!Boolean(marketDiagnostics.originKnown)
+                          ? appWindow.t("mining.origin_unknown_help", "Check the system name or retry when the coordinate source is available. No galaxy-wide fallback search was started.")
+                          : appWindow.t("mining.empty_unified_help", "Widen the radius or relax hotspot, reserve and method filters. Unknown market data never hides a valid mining location.")))
             tone: cyan
         }
     }
@@ -1149,19 +1392,19 @@ Item {
         spacing: 5
         RowLayout {
             Layout.fillWidth: true
-            Label { text: appWindow.tf("mining.alternatives", "%1 ALTERNATIVES", [alternativeRows.length]); color: orange; font.pixelSize: 11; font.bold: true }
+            Label { text: appWindow.tf("mining.alternatives", "%1 ALTERNATIVES", [alternativeRows.length]); color: orange; font.pixelSize: 12; font.bold: true }
             Item { Layout.fillWidth: true }
-            Label { text: appWindow.t("mining.sort_goal", "SORTED BY SELECTED GOAL · UNKNOWN VALUES LAST"); color: muted; font.pixelSize: 8; font.bold: true }
+            Label { text: appWindow.t("mining.sort_goal", "SORTED BY SELECTED GOAL · UNKNOWN VALUES LAST"); color: muted; font.pixelSize: 9; font.bold: true }
         }
         Rectangle {
-            Layout.fillWidth: true; Layout.preferredHeight: 27; color: panelRaised; radius: 7
+            Layout.fillWidth: true; Layout.preferredHeight: 31; color: panelRaised; radius: 7
             RowLayout {
                 anchors.fill: parent; anchors.leftMargin: 11; anchors.rightMargin: 11; spacing: 10
-                Label { Layout.minimumWidth: routeRankWidth; Layout.preferredWidth: routeRankWidth; Layout.maximumWidth: routeRankWidth; text: appWindow.t("mining.rank", "#"); color: muted; font.pixelSize: 8; font.bold: true }
-                Label { Layout.fillWidth: true; Layout.minimumWidth: 0; text: appWindow.t("mining.location", "MINING LOCATION"); color: muted; font.pixelSize: 8; font.bold: true }
-                Label { Layout.minimumWidth: routeSaleWidth; Layout.preferredWidth: routeSaleWidth; Layout.maximumWidth: routeSaleWidth; text: appWindow.t("mining.sale", "SALE"); color: muted; font.pixelSize: 8; font.bold: true }
-                Label { Layout.minimumWidth: routePriceWidth; Layout.preferredWidth: routePriceWidth; Layout.maximumWidth: routePriceWidth; text: appWindow.t("mining.price_per_tonne", "PRICE / T"); color: muted; font.pixelSize: 8; font.bold: true }
-                Label { Layout.minimumWidth: routeDemandWidth; Layout.preferredWidth: routeDemandWidth; Layout.maximumWidth: routeDemandWidth; text: appWindow.t("mining.demand", "DEMAND"); color: muted; font.pixelSize: 8; font.bold: true }
+                Label { Layout.minimumWidth: routeRankWidth; Layout.preferredWidth: routeRankWidth; Layout.maximumWidth: routeRankWidth; text: appWindow.t("mining.rank", "#"); color: muted; font.pixelSize: 9; font.bold: true }
+                Label { Layout.fillWidth: true; Layout.minimumWidth: 0; text: appWindow.t("mining.location", "MINING LOCATION"); color: muted; font.pixelSize: 9; font.bold: true }
+                Label { Layout.minimumWidth: routeSaleWidth; Layout.preferredWidth: routeSaleWidth; Layout.maximumWidth: routeSaleWidth; text: appWindow.t("mining.sale", "SALE"); color: muted; font.pixelSize: 9; font.bold: true }
+                Label { Layout.minimumWidth: routePriceWidth; Layout.preferredWidth: routePriceWidth; Layout.maximumWidth: routePriceWidth; text: appWindow.t("mining.price_per_tonne", "PRICE / T"); color: muted; font.pixelSize: 9; font.bold: true }
+                Label { Layout.minimumWidth: routeDemandWidth; Layout.preferredWidth: routeDemandWidth; Layout.maximumWidth: routeDemandWidth; text: appWindow.t("mining.demand", "DEMAND"); color: muted; font.pixelSize: 9; font.bold: true }
                 Label {
                     Layout.minimumWidth: routeStatusWidth
                     Layout.preferredWidth: routeStatusWidth
@@ -1169,9 +1412,9 @@ Item {
                     text: appliedOptimization === "POWERPLAY MERITS"
                           ? appWindow.t("mining.merit_fit", "MERIT FIT")
                           : appWindow.t("mining.market_age", "DATA AGE")
-                    color: muted; font.pixelSize: 8; font.bold: true
+                    color: muted; font.pixelSize: 9; font.bold: true
                 }
-                Label { Layout.minimumWidth: routeSelectWidth; Layout.preferredWidth: routeSelectWidth; Layout.maximumWidth: routeSelectWidth; text: appWindow.t("mining.select", "SELECT"); color: muted; font.pixelSize: 8; font.bold: true; horizontalAlignment: Text.AlignHCenter }
+                Label { Layout.minimumWidth: routeSelectWidth; Layout.preferredWidth: routeSelectWidth; Layout.maximumWidth: routeSelectWidth; text: appWindow.t("mining.select", "SELECT"); color: muted; font.pixelSize: 9; font.bold: true; horizontalAlignment: Text.AlignHCenter }
             }
         }
         ListView {
@@ -1179,6 +1422,26 @@ Item {
             Layout.fillWidth: true; Layout.fillHeight: true
             spacing: 5; clip: true
             model: alternativeRows
+            section.property: "powerplayVerificationLabel"
+            section.criteria: ViewSection.FullString
+            section.delegate: Rectangle {
+                width: routesList.width
+                height: appliedOptimization === "POWERPLAY MERITS" ? 31 : 0
+                visible: appliedOptimization === "POWERPLAY MERITS"
+                color: "transparent"
+                Label {
+                    anchors.left: parent.left
+                    anchors.leftMargin: 8
+                    anchors.verticalCenter: parent.verticalCenter
+                    text: section
+                    color: section === "POWERPLAY VERIFIED" ? green
+                           : (section === "MARKET CHECK PENDING"
+                              || section === "POWERPLAY ROUTE KNOWN · MARKET DATA LIMITED"
+                              ? orange : muted)
+                    font.pixelSize: 10
+                    font.bold: true
+                }
+            }
             ScrollBar.vertical: CockpitScrollBar {
                 trackThickness: 12
                 thumbThickness: 8
@@ -1189,37 +1452,37 @@ Item {
                 id: routeRow
                 required property var modelData
                 required property int index
-                width: routesList.width; height: 58; radius: 8
+                width: routesList.width; height: 68; radius: 8
                 color: routeHover.hovered ? appWindow.hover : panelRaised
                 border.width: routeHover.hovered ? 2 : 1
                 border.color: routeHover.hovered ? cyan
                                                      : (modelData.stale ? orange : borderTone)
                 RowLayout {
                     anchors.fill: parent; anchors.leftMargin: 11; anchors.rightMargin: 11; spacing: 10
-                    Label { Layout.minimumWidth: routeRankWidth; Layout.preferredWidth: routeRankWidth; Layout.maximumWidth: routeRankWidth; text: String(routeIndex(modelData) + 1); color: orange; font.family: monoFont; font.pixelSize: 11; font.bold: true }
+                    Label { Layout.minimumWidth: routeRankWidth; Layout.preferredWidth: routeRankWidth; Layout.maximumWidth: routeRankWidth; text: String(routeIndex(modelData) + 1); color: orange; font.family: monoFont; font.pixelSize: 12; font.bold: true }
                     ColumnLayout { Layout.fillWidth: true; Layout.minimumWidth: 0; spacing: 2
-                        Label { Layout.fillWidth: true; text: String(modelData.system || "UNKNOWN") + " · " + String(modelData.ring || modelData.body || ""); color: textPrimary; font.pixelSize: 10; font.bold: true; elide: Text.ElideRight }
-                        Label { Layout.fillWidth: true; text: String(modelData.reserveName || "UNKNOWN") + " · " + String(modelData.targetMatchName || ""); color: textSecondary; font.pixelSize: 8; elide: Text.ElideRight }
+                        Label { Layout.fillWidth: true; text: String(modelData.system || "UNKNOWN") + " · " + String(modelData.ring || modelData.body || ""); color: textPrimary; font.pixelSize: 11; font.bold: true; elide: Text.ElideRight }
+                        Label { Layout.fillWidth: true; text: String(modelData.selectedCommodityName || appliedCommodityFilter) + " · " + String(modelData.reserveName || "UNKNOWN") + " · " + String(modelData.targetMatchName || "") + (appliedPreferSecondary && secondaryCompactSummary(modelData) ? " · " + secondaryCompactSummary(modelData) : ""); color: textSecondary; font.pixelSize: 9; elide: Text.ElideRight }
                     }
                     ColumnLayout { Layout.minimumWidth: routeSaleWidth; Layout.preferredWidth: routeSaleWidth; Layout.maximumWidth: routeSaleWidth; spacing: 2
-                        Label { Layout.fillWidth: true; text: marketName(modelData); color: modelData.marketKnown ? textPrimary : orange; font.pixelSize: 9; font.bold: true; elide: Text.ElideRight }
-                        Label { text: String(modelData.sellSystem || ""); color: textSecondary; font.pixelSize: 8; elide: Text.ElideRight }
+                        Label { Layout.fillWidth: true; text: marketName(modelData); color: modelData.marketKnown ? textPrimary : orange; font.pixelSize: 10; font.bold: true; elide: Text.ElideRight }
+                        Label { text: String(modelData.sellSystem || "") + (marketStationSummary(modelData) ? " · " + marketStationSummary(modelData) : ""); color: textSecondary; font.pixelSize: 9; elide: Text.ElideRight }
                     }
-                    Label { Layout.minimumWidth: routePriceWidth; Layout.preferredWidth: routePriceWidth; Layout.maximumWidth: routePriceWidth; text: modelData.marketKnown ? formatNumber(modelData.sellPrice) + " CR" : "—"; color: modelData.marketKnown ? green : muted; font.pixelSize: 9; font.bold: true }
-                    Label { Layout.minimumWidth: routeDemandWidth; Layout.preferredWidth: routeDemandWidth; Layout.maximumWidth: routeDemandWidth; text: modelData.marketKnown ? (modelData.demandInfinite ? "∞" : formatNumber(modelData.demand) + " T") : "—"; color: textPrimary; font.pixelSize: 9; font.bold: true }
+                    Label { Layout.minimumWidth: routePriceWidth; Layout.preferredWidth: routePriceWidth; Layout.maximumWidth: routePriceWidth; text: modelData.marketKnown ? formatNumber(modelData.sellPrice) + " CR" : "—"; color: modelData.marketMatchesFilters ? green : (modelData.marketKnown ? orange : muted); font.pixelSize: 10; font.bold: true }
+                    Label { Layout.minimumWidth: routeDemandWidth; Layout.preferredWidth: routeDemandWidth; Layout.maximumWidth: routeDemandWidth; text: modelData.marketKnown ? (modelData.demandInfinite ? "∞" : formatNumber(modelData.demand) + " T") : "—"; color: textPrimary; font.pixelSize: 10; font.bold: true }
                     Label {
                         Layout.minimumWidth: routeStatusWidth
                         Layout.preferredWidth: routeStatusWidth
                         Layout.maximumWidth: routeStatusWidth
                         text: appliedOptimization === "POWERPLAY MERITS"
-                              ? String(modelData.meritStars || "—")
+                              ? verificationShortLabel(modelData)
                               : (modelData.marketKnown ? formatAge(modelData.marketAgeSeconds) : "—")
                         color: appliedOptimization === "POWERPLAY MERITS"
-                               ? (modelData.meritKnown ? green : orange)
+                               ? verificationColor(modelData)
                                : (modelData.stale ? orange : green)
-                        font.pixelSize: 8; font.bold: true
+                        font.pixelSize: 9; font.bold: true
                     }
-                    Label { Layout.minimumWidth: routeSelectWidth; Layout.preferredWidth: routeSelectWidth; Layout.maximumWidth: routeSelectWidth; text: appWindow.t("mining.use_route", "USE"); color: routeHover.hovered ? cyan : textSecondary; font.pixelSize: 9; font.bold: true; horizontalAlignment: Text.AlignHCenter }
+                    Label { Layout.minimumWidth: routeSelectWidth; Layout.preferredWidth: routeSelectWidth; Layout.maximumWidth: routeSelectWidth; text: appWindow.t("mining.use_route", "USE"); color: routeHover.hovered ? cyan : textSecondary; font.pixelSize: 10; font.bold: true; horizontalAlignment: Text.AlignHCenter }
                 }
                 HoverHandler {
                     id: routeHover

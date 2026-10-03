@@ -1,0 +1,11 @@
+[Unit]
+Description=Back up the ED-Frame catalog database
+Requires=docker.service
+After=docker.service
+
+[Service]
+Type=oneshot
+ExecStart=/opt/edframe-catalog/server/catalog_service/ops/catalog-backup.sh
+Nice=10
+IOSchedulingClass=best-effort
+IOSchedulingPriority=7

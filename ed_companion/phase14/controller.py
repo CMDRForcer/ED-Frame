@@ -359,6 +359,9 @@ class CockpitController(
         self.mining_powerplay_catalog_file = (
             self.config_dir / "mining_powerplay_catalog.json"
         )
+        self.mining_powerplay_observations_file = (
+            self.config_dir / "mining_powerplay_observations.json"
+        )
         self.mining_pins_file = self.config_dir / "mining_finder_pins.json"
         self.history_archive_file = self.config_dir / "data_history.sqlite3"
         self.fleet_images_file = self.config_dir / "fleet_images.json"
@@ -460,6 +463,22 @@ class CockpitController(
         self._spansh_last_refresh = str(
             ui_config.get("spansh_last_refresh") or ""
         )
+        self._edframe_catalog_enabled = bool(
+            ui_config.get("edframe_catalog_enabled", True)
+        )
+        self._edframe_catalog_busy = False
+        self._edframe_catalog_online = False
+        self._edframe_catalog_status = (
+            "Not checked · local catalog active"
+            if self._edframe_catalog_enabled
+            else "Disabled · local catalog active"
+        )
+        self._edframe_catalog_last_success = str(
+            ui_config.get("edframe_catalog_last_success") or ""
+        )
+        self._edframe_catalog_stats = {}
+        self._edframe_catalog_log = []
+        self._active_edframe_catalog_request = None
         self._background_mode = bool(ui_config.get("background_mode", False))
         self._autostart_enabled = bool(ui_config.get("autostart_enabled", False))
         self._trader_preference = str(
@@ -574,6 +593,7 @@ class CockpitController(
         self._mining_verification_total = 0
         self._mining_verification_failures = 0
         self._mining_verification_cache = {}
+        self._mining_powerplay_market_verification_cache = {}
         self._active_mining_verification_request = None
         self._pending_mining_verification = None
         self.miningVerificationProgress.connect(
@@ -589,17 +609,28 @@ class CockpitController(
             self._mining_market_cache = {}
         self._mining_market_store = self._open_mining_market_store()
         self._mining_market_busy = False
+        self._mining_market_background = False
         self._mining_market_status = self._mining_market_cache_status()
         self._mining_market_revision = 0
         self._mining_market_failure_count = 0
         self._local_market_snapshot_fingerprint = ""
         self._active_mining_market_request = None
+        self._pending_mining_market_query = None
         self.miningMarketFinished.connect(self._finish_mining_market_sync)
+        self.edFrameCatalogStatusFinished.connect(
+            self._finish_edframe_catalog_status
+        )
         self._mining_powerplay_catalog = self._read_local_json(
             self.mining_powerplay_catalog_file, {}
         )
         if not isinstance(self._mining_powerplay_catalog, dict):
             self._mining_powerplay_catalog = {}
+        self._mining_powerplay_observations = self._read_local_json(
+            self.mining_powerplay_observations_file, []
+        )
+        if not isinstance(self._mining_powerplay_observations, list):
+            self._mining_powerplay_observations = []
+        self._pending_mining_powerplay_observations = []
         self._mining_powerplay_busy = False
         powerplay_count = len(
             self._mining_powerplay_catalog.get("systems", [])
@@ -676,6 +707,7 @@ class CockpitController(
         self._pending_bgs_snapshots = []
         self._pending_hge_observations = []
         self._pending_mining_candidates = []
+        self._pending_mining_powerplay_observations = []
         self._last_bgs_batch_monotonic = time.monotonic()
         self._last_mining_batch_monotonic = time.monotonic()
         self._last_hge_batch_stats = {
@@ -749,6 +781,12 @@ class CockpitController(
             self._maybe_auto_refresh_mining_markets
         )
         self.miningMarketAutoRefreshTimer.start()
+        self.edFrameCatalogStatusTimer = QTimer(self)
+        self.edFrameCatalogStatusTimer.setInterval(5 * 60 * 1000)
+        self.edFrameCatalogStatusTimer.timeout.connect(
+            self.refreshEdFrameCatalogStatus
+        )
+        self.edFrameCatalogStatusTimer.start()
         self._mining_market_retry_timer = QTimer(self)
         self._mining_market_retry_timer.setSingleShot(True)
         self._mining_market_retry_timer.timeout.connect(
@@ -756,6 +794,7 @@ class CockpitController(
         )
         QTimer.singleShot(30_000, self._maybe_auto_refresh_spansh)
         QTimer.singleShot(60_000, self._maybe_auto_refresh_mining_markets)
+        QTimer.singleShot(5_000, self.refreshEdFrameCatalogStatus)
         self._ensure_eddn_listener()
 
     def _start_initial_state_load(self):
@@ -1551,6 +1590,21 @@ class CockpitController(
                 "healthy": not any((
                     queue_counts["failed"], queue_counts["retry"]
                 )),
+            },
+            {
+                "name": "ED-FRAME SERVER",
+                "status": (
+                    "DISABLED" if not self._edframe_catalog_enabled
+                    else "CHECKING" if self._edframe_catalog_busy
+                    else "ONLINE" if self._edframe_catalog_online
+                    else "OFFLINE"
+                ),
+                "detail": self._edframe_catalog_status,
+                "healthy": bool(
+                    self._edframe_catalog_enabled
+                    and self._edframe_catalog_online
+                    and not self._edframe_catalog_busy
+                ),
             },
             {
                 "name": "QUEUE",
@@ -2364,14 +2418,18 @@ class CockpitController(
         self._mining_verification_total = 0
         self._mining_verification_failures = 0
         self._mining_verification_cache = {}
+        self._mining_powerplay_market_verification_cache = {}
         self._active_mining_market_request = None
+        self._pending_mining_market_query = None
         self._mining_market_busy = False
+        self._mining_market_background = False
         self._mining_market_failure_count = 0
         self._local_market_snapshot_fingerprint = ""
         if getattr(self, "_mining_market_retry_timer", None) is not None:
             self._mining_market_retry_timer.stop()
         self._mining_market_status = "Ready · market data loads when a route is searched"
         self._pending_mining_candidates = []
+        self._pending_mining_powerplay_observations = []
         self._last_commander_status_stamp = None
         self._last_bgs_batch_monotonic = time.monotonic()
         self._last_mining_batch_monotonic = time.monotonic()
@@ -2400,6 +2458,11 @@ class CockpitController(
         )
         if not isinstance(self._mining_powerplay_catalog, dict):
             self._mining_powerplay_catalog = {}
+        self._mining_powerplay_observations = self._read_local_json(
+            self.mining_powerplay_observations_file, []
+        )
+        if not isinstance(self._mining_powerplay_observations, list):
+            self._mining_powerplay_observations = []
         powerplay_count = len(
             self._mining_powerplay_catalog.get("systems", [])
         )

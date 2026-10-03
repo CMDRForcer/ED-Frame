@@ -4,12 +4,15 @@ import unittest
 from ed_companion.navigation.mining_market import (
     EDDATA_MARKET_SOURCE,
     MiningMarketError,
+    fetch_edframe_catalog_status,
+    fetch_edframe_system_coordinates,
     fetch_edsm_system_coordinates,
     fetch_market_imports,
     latest_market_rows,
     merge_market_catalog,
     nearby_catalog_markets,
     project_local_market_snapshot,
+    project_edframe_catalog_markets,
     project_market_imports,
 )
 
@@ -29,6 +32,34 @@ class _Response:
 
 
 class MiningMarketTests(unittest.TestCase):
+    def test_central_catalog_status_projects_public_counts(self):
+        calls = []
+
+        def get(url, **kwargs):
+            calls.append((url, kwargs))
+            return _Response({
+                "generatedAt": "2026-10-03T10:00:00Z",
+                "counts": {"systems": 10, "markets": 20, "sites": 30},
+            })
+
+        status = fetch_edframe_catalog_status(get=get)
+        self.assertEqual(status["counts"]["markets"], 20)
+        self.assertTrue(calls[0][0].endswith("/v1/status"))
+
+    def test_central_catalog_resolves_exact_system_coordinates(self):
+        calls = []
+
+        def get(url, **kwargs):
+            calls.append((url, kwargs))
+            return _Response({"results": [{
+                "name": "Cubeo", "x": 1, "y": 2.5, "z": -3,
+            }]})
+
+        origin = fetch_edframe_system_coordinates("cubeo", get=get)
+        self.assertEqual(origin["system"], "Cubeo")
+        self.assertEqual(origin["coordinates"], [1.0, 2.5, -3.0])
+        self.assertEqual(calls[0][1]["params"], {"q": "cubeo", "limit": 5})
+
     def test_edsm_resolves_free_text_origin_without_commander_identity(self):
         calls = []
 
@@ -75,6 +106,69 @@ class MiningMarketTests(unittest.TestCase):
         self.assertEqual(rows[0]["source"], EDDATA_MARKET_SOURCE)
         self.assertEqual(rows[0]["systemAddress"], 1234)
         self.assertIsNone(rows[0]["meritEligible"])
+
+    def test_projects_central_catalog_without_inventing_station_metadata(self):
+        rows = project_edframe_catalog_markets({"results": [{
+            "marketId": 42, "commodity": "platinum",
+            "station": "Safe Port", "system": "HIP 1",
+            "sellPrice": 260000, "demand": 9000,
+            "observedAt": "2026-10-03T10:00:00Z",
+            "x": 1, "y": 2, "z": 3,
+        }]}, "Platinum")
+        self.assertEqual(rows[0]["coordinates"], [1.0, 2.0, 3.0])
+        self.assertEqual(rows[0]["landingPadSize"], "")
+        self.assertIsNone(rows[0]["meanPrice"])
+        self.assertIsNone(rows[0]["stock"])
+        self.assertIn("ED-Frame live catalog", rows[0]["source"])
+
+    def test_projects_complete_central_station_and_market_metadata(self):
+        rows = project_edframe_catalog_markets({"results": [{
+            "marketId": 42, "commodity": "platinum",
+            "station": "Safe Port", "system": "HIP 1",
+            "systemAddress": 1234, "stationType": "Coriolis",
+            "landingPadSize": "L", "distanceToArrivalLs": 321.5,
+            "x": 1, "y": 2, "z": 3, "meanPrice": 180000,
+            "buyPrice": 0, "sellPrice": 260000, "stock": 12,
+            "stockBracket": 1, "demand": 0, "demandBracket": 3,
+            "statusFlags": ["Docked"], "services": ["Commodities"],
+            "economies": ["Industrial"], "primaryEconomy": "Industrial",
+            "government": "Democracy", "controllingFaction": "Test",
+            "fleetCarrier": False, "carrierDockingAccess": "all",
+            "prohibited": ["Slaves"],
+            "observedAt": "2026-10-03T10:00:00Z",
+            "receivedAt": "2026-10-03T10:00:01Z",
+        }]}, "Platinum")
+
+        self.assertEqual(rows[0]["systemAddress"], 1234)
+        self.assertEqual(rows[0]["landingPadSize"], "L")
+        self.assertEqual(rows[0]["distanceToArrivalLs"], 321.5)
+        self.assertEqual(rows[0]["services"], ["Commodities"])
+        self.assertEqual(rows[0]["primaryEconomy"], "Industrial")
+        self.assertFalse(rows[0]["fleetCarrier"])
+        self.assertTrue(rows[0]["demandInfinite"])
+
+    def test_central_market_query_applies_pad_and_carrier_filters(self):
+        calls = []
+
+        def get(url, **kwargs):
+            calls.append((url, kwargs))
+            if url.endswith("/v1/systems/suggest"):
+                return _Response({"results": [{
+                    "name": "Cubeo", "x": 1, "y": 2, "z": 3,
+                }]})
+            if url.endswith("/v1/markets/search"):
+                return _Response({"results": []})
+            return _Response([])
+
+        fetch_market_imports(
+            "Cubeo", "Platinum", max_distance=250, max_days_ago=1,
+            landing_pad="LARGE", get=get,
+        )
+        _, kwargs = next(
+            call for call in calls if call[0].endswith("/v1/markets/search")
+        )
+        self.assertEqual(kwargs["params"]["landing_pad"], "L")
+        self.assertTrue(kwargs["params"]["exclude_fleet_carriers"])
 
     def test_positive_demand_bracket_marks_zero_as_infinite(self):
         row = {
@@ -126,7 +220,9 @@ class MiningMarketTests(unittest.TestCase):
             "HIP 6703", "Platinum", max_distance=250,
             max_days_ago=1, get=get,
         ), [])
-        url, kwargs = calls[0]
+        url, kwargs = next(
+            call for call in calls if "api.ardent-insight.com" in call[0]
+        )
         self.assertIn("HIP%206703", url)
         self.assertIn("/platinum/nearby/imports", url)
         self.assertEqual(kwargs["params"]["fleetCarriers"], "false")
@@ -138,15 +234,31 @@ class MiningMarketTests(unittest.TestCase):
 
         def get(url, **kwargs):
             calls.append(url)
-            if len(calls) == 1:
+            if "vps-20b25c36" in url:
+                return _Response(None, RuntimeError("catalog down"))
+            if "api.ardent-insight.com" in url:
                 return _Response(None, RuntimeError("primary down"))
             return _Response([])
 
         self.assertEqual(fetch_market_imports(
             "Sol", "Gold", max_distance=100, max_days_ago=1, get=get,
         ), [])
-        self.assertIn("api.ardent-insight.com", calls[0])
-        self.assertIn("api.eddata.dev", calls[1])
+        self.assertTrue(any("api.ardent-insight.com" in url for url in calls))
+        self.assertTrue(any("api.eddata.dev" in url for url in calls))
+
+    def test_disabled_central_catalog_is_not_contacted(self):
+        calls = []
+
+        def get(url, **kwargs):
+            calls.append(url)
+            return _Response([])
+
+        self.assertEqual(fetch_market_imports(
+            "Sol", "Gold", max_distance=100, max_days_ago=1, get=get,
+            include_edframe=False,
+        ), [])
+        self.assertFalse(any("vps-20b25c36" in url for url in calls))
+        self.assertTrue(any("api.ardent-insight.com" in url for url in calls))
 
     def test_catalog_accumulates_markets_and_newer_observation_wins(self):
         old = {
@@ -173,6 +285,22 @@ class MiningMarketTests(unittest.TestCase):
         rows = latest_market_rows(catalog["markets"], [old])
         port_a = next(row for row in rows if row["station"] == "Port A")
         self.assertEqual(port_a["sellPrice"], 250000)
+
+    def test_newer_central_price_keeps_older_verified_pad_metadata(self):
+        enriched = {
+            "commodity": "platinum", "station": "Port A", "system": "A",
+            "sellPrice": 100000, "observedAt": "2026-10-01T10:00:00Z",
+            "landingPadSize": "L", "distanceToArrivalLs": 500,
+        }
+        central = {
+            **enriched, "sellPrice": 250000,
+            "observedAt": "2026-10-03T10:00:00Z",
+            "landingPadSize": "", "distanceToArrivalLs": None,
+        }
+        row = latest_market_rows([enriched], [central])[0]
+        self.assertEqual(row["sellPrice"], 250000)
+        self.assertEqual(row["landingPadSize"], "L")
+        self.assertEqual(row["distanceToArrivalLs"], 500)
 
     def test_catalog_prunes_expired_rows_and_selects_search_radius(self):
         catalog = merge_market_catalog(

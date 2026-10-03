@@ -19,11 +19,12 @@ from .mining_commodities import mining_commodity_id
 
 LOGGER = logging.getLogger(__name__)
 
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 4
 CURRENT_RETENTION_DAYS = 90
 HISTORY_RETENTION_DAYS = 30
 MAX_CURRENT_ROWS = 20_000
 MAX_HISTORY_ROWS = 100_000
+MAX_WARM_TARGETS = 96
 
 _CORRUPTION_MARKERS = (
     "malformed", "not a database", "file is not a database",
@@ -63,6 +64,29 @@ def _integer(value: Any, default: int = 0) -> int:
         return int(value)
     except (TypeError, ValueError):
         return default
+
+
+def _json_list(value: Any) -> str:
+    return json.dumps(
+        value if isinstance(value, list) else [],
+        ensure_ascii=False, separators=(",", ":"),
+    )
+
+
+def _loaded_list(value: Any) -> list[Any]:
+    try:
+        result = json.loads(str(value or "[]"))
+    except (TypeError, ValueError, json.JSONDecodeError):
+        return []
+    return result if isinstance(result, list) else []
+
+
+def _tri_bool(value: Any) -> int:
+    return int(value) if isinstance(value, bool) else -1
+
+
+def _optional_nonnegative(value: Any) -> int:
+    return max(0, _integer(value)) if value not in (None, "") else -1
 
 
 def _market_key(row: dict[str, Any]) -> str:
@@ -134,7 +158,21 @@ class MarketCatalogStore:
                     fetched_at TEXT NOT NULL,
                     fetched_epoch REAL NOT NULL,
                     source TEXT NOT NULL DEFAULT '',
-                    source_url TEXT NOT NULL DEFAULT ''
+                    source_url TEXT NOT NULL DEFAULT '',
+                    mean_price INTEGER NOT NULL DEFAULT -1,
+                    buy_price INTEGER NOT NULL DEFAULT -1,
+                    stock INTEGER NOT NULL DEFAULT -1,
+                    stock_bracket INTEGER NOT NULL DEFAULT -1,
+                    status_flags_json TEXT NOT NULL DEFAULT '[]',
+                    received_at TEXT NOT NULL DEFAULT '',
+                    services_json TEXT NOT NULL DEFAULT '[]',
+                    economies_json TEXT NOT NULL DEFAULT '[]',
+                    primary_economy TEXT NOT NULL DEFAULT '',
+                    government TEXT NOT NULL DEFAULT '',
+                    controlling_faction TEXT NOT NULL DEFAULT '',
+                    fleet_carrier INTEGER NOT NULL DEFAULT -1,
+                    carrier_docking_access TEXT NOT NULL DEFAULT '',
+                    prohibited_json TEXT NOT NULL DEFAULT '[]'
                 );
                 CREATE INDEX IF NOT EXISTS market_current_lookup
                 ON market_current(commodity, observed_epoch, system_key);
@@ -165,7 +203,60 @@ class MarketCatalogStore:
                     key TEXT PRIMARY KEY,
                     value TEXT NOT NULL DEFAULT ''
                 );
+
+                CREATE TABLE IF NOT EXISTS warm_targets (
+                    target_key TEXT PRIMARY KEY,
+                    start_system TEXT NOT NULL,
+                    commodity TEXT NOT NULL,
+                    nearby_ly INTEGER NOT NULL DEFAULT 250,
+                    min_demand INTEGER NOT NULL DEFAULT 0,
+                    max_market_age_hours INTEGER NOT NULL DEFAULT 1,
+                    landing_pad TEXT NOT NULL DEFAULT 'ANY',
+                    priority INTEGER NOT NULL DEFAULT 0,
+                    use_count INTEGER NOT NULL DEFAULT 0,
+                    last_requested_at TEXT NOT NULL DEFAULT '',
+                    last_requested_epoch REAL NOT NULL DEFAULT 0,
+                    last_success_at TEXT NOT NULL DEFAULT '',
+                    last_success_epoch REAL NOT NULL DEFAULT 0,
+                    last_failure_at TEXT NOT NULL DEFAULT '',
+                    last_failure_epoch REAL NOT NULL DEFAULT 0,
+                    consecutive_failures INTEGER NOT NULL DEFAULT 0,
+                    next_retry_at TEXT NOT NULL DEFAULT '',
+                    next_retry_epoch REAL NOT NULL DEFAULT 0,
+                    last_error TEXT NOT NULL DEFAULT '',
+                    enabled INTEGER NOT NULL DEFAULT 1
+                );
+                CREATE INDEX IF NOT EXISTS warm_targets_due
+                ON warm_targets(enabled, priority, last_success_epoch,
+                                next_retry_epoch);
             """)
+            columns = {
+                str(row[1]) for row in connection.execute(
+                    "PRAGMA table_info(market_current)"
+                )
+            }
+            migrations = {
+                "mean_price": "INTEGER NOT NULL DEFAULT -1",
+                "buy_price": "INTEGER NOT NULL DEFAULT -1",
+                "stock": "INTEGER NOT NULL DEFAULT -1",
+                "stock_bracket": "INTEGER NOT NULL DEFAULT -1",
+                "status_flags_json": "TEXT NOT NULL DEFAULT '[]'",
+                "received_at": "TEXT NOT NULL DEFAULT ''",
+                "services_json": "TEXT NOT NULL DEFAULT '[]'",
+                "economies_json": "TEXT NOT NULL DEFAULT '[]'",
+                "primary_economy": "TEXT NOT NULL DEFAULT ''",
+                "government": "TEXT NOT NULL DEFAULT ''",
+                "controlling_faction": "TEXT NOT NULL DEFAULT ''",
+                "fleet_carrier": "INTEGER NOT NULL DEFAULT -1",
+                "carrier_docking_access": "TEXT NOT NULL DEFAULT ''",
+                "prohibited_json": "TEXT NOT NULL DEFAULT '[]'",
+            }
+            for name, declaration in migrations.items():
+                if name not in columns:
+                    connection.execute(
+                        f"ALTER TABLE market_current ADD COLUMN "
+                        f"{name} {declaration}"
+                    )
             connection.execute(f"PRAGMA user_version={SCHEMA_VERSION}")
             connection.commit()
 
@@ -260,6 +351,20 @@ class MarketCatalogStore:
             fetched.isoformat(timespec="seconds"), fetched.timestamp(),
             str(row.get("source") or "").strip(),
             str(row.get("sourceUrl") or "").strip(),
+            _optional_nonnegative(row.get("meanPrice")),
+            _optional_nonnegative(row.get("buyPrice")),
+            _optional_nonnegative(row.get("stock")),
+            _optional_nonnegative(row.get("stockBracket")),
+            _json_list(row.get("statusFlags")),
+            str(row.get("receivedAt") or "").strip(),
+            _json_list(row.get("services")),
+            _json_list(row.get("economies")),
+            str(row.get("primaryEconomy") or "").strip(),
+            str(row.get("government") or "").strip(),
+            str(row.get("controllingFaction") or "").strip(),
+            _tri_bool(row.get("fleetCarrier")),
+            str(row.get("carrierDockingAccess") or "").strip(),
+            _json_list(row.get("prohibited")),
             payload,
         )
 
@@ -310,10 +415,15 @@ class MarketCatalogStore:
                     market_id, system_address, station_type, landing_pad_size,
                     distance_to_arrival, x, y, z, sell_price, demand,
                     demand_infinite, demand_bracket, observed_at, observed_epoch,
-                    fetched_at, fetched_epoch, source, source_url
+                    fetched_at, fetched_epoch, source, source_url,
+                    mean_price, buy_price, stock, stock_bracket,
+                    status_flags_json, received_at, services_json,
+                    economies_json, primary_economy, government,
+                    controlling_faction, fleet_carrier,
+                    carrier_docking_access, prohibited_json
                 ) VALUES (
                     ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
-                    ?, ?, ?, ?
+                    ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
                 )
                 ON CONFLICT(market_key) DO UPDATE SET
                     system=CASE WHEN excluded.observed_epoch >=
@@ -396,7 +506,75 @@ class MarketCatalogStore:
                         ELSE market_current.source END,
                     source_url=CASE WHEN market_current.source_url = ''
                         AND excluded.source_url <> '' THEN excluded.source_url
-                        ELSE market_current.source_url END
+                        ELSE market_current.source_url END,
+                    mean_price=CASE WHEN excluded.mean_price >= 0 AND
+                        (market_current.mean_price < 0 OR excluded.observed_epoch >=
+                        market_current.observed_epoch) THEN excluded.mean_price
+                        ELSE market_current.mean_price END,
+                    buy_price=CASE WHEN excluded.buy_price >= 0 AND
+                        (market_current.buy_price < 0 OR excluded.observed_epoch >=
+                        market_current.observed_epoch) THEN excluded.buy_price
+                        ELSE market_current.buy_price END,
+                    stock=CASE WHEN excluded.stock >= 0 AND
+                        (market_current.stock < 0 OR excluded.observed_epoch >=
+                        market_current.observed_epoch) THEN excluded.stock
+                        ELSE market_current.stock END,
+                    stock_bracket=CASE WHEN excluded.stock_bracket >= 0 AND
+                        (market_current.stock_bracket < 0 OR excluded.observed_epoch >=
+                        market_current.observed_epoch) THEN excluded.stock_bracket
+                        ELSE market_current.stock_bracket END,
+                    status_flags_json=CASE
+                        WHEN excluded.status_flags_json <> '[]'
+                        AND (market_current.status_flags_json = '[]' OR
+                            excluded.observed_epoch >= market_current.observed_epoch)
+                        THEN excluded.status_flags_json
+                        ELSE market_current.status_flags_json END,
+                    received_at=CASE WHEN excluded.received_at <> ''
+                        AND excluded.observed_epoch >= market_current.observed_epoch
+                        THEN excluded.received_at
+                        ELSE market_current.received_at END,
+                    services_json=CASE WHEN excluded.services_json <> '[]'
+                        AND (market_current.services_json = '[]' OR
+                            excluded.observed_epoch >= market_current.observed_epoch)
+                        THEN excluded.services_json
+                        ELSE market_current.services_json END,
+                    economies_json=CASE WHEN excluded.economies_json <> '[]'
+                        AND (market_current.economies_json = '[]' OR
+                            excluded.observed_epoch >= market_current.observed_epoch)
+                        THEN excluded.economies_json
+                        ELSE market_current.economies_json END,
+                    primary_economy=CASE WHEN excluded.primary_economy <> ''
+                        AND (market_current.primary_economy = '' OR
+                            excluded.observed_epoch >= market_current.observed_epoch)
+                        THEN excluded.primary_economy
+                        ELSE market_current.primary_economy END,
+                    government=CASE WHEN excluded.government <> ''
+                        AND (market_current.government = '' OR
+                            excluded.observed_epoch >= market_current.observed_epoch)
+                        THEN excluded.government
+                        ELSE market_current.government END,
+                    controlling_faction=CASE
+                        WHEN excluded.controlling_faction <> ''
+                        AND (market_current.controlling_faction = '' OR
+                            excluded.observed_epoch >= market_current.observed_epoch)
+                        THEN excluded.controlling_faction
+                        ELSE market_current.controlling_faction END,
+                    fleet_carrier=CASE WHEN excluded.fleet_carrier >= 0
+                        AND (market_current.fleet_carrier < 0 OR
+                            excluded.observed_epoch >= market_current.observed_epoch)
+                        THEN excluded.fleet_carrier
+                        ELSE market_current.fleet_carrier END,
+                    carrier_docking_access=CASE
+                        WHEN excluded.carrier_docking_access <> ''
+                        AND (market_current.carrier_docking_access = '' OR
+                            excluded.observed_epoch >= market_current.observed_epoch)
+                        THEN excluded.carrier_docking_access
+                        ELSE market_current.carrier_docking_access END,
+                    prohibited_json=CASE WHEN excluded.prohibited_json <> '[]'
+                        AND (market_current.prohibited_json = '[]' OR
+                            excluded.observed_epoch >= market_current.observed_epoch)
+                        THEN excluded.prohibited_json
+                        ELSE market_current.prohibited_json END
             """, current_rows)
             connection.execute(
                 "DELETE FROM market_history WHERE observed_epoch < ?",
@@ -441,6 +619,25 @@ class MarketCatalogStore:
             "demand": row["demand"],
             "demandInfinite": bool(row["demand_infinite"]),
             "demandBracket": row["demand_bracket"],
+            "meanPrice": None if row["mean_price"] < 0 else row["mean_price"],
+            "buyPrice": None if row["buy_price"] < 0 else row["buy_price"],
+            "stock": None if row["stock"] < 0 else row["stock"],
+            "stockBracket": (
+                None if row["stock_bracket"] < 0 else row["stock_bracket"]
+            ),
+            "statusFlags": _loaded_list(row["status_flags_json"]),
+            "receivedAt": row["received_at"],
+            "services": _loaded_list(row["services_json"]),
+            "economies": _loaded_list(row["economies_json"]),
+            "primaryEconomy": row["primary_economy"],
+            "government": row["government"],
+            "controllingFaction": row["controlling_faction"],
+            "fleetCarrier": (
+                None if row["fleet_carrier"] < 0
+                else bool(row["fleet_carrier"])
+            ),
+            "carrierDockingAccess": row["carrier_docking_access"],
+            "prohibited": _loaded_list(row["prohibited_json"]),
             "observedAt": row["observed_at"],
             "source": row["source"],
             "sourceUrl": row["source_url"],
@@ -454,6 +651,7 @@ class MarketCatalogStore:
     ) -> list[dict[str, Any]]:
         now = now or datetime.now(timezone.utc)
         commodity_id = mining_commodity_id(commodity)
+        all_commodities = commodity_id in {"", "allcommodities"}
         origin_key = str(origin_system or "").strip().casefold()
         coordinates = (
             [_number(value) for value in origin_coordinates]
@@ -465,8 +663,12 @@ class MarketCatalogStore:
         )
         radius = max(0.0, float(max_distance or 0))
         cutoff = (now - timedelta(days=CURRENT_RETENTION_DAYS)).timestamp()
-        parameters: list[Any] = [commodity_id, cutoff]
-        where = "commodity = ? AND observed_epoch >= ?"
+        parameters: list[Any] = [cutoff] if all_commodities else [
+            commodity_id, cutoff,
+        ]
+        where = "observed_epoch >= ?" if all_commodities else (
+            "commodity = ? AND observed_epoch >= ?"
+        )
         if known and radius > 0:
             where += " AND (system_key = ? OR (x BETWEEN ? AND ? AND y BETWEEN ? AND ? AND z BETWEEN ? AND ?))"
             parameters.extend([
@@ -576,6 +778,196 @@ class MarketCatalogStore:
                 (str(key), str(value)),
             )
             connection.commit()
+
+    @staticmethod
+    def _warm_target(query: Any) -> tuple[str, dict[str, Any]]:
+        source = query if isinstance(query, dict) else {}
+        system = str(source.get("startSystem") or "").strip()
+        commodity = mining_commodity_id(source.get("commodity"))
+        key = "\x1f".join((system.casefold(), commodity))
+        if not system or not commodity or commodity == "allcommodities":
+            return "", {}
+        return key, {
+            "startSystem": system,
+            "commodity": commodity,
+            "nearbyLy": max(1, min(1000, _integer(
+                source.get("nearbyLy"), 250
+            ))),
+            "minDemand": max(0, _integer(source.get("minDemand"))),
+            "maxMarketAgeHours": max(1, min(336, _integer(
+                source.get("maxMarketAgeHours"), 1
+            ))),
+            "landingPad": str(
+                source.get("landingPad") or "ANY"
+            ).strip().upper(),
+        }
+
+    def remember_warm_target(
+        self, query: Any, *, priority: int = 100, used: bool = True,
+        now: datetime | None = None,
+    ) -> bool:
+        """Persist one bounded, anonymous background market lookup target."""
+        return bool(self.remember_warm_targets(
+            [(query, priority, used)], now=now,
+        ))
+
+    def remember_warm_targets(
+        self, targets: Iterable[tuple[Any, int, bool]], *,
+        now: datetime | None = None,
+    ) -> int:
+        """Persist several warm targets in one short SQLite transaction."""
+        now = (now or datetime.now(timezone.utc)).astimezone(timezone.utc)
+        stamp = now.isoformat(timespec="seconds")
+        epoch = now.timestamp()
+        prepared = []
+        for query, priority, used in targets:
+            key, target = self._warm_target(query)
+            if not key:
+                continue
+            prepared.append((
+                key, target["startSystem"], target["commodity"],
+                target["nearbyLy"], target["minDemand"],
+                target["maxMarketAgeHours"], target["landingPad"],
+                int(priority), int(bool(used)), stamp if used else "",
+                epoch if used else 0,
+            ))
+        if not prepared:
+            return 0
+        with self._lock, closing(self._connect()) as connection:
+            connection.execute(
+                "DELETE FROM warm_targets WHERE commodity = 'allcommodities'"
+            )
+            connection.executemany("""
+                INSERT INTO warm_targets(
+                    target_key, start_system, commodity, nearby_ly,
+                    min_demand, max_market_age_hours, landing_pad, priority,
+                    use_count, last_requested_at, last_requested_epoch
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(target_key) DO UPDATE SET
+                    start_system=excluded.start_system,
+                    nearby_ly=excluded.nearby_ly,
+                    min_demand=excluded.min_demand,
+                    max_market_age_hours=excluded.max_market_age_hours,
+                    landing_pad=excluded.landing_pad,
+                    priority=MAX(warm_targets.priority, excluded.priority),
+                    use_count=warm_targets.use_count + excluded.use_count,
+                    last_requested_at=CASE WHEN excluded.use_count > 0
+                        THEN excluded.last_requested_at
+                        ELSE warm_targets.last_requested_at END,
+                    last_requested_epoch=CASE WHEN excluded.use_count > 0
+                        THEN excluded.last_requested_epoch
+                        ELSE warm_targets.last_requested_epoch END,
+                    enabled=1
+            """, prepared)
+            connection.execute("""
+                DELETE FROM warm_targets WHERE target_key IN (
+                    SELECT target_key FROM warm_targets
+                    ORDER BY priority DESC, use_count DESC,
+                             last_requested_epoch DESC
+                    LIMIT -1 OFFSET ?
+                )
+            """, (MAX_WARM_TARGETS,))
+            connection.commit()
+        return len(prepared)
+
+    @staticmethod
+    def _project_warm_target(row: sqlite3.Row) -> dict[str, Any]:
+        return {
+            "key": row["target_key"],
+            "startSystem": row["start_system"],
+            "commodity": row["commodity"],
+            "nearbyLy": row["nearby_ly"],
+            "minDemand": row["min_demand"],
+            "maxMarketAgeHours": row["max_market_age_hours"],
+            "landingPad": row["landing_pad"],
+            "priority": row["priority"],
+            "useCount": row["use_count"],
+            "lastSuccessAt": row["last_success_at"],
+            "consecutiveFailures": row["consecutive_failures"],
+            "nextRetryAt": row["next_retry_at"],
+        }
+
+    def warm_targets(self) -> list[dict[str, Any]]:
+        rows = self._read_rows("""
+            SELECT * FROM warm_targets WHERE enabled = 1
+            ORDER BY priority DESC, use_count DESC, last_requested_epoch DESC
+        """)
+        return [self._project_warm_target(row) for row in rows]
+
+    def next_warm_target(
+        self, *, now: datetime | None = None,
+        default_fresh_seconds: int = 3600,
+    ) -> dict[str, Any]:
+        """Return the highest-value stale target whose retry delay elapsed."""
+        now = (now or datetime.now(timezone.utc)).astimezone(timezone.utc)
+        epoch = now.timestamp()
+        rows = self._read_rows("""
+            SELECT * FROM warm_targets
+            WHERE enabled = 1 AND commodity <> 'allcommodities'
+                  AND next_retry_epoch <= ?
+            ORDER BY priority DESC, use_count DESC,
+                     last_success_epoch ASC, last_requested_epoch DESC
+        """, (epoch,))
+        for row in rows:
+            requested_freshness = max(
+                1800, min(21600, int(row["max_market_age_hours"]) * 3600)
+            )
+            freshness = max(
+                1800, min(requested_freshness, int(default_fresh_seconds))
+            )
+            if float(row["last_success_epoch"] or 0) <= epoch - freshness:
+                return self._project_warm_target(row)
+        return {}
+
+    def mark_warm_target(
+        self, key: str, *, success: bool, error: str = "",
+        retry_seconds: int = 0, now: datetime | None = None,
+    ) -> None:
+        now = (now or datetime.now(timezone.utc)).astimezone(timezone.utc)
+        stamp = now.isoformat(timespec="seconds")
+        epoch = now.timestamp()
+        retry_at = now + timedelta(seconds=max(0, int(retry_seconds)))
+        with self._lock, closing(self._connect()) as connection:
+            connection.execute("""
+                UPDATE warm_targets SET
+                    last_success_at=CASE WHEN ? THEN ? ELSE last_success_at END,
+                    last_success_epoch=CASE WHEN ? THEN ?
+                        ELSE last_success_epoch END,
+                    last_failure_at=CASE WHEN ? THEN last_failure_at ELSE ? END,
+                    last_failure_epoch=CASE WHEN ? THEN last_failure_epoch
+                        ELSE ? END,
+                    consecutive_failures=CASE WHEN ? THEN 0
+                        ELSE consecutive_failures + 1 END,
+                    next_retry_at=CASE WHEN ? THEN '' ELSE ? END,
+                    next_retry_epoch=CASE WHEN ? THEN 0 ELSE ? END,
+                    last_error=CASE WHEN ? THEN '' ELSE ? END
+                WHERE target_key = ?
+            """, (
+                success, stamp, success, epoch,
+                success, stamp, success, epoch,
+                success,
+                success, retry_at.isoformat(timespec="seconds"),
+                success, retry_at.timestamp(),
+                success, str(error or ""), str(key or ""),
+            ))
+            connection.commit()
+
+    def warm_summary(self, *, now: datetime | None = None) -> dict[str, int]:
+        now = (now or datetime.now(timezone.utc)).astimezone(timezone.utc)
+        rows = self._read_rows("""
+            SELECT COUNT(*) AS total,
+                   SUM(CASE WHEN last_success_epoch > ? THEN 1 ELSE 0 END)
+                       AS fresh,
+                   SUM(CASE WHEN consecutive_failures > 0 THEN 1 ELSE 0 END)
+                       AS failed
+            FROM warm_targets WHERE enabled = 1
+        """, (now.timestamp() - 3600,))
+        row = rows[0]
+        return {
+            "total": int(row["total"] or 0),
+            "fresh": int(row["fresh"] or 0),
+            "failed": int(row["failed"] or 0),
+        }
 
     def reset(self) -> bool:
         """Create a genuinely empty catalog that cannot restore old rows."""

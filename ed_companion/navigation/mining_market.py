@@ -22,6 +22,7 @@ from .mining_commodities import MINING_COMMODITIES
 ARDENT_API_BASE = "https://api.ardent-insight.com/v2"
 EDDATA_API_BASE = "https://api.eddata.dev/v2"
 EDSM_SYSTEM_URL = "https://www.edsm.net/api-v1/system"
+EDFRAME_CATALOG_BASE = "https://vps-20b25c36.vps.ovh.net"
 MARKET_API_BASES = (
     (ARDENT_API_BASE, "Ardent API · EDDN commodity/3"),
     (EDDATA_API_BASE, "EDData API · EDDN commodity/3"),
@@ -35,6 +36,48 @@ MARKET_CATALOG_MAX_ROWS = 20000
 
 class MiningMarketError(RuntimeError):
     """A concise, user-displayable market lookup failure."""
+
+
+def fetch_edframe_catalog_status(*, get: Any, timeout: int = 12) -> dict[str, Any]:
+    """Return the anonymous central catalog's public health summary."""
+    response = get(f"{EDFRAME_CATALOG_BASE}/v1/status", timeout=timeout)
+    response.raise_for_status()
+    payload = response.json()
+    if not isinstance(payload, dict):
+        raise MiningMarketError("ED-Frame returned an invalid status response")
+    return payload
+
+
+def fetch_edframe_system_coordinates(
+    system: str, *, get: Any, timeout: int = 12,
+) -> dict[str, Any]:
+    """Resolve a public system through the central catalog."""
+    requested = str(system or "").strip()
+    if not requested:
+        raise MiningMarketError("Start system is required")
+    response = get(
+        f"{EDFRAME_CATALOG_BASE}/v1/systems/suggest",
+        params={"q": requested, "limit": 5}, timeout=timeout,
+    )
+    response.raise_for_status()
+    payload = response.json()
+    rows = payload.get("results") if isinstance(payload, dict) else []
+    exact = next((
+        row for row in rows if isinstance(row, dict)
+        and str(row.get("name") or "").strip().casefold()
+        == requested.casefold()
+    ), None)
+    coordinates = (
+        [_finite(exact.get(axis)) for axis in ("x", "y", "z")]
+        if isinstance(exact, dict) else []
+    )
+    if not coordinates or not all(value is not None for value in coordinates):
+        raise MiningMarketError("ED-Frame has no coordinates for the start system")
+    return {
+        "system": str(exact.get("name") or requested).strip(),
+        "coordinates": coordinates,
+        "source": "ED-Frame live catalog",
+    }
 
 
 def fetch_edsm_system_coordinates(
@@ -77,12 +120,29 @@ def _integer(value: Any, default: int = 0) -> int:
         return default
 
 
+def _optional_nonnegative_integer(value: Any) -> int | None:
+    if value in (None, ""):
+        return None
+    try:
+        return max(0, int(value))
+    except (TypeError, ValueError):
+        return None
+
+
 def _finite(value: Any) -> float | None:
     try:
         number = float(value)
     except (TypeError, ValueError):
         return None
     return number if math.isfinite(number) else None
+
+
+def _optional_bool(value: Any) -> bool | None:
+    return value if isinstance(value, bool) else None
+
+
+def _list(value: Any) -> list[Any]:
+    return list(value) if isinstance(value, list) else []
 
 
 def _observed_at(value: Any) -> datetime | None:
@@ -118,8 +178,19 @@ def latest_market_rows(*groups: Any) -> list[dict[str, Any]]:
             if not all(key) or observed is None:
                 continue
             current = latest.get(key)
-            if current is None or observed >= current[0]:
+            if current is None:
                 latest[key] = (observed, dict(source))
+                continue
+            older, newer = (
+                (current[1], source) if observed >= current[0]
+                else (source, current[1])
+            )
+            merged = dict(older)
+            merged.update({
+                field: value for field, value in newer.items()
+                if value not in (None, "", [], {})
+            })
+            latest[key] = (max(observed, current[0]), merged)
     return [
         row for _observed, row in sorted(
             latest.values(), key=lambda item: item[0], reverse=True,
@@ -155,6 +226,7 @@ def nearby_catalog_markets(
     """Select reusable catalog rows inside the active search sphere."""
     rows = catalog.get("markets", []) if isinstance(catalog, dict) else []
     commodity_id = mining_commodity_id(commodity)
+    all_commodities = commodity_id in {"", "allcommodities"}
     origin_key = str(origin_system or "").strip().casefold()
     coordinates = (
         [_finite(value) for value in origin_coordinates]
@@ -167,9 +239,11 @@ def nearby_catalog_markets(
     radius = max(0.0, float(max_distance or 0))
     result = []
     for source in rows if isinstance(rows, list) else []:
-        if not isinstance(source, dict) or mining_commodity_id(
-            source.get("commodity")
-        ) != commodity_id:
+        if not isinstance(source, dict) or (
+            not all_commodities and mining_commodity_id(
+                source.get("commodity")
+            ) != commodity_id
+        ):
             continue
         if str(source.get("system") or "").strip().casefold() == origin_key:
             result.append(dict(source))
@@ -326,6 +400,116 @@ def project_market_imports(
     return result
 
 
+def project_edframe_catalog_markets(
+    payload: Any, commodity: str,
+) -> list[dict[str, Any]]:
+    """Project the central ED-Frame read-only catalog into local rows."""
+    rows = payload.get("results") if isinstance(payload, dict) else None
+    if not isinstance(rows, list):
+        raise MiningMarketError("ED-Frame catalog returned an invalid response")
+    commodity_id = mining_commodity_id(commodity)
+    result = []
+    for source_row in rows:
+        if not isinstance(source_row, dict) or mining_commodity_id(
+            source_row.get("commodity")
+        ) != commodity_id:
+            continue
+        station = str(source_row.get("station") or "").strip()
+        system = str(source_row.get("system") or "").strip()
+        observed_at = str(source_row.get("observedAt") or "").strip()
+        market_id = _integer(source_row.get("marketId"))
+        sell_price = max(0, _integer(source_row.get("sellPrice")))
+        if not station or not system or not observed_at or not market_id \
+                or not sell_price:
+            continue
+        coordinates = [
+            _finite(source_row.get("x")),
+            _finite(source_row.get("y")),
+            _finite(source_row.get("z")),
+        ]
+        demand = max(0, _integer(source_row.get("demand")))
+        demand_bracket = max(0, _integer(source_row.get("demandBracket")))
+        result.append({
+            "commodity": commodity_id,
+            "marketId": market_id,
+            "station": station,
+            "system": system,
+            "systemAddress": _integer(source_row.get("systemAddress")),
+            "stationType": str(source_row.get("stationType") or ""),
+            "landingPadSize": str(
+                source_row.get("landingPadSize") or ""
+            ).upper(),
+            "distanceToArrivalLs": _finite(
+                source_row.get("distanceToArrivalLs")
+            ),
+            "coordinates": coordinates if all(
+                value is not None for value in coordinates
+            ) else [],
+            "meanPrice": _optional_nonnegative_integer(
+                source_row.get("meanPrice")
+            ),
+            "buyPrice": _optional_nonnegative_integer(
+                source_row.get("buyPrice")
+            ),
+            "stock": _optional_nonnegative_integer(source_row.get("stock")),
+            "stockBracket": _optional_nonnegative_integer(
+                source_row.get("stockBracket")
+            ),
+            "sellPrice": sell_price,
+            "demand": demand,
+            "demandInfinite": demand == 0 and demand_bracket > 0,
+            "demandBracket": demand_bracket,
+            "statusFlags": _list(source_row.get("statusFlags")),
+            "services": _list(source_row.get("services")),
+            "economies": _list(source_row.get("economies")),
+            "primaryEconomy": str(source_row.get("primaryEconomy") or ""),
+            "government": str(source_row.get("government") or ""),
+            "controllingFaction": str(
+                source_row.get("controllingFaction") or ""
+            ),
+            "fleetCarrier": _optional_bool(source_row.get("fleetCarrier")),
+            "carrierDockingAccess": str(
+                source_row.get("carrierDockingAccess") or ""
+            ),
+            "prohibited": _list(source_row.get("prohibited")),
+            "observedAt": observed_at,
+            "receivedAt": str(source_row.get("receivedAt") or ""),
+            "source": "ED-Frame live catalog · EDDN commodity/3",
+            "sourceUrl": EDFRAME_CATALOG_BASE,
+            "meritEligible": None,
+        })
+    return result
+
+
+def _fetch_edframe_catalog_markets(
+    system: str, commodity: str, *, max_distance: int, max_days_ago: int,
+    landing_pad: str, get: Any, timeout: int,
+) -> list[dict[str, Any]]:
+    origin = fetch_edframe_system_coordinates(
+        system, get=get, timeout=timeout,
+    )
+    coordinates = origin["coordinates"]
+    pad = str(landing_pad or "ANY").strip().upper()
+    pad = {"SMALL": "S", "MEDIUM": "M", "LARGE": "L"}.get(pad, pad)
+    response = get(
+        f"{EDFRAME_CATALOG_BASE}/v1/markets/search",
+        params={
+            "commodity": commodity,
+            "max_age_hours": max(1, max_days_ago) * 24,
+            "x": coordinates[0],
+            "y": coordinates[1],
+            "z": coordinates[2],
+            "max_distance": max_distance,
+            "landing_pad": pad if pad in {"S", "M", "L"} else None,
+            "exclude_fleet_carriers": True,
+            "limit": 200,
+        },
+        timeout=timeout,
+    )
+    response.raise_for_status()
+    return project_edframe_catalog_markets(response.json(), commodity)
+
+
 def fetch_market_imports(
     start_system: str,
     commodity: str,
@@ -334,6 +518,8 @@ def fetch_market_imports(
     max_days_ago: int,
     get: Any,
     timeout: int = 20,
+    include_edframe: bool = True,
+    landing_pad: str = "ANY",
 ) -> list[dict[str, Any]]:
     """Fetch nearby sell markets without sending Commander-identifying data."""
     system = str(start_system or "").strip()
@@ -343,6 +529,16 @@ def fetch_market_imports(
     distance = max(1, min(1000, int(max_distance or 1)))
     days = max(1, min(14, int(max_days_ago or 1)))
     errors = []
+    central_rows = []
+    if include_edframe:
+        try:
+            central_rows = _fetch_edframe_catalog_markets(
+                system, commodity_id, max_distance=distance,
+                max_days_ago=days, landing_pad=landing_pad,
+                get=get, timeout=timeout,
+            )
+        except Exception as exc:
+            errors.append(f"ED-Frame live catalog: {type(exc).__name__}")
     for base_url, source_label in MARKET_API_BASES:
         url = (
             f"{base_url}/system/name/{quote(system, safe='')}"
@@ -363,12 +559,15 @@ def fetch_market_imports(
                 timeout=timeout,
             )
             response.raise_for_status()
-            return project_market_imports(
+            provider_rows = project_market_imports(
                 response.json(), commodity_id,
                 source=source_label, source_url=base_url,
             )
+            return latest_market_rows(central_rows, provider_rows)
         except Exception as exc:
             errors.append(f"{source_label}: {type(exc).__name__}")
+    if central_rows:
+        return central_rows
     raise MiningMarketError(
         "EDDN market lookup failed via all providers (" + ", ".join(errors) + ")"
     )

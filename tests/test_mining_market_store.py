@@ -1,5 +1,6 @@
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+import sqlite3
 from tempfile import TemporaryDirectory
 import unittest
 from unittest.mock import patch
@@ -25,6 +26,87 @@ def _row(observed, **changes):
 
 
 class MiningMarketStoreTests(unittest.TestCase):
+    def test_complete_station_metadata_survives_restart_and_sparse_refresh(self):
+        with TemporaryDirectory() as directory:
+            path = Path(directory, "market.sqlite3")
+            now = datetime.now(timezone.utc)
+            rich = _row(
+                now - timedelta(minutes=1), stationType="Coriolis",
+                systemAddress=1234, distanceToArrivalLs=321.5,
+                meanPrice=180000, buyPrice=0, stock=12, stockBracket=1,
+                statusFlags=["Docked"], receivedAt=now.isoformat(),
+                services=["Commodities"], economies=["Industrial"],
+                primaryEconomy="Industrial", government="Democracy",
+                controllingFaction="Test", fleetCarrier=False,
+                carrierDockingAccess="all", prohibited=["Slaves"],
+            )
+            store = MarketCatalogStore(path)
+            store.ingest([rich])
+            store.ingest([_row(
+                now, sellPrice=300000, landingPadSize="", coordinates=[],
+            )])
+
+            result = MarketCatalogStore(path).nearby(
+                "Platinum", origin_system="Cubeo",
+            )[0]
+            self.assertEqual(result["sellPrice"], 300000)
+            self.assertEqual(result["stationType"], "Coriolis")
+            self.assertEqual(result["landingPadSize"], "L")
+            self.assertEqual(result["services"], ["Commodities"])
+            self.assertEqual(result["economies"], ["Industrial"])
+            self.assertEqual(result["meanPrice"], 180000)
+            self.assertFalse(result["fleetCarrier"])
+            self.assertEqual(result["prohibited"], ["Slaves"])
+
+    def test_version_three_catalog_adds_station_columns_without_losing_rows(self):
+        with TemporaryDirectory() as directory:
+            path = Path(directory, "market.sqlite3")
+            observed = datetime.now(timezone.utc)
+            connection = sqlite3.connect(path)
+            try:
+                connection.execute("""
+                    CREATE TABLE market_current (
+                        market_key TEXT PRIMARY KEY, commodity TEXT NOT NULL,
+                        system_key TEXT NOT NULL, system TEXT NOT NULL,
+                        station TEXT NOT NULL, market_id INTEGER NOT NULL,
+                        system_address INTEGER NOT NULL DEFAULT 0,
+                        station_type TEXT NOT NULL DEFAULT '',
+                        landing_pad_size TEXT NOT NULL DEFAULT '',
+                        distance_to_arrival REAL, x REAL, y REAL, z REAL,
+                        sell_price INTEGER NOT NULL, demand INTEGER NOT NULL,
+                        demand_infinite INTEGER NOT NULL DEFAULT 0,
+                        demand_bracket INTEGER NOT NULL DEFAULT 0,
+                        observed_at TEXT NOT NULL, observed_epoch REAL NOT NULL,
+                        fetched_at TEXT NOT NULL, fetched_epoch REAL NOT NULL,
+                        source TEXT NOT NULL DEFAULT '',
+                        source_url TEXT NOT NULL DEFAULT ''
+                    )
+                """)
+                connection.execute("""
+                    INSERT INTO market_current VALUES (
+                        ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
+                        ?, ?, ?, ?, ?, ?
+                    )
+                """, (
+                    "platinum\x1fmarket:42", "platinum", "cubeo", "Cubeo",
+                    "Medupe City", 42, 1234, "Coriolis", "L", 321.5,
+                    1, 2, 3, 250000, 5000, 0, 3,
+                    observed.isoformat(), observed.timestamp(),
+                    observed.isoformat(), observed.timestamp(), "legacy", "",
+                ))
+                connection.execute("PRAGMA user_version=3")
+                connection.commit()
+            finally:
+                connection.close()
+
+            store = MarketCatalogStore(path)
+            result = store.nearby("Platinum", origin_system="Cubeo")[0]
+            self.assertEqual(store.count(), 1)
+            self.assertEqual(result["stationType"], "Coriolis")
+            self.assertEqual(result["landingPadSize"], "L")
+            self.assertIsNone(result["meanPrice"])
+            self.assertIsNone(result["fleetCarrier"])
+
     def test_empty_first_start_is_valid_and_queryable(self):
         with TemporaryDirectory() as directory:
             store = MarketCatalogStore(Path(directory, "market.sqlite3"))
@@ -33,6 +115,29 @@ class MiningMarketStoreTests(unittest.TestCase):
             self.assertEqual(store.count(), 0)
             self.assertEqual(store.history_count(), 0)
             self.assertEqual(store.nearby("Platinum", origin_system="Cubeo"), [])
+
+    def test_all_commodities_returns_concrete_rows_without_fake_warm_target(self):
+        with TemporaryDirectory() as directory:
+            now = datetime.now(timezone.utc)
+            store = MarketCatalogStore(Path(directory, "market.sqlite3"))
+            store.ingest([
+                _row(now, commodity="platinum"),
+                _row(now, commodity="painite", marketId=43),
+            ])
+
+            rows = store.nearby(
+                "ALL COMMODITIES", origin_system="Cubeo",
+            )
+            stored = store.remember_warm_target({
+                "startSystem": "Cubeo", "commodity": "ALL COMMODITIES",
+            })
+
+            self.assertEqual(
+                {row["commodity"] for row in rows},
+                {"platinum", "painite"},
+            )
+            self.assertFalse(stored)
+            self.assertEqual(store.warm_targets(), [])
 
     def test_local_external_order_metadata_and_restart_matrix(self):
         now = datetime.now(timezone.utc)
@@ -229,10 +334,14 @@ class MiningMarketStoreTests(unittest.TestCase):
             store.record_source_result(
                 "EDDN market indexes", success=False, error="offline",
             )
+            store.remember_warm_target({
+                "startSystem": "Cubeo", "commodity": "Platinum",
+            })
 
             self.assertTrue(store.reset())
             self.assertEqual(store.count(), 0)
             self.assertEqual(store.history_count(), 0)
+            self.assertEqual(store.warm_targets(), [])
             self.assertEqual(store.source_status("EDDN market indexes"), {})
             self.assertEqual(store.metadata("legacy_migrated"), "1")
 
@@ -250,6 +359,76 @@ class MiningMarketStoreTests(unittest.TestCase):
 
             self.assertEqual(first.count(), 1)
             self.assertEqual(second.count(), 0)
+
+    def test_warm_targets_persist_prioritize_user_intent_and_track_success(self):
+        with TemporaryDirectory() as directory:
+            path = Path(directory, "market.sqlite3")
+            now = datetime.now(timezone.utc)
+            store = MarketCatalogStore(path)
+            store.remember_warm_target({
+                "startSystem": "Cubeo", "commodity": "Painite",
+                "nearbyLy": 100, "maxMarketAgeHours": 1,
+            }, priority=10, used=False, now=now)
+            store.remember_warm_target({
+                "startSystem": "Cubeo", "commodity": "Platinum",
+                "nearbyLy": 250, "minDemand": 5000,
+                "maxMarketAgeHours": 1, "landingPad": "LARGE",
+            }, priority=100, used=True, now=now)
+
+            target = store.next_warm_target(now=now)
+            self.assertEqual(target["commodity"], "platinum")
+            self.assertEqual(target["nearbyLy"], 250)
+            store.mark_warm_target(target["key"], success=True, now=now)
+            self.assertEqual(
+                store.next_warm_target(now=now)["commodity"], "painite"
+            )
+
+            reopened = MarketCatalogStore(path)
+            self.assertEqual(len(reopened.warm_targets()), 2)
+            self.assertEqual(reopened.warm_summary(now=now)["fresh"], 1)
+
+    def test_existing_catalog_migrates_to_warm_queue_schema_in_place(self):
+        with TemporaryDirectory() as directory:
+            path = Path(directory, "market.sqlite3")
+            store = MarketCatalogStore(path)
+            store.ingest([_row(datetime.now(timezone.utc))])
+            connection = sqlite3.connect(path)
+            try:
+                connection.execute("DROP TABLE warm_targets")
+                connection.execute("PRAGMA user_version=2")
+                connection.commit()
+            finally:
+                connection.close()
+
+            migrated = MarketCatalogStore(path)
+            migrated.remember_warm_target({
+                "startSystem": "Cubeo", "commodity": "Platinum",
+            })
+
+            self.assertEqual(migrated.count(), 1)
+            self.assertEqual(len(migrated.warm_targets()), 1)
+
+    def test_warm_target_retry_and_hard_limit_are_enforced(self):
+        with TemporaryDirectory() as directory, patch(
+            "ed_companion.navigation.mining_market_store.MAX_WARM_TARGETS", 2,
+        ):
+            now = datetime.now(timezone.utc)
+            store = MarketCatalogStore(Path(directory, "market.sqlite3"))
+            for index, commodity in enumerate(("gold", "silver", "platinum")):
+                store.remember_warm_target({
+                    "startSystem": "Cubeo", "commodity": commodity,
+                }, priority=index, used=True, now=now + timedelta(seconds=index))
+
+            self.assertEqual(len(store.warm_targets()), 2)
+            target = store.next_warm_target(now=now + timedelta(seconds=3))
+            self.assertEqual(target["commodity"], "platinum")
+            store.mark_warm_target(
+                target["key"], success=False, error="offline",
+                retry_seconds=120, now=now,
+            )
+            next_target = store.next_warm_target(now=now + timedelta(seconds=1))
+            self.assertEqual(next_target["commodity"], "silver")
+            self.assertEqual(store.warm_summary(now=now)["failed"], 1)
 
 
 if __name__ == "__main__":
