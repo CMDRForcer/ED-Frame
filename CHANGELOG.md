@@ -1,5 +1,49 @@
 # Changelog
 
+## 1.5.29 — 2026-10-03
+
+### Added
+
+- **Central ED-Frame catalog**: a privacy-preserving PostgreSQL service now
+  learns public systems, stations, mining locations and commodity markets
+  directly from EDDN. Health, completeness and current activity are visible in
+  the app, while automatic maintenance and verified database backups protect
+  the live catalog.
+- **Incremental offline catalog sync**: each Commander profile downloads the
+  public Mining market catalog in bounded pages and resumes from an opaque
+  cursor after restarts or network interruptions. Rows are committed locally
+  before progress advances, retained during server outages and rebuilt safely
+  after an explicit reset.
+- **Independent connection sources**: ED-Frame, EDDN, EDSM, Spansh, Frontier
+  CAPI and INARA have source-specific status and controls instead of combining
+  unrelated services. The Mining Finder header reports local completeness,
+  server availability and synchronization progress separately.
+
+### Fixed
+
+- **Truthful Powerplay mining routes**: Reinforce and Undermine require a
+  compatible verified market in the mining system, Acquire keeps its valid
+  cross-system destination, headquarters remain known special cases and
+  same-system routes show a real zero-distance leg.
+- **More useful Mining alternatives**: sell destinations identify both system
+  and station, concrete secondary commodities are retained without counting
+  the primary commodity twice, and missing market data remains clearly marked
+  rather than being promoted into a price, demand or merit claim.
+- **Responsive Mining Finder**: expensive catalog ingestion and projection run
+  outside the UI thread, searches remain responsive while switching Powerplay
+  goals, the layout uses wide windows more effectively, search controls can be
+  collapsed, belts can be excluded and alternative rows are easier to read and
+  scroll.
+
+### Tests
+
+- **Catalog and deployment coverage**: automated tests cover cursor stability,
+  page ordering, restart and reset recovery, profile isolation, source tabs,
+  same-system Powerplay rules, catalog limits and QML loading. A live initial
+  synchronization retained all 41,421 available market rows in about 22
+  seconds, and the final focused regression matrix passes 164 application tests
+  plus 14 isolated server tests.
+
 ## 1.5.28 — 2026-10-02
 
 ### Added

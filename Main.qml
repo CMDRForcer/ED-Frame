@@ -7219,10 +7219,10 @@ ApplicationWindow {
                 spacing: 8
                 CockpitButton { text: "INARA"; selected: connectionsPage.connectionMode === 0; onClicked: connectionsPage.connectionMode = 0 }
                 CockpitButton { text: window.t("connections.frontier_tab", "FRONTIER CAPI"); selected: connectionsPage.connectionMode === 2; accentColor: cyan; onClicked: connectionsPage.connectionMode = 2 }
-                CockpitButton { text: "EDDN"; selected: connectionsPage.connectionMode === 1; accentColor: green; onClicked: connectionsPage.connectionMode = 1 }
-                CockpitButton { text: "ED-FRAME"; selected: connectionsPage.connectionMode === 3; accentColor: cyan; onClicked: connectionsPage.connectionMode = 3 }
-                CockpitButton { text: "SPANSH"; selected: connectionsPage.connectionMode === 4; accentColor: orange; onClicked: connectionsPage.connectionMode = 4 }
-                CockpitButton { text: "EDSM"; selected: connectionsPage.connectionMode === 5; accentColor: cyan; onClicked: connectionsPage.connectionMode = 5 }
+                CockpitButton { text: window.t("connections.eddn_source_tab", "EDDN"); selected: connectionsPage.connectionMode === 1; accentColor: green; onClicked: connectionsPage.connectionMode = 1 }
+                CockpitButton { text: window.t("connections.edframe_tab", "ED-FRAME"); selected: connectionsPage.connectionMode === 3; accentColor: cyan; onClicked: connectionsPage.connectionMode = 3 }
+                CockpitButton { text: window.t("connections.spansh_source_tab", "SPANSH"); selected: connectionsPage.connectionMode === 4; accentColor: orange; onClicked: connectionsPage.connectionMode = 4 }
+                CockpitButton { text: window.t("connections.edsm_tab", "EDSM"); selected: connectionsPage.connectionMode === 5; accentColor: cyan; onClicked: connectionsPage.connectionMode = 5 }
                 CockpitButton { text: window.t("connections.local_data_tab", "LOCAL DATA"); selected: connectionsPage.connectionMode === 6; accentColor: orange; onClicked: connectionsPage.connectionMode = 6 }
             }
         }
