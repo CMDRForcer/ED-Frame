@@ -648,10 +648,35 @@ class InaraMixin:
         """Coalesce INARA history scans and keep them off the GUI thread."""
         if not getattr(self, "_journal_state_ready", False):
             return False
+        recovery_file = str(
+            self._inara_cache.get("journal_recovery_file") or ""
+        )
+        max_events = max(0, INARA_PENDING_EVENT_LIMIT - len(
+            self._inara_pending_events
+        ))
+        source_signature = self._inara_journal_source_signature(
+            recovery_file, max_events
+        )
         if self._inara_scan_in_flight:
             self._inara_scan_dirty = True
+            self._inara_scan_requested_signature = source_signature
             return False
         if not self._sync_eddn_profile():
+            return False
+        recovery_file = str(
+            self._inara_cache.get("journal_recovery_file") or ""
+        )
+        max_events = max(0, INARA_PENDING_EVENT_LIMIT - len(
+            self._inara_pending_events
+        ))
+        source_signature = self._inara_journal_source_signature(
+            recovery_file, max_events
+        )
+        self._inara_scan_requested_signature = source_signature
+        if (
+            getattr(self, "_inara_scan_completed_signature", None)
+            == source_signature
+        ):
             return False
         self._inara_scan_token = getattr(self, "_inara_scan_token", 0) + 1
         token = self._inara_scan_token
@@ -659,17 +684,11 @@ class InaraMixin:
         profile_key = self.profile_context.key
         identity = self.profile_context.identity
         journal_root = self.profile_context.journal_root
-        recovery_file = str(
-            self._inara_cache.get("journal_recovery_file") or ""
-        )
         known = (
             list(self._inara_cache.get("fingerprints", []))
             + list(self._inara_pending_fingerprints)
             + list(self._inara_inflight_fingerprints)
         )
-        max_events = max(0, INARA_PENDING_EVENT_LIMIT - len(
-            self._inara_pending_events
-        ))
         self._inara_scan_in_flight = True
         self._inara_scan_dirty = False
         secret_values = (self._inara_config.get("api_key", ""),)
@@ -685,7 +704,7 @@ class InaraMixin:
                     exc, extra_secrets=secret_values
                 )}
             self.inaraJournalScanReady.emit((
-                token, generation, profile_key, result,
+                token, generation, profile_key, source_signature, result,
             ))
 
         if not self._start_network_worker(worker, "inara-journal-scan"):
@@ -694,9 +713,21 @@ class InaraMixin:
         return True
 
 
+    def _inara_journal_source_signature(self, recovery_file, max_events):
+        """Identify the exact profile Journal state covered by one scan."""
+        return (
+            self._profile_generation,
+            self.profile_context.key,
+            str(os.environ.get("ED_FRAME_PROFILE_FID") or "").strip(),
+            str(recovery_file or ""),
+            int(max_events),
+            journal_change_signature(),
+        )
+
+
     @Slot(object)
     def _finish_inara_journal_scan(self, payload):
-        token, generation, profile_key, result = payload
+        token, generation, profile_key, source_signature, result = payload
         if token != self._inara_scan_token:
             return
         self._inara_scan_in_flight = False
@@ -704,13 +735,24 @@ class InaraMixin:
             generation == self._profile_generation
             and profile_key == self.profile_context.key
         )
-        if current and isinstance(result, dict) and not result.get("error"):
+        successful = bool(
+            current and isinstance(result, dict) and not result.get("error")
+        )
+        if successful:
             self._apply_inara_journal_scan(result)
+            self._inara_scan_completed_signature = source_signature
         elif current:
             LOGGER.warning("INARA background Journal scan failed: %s", result)
         dirty = self._inara_scan_dirty
         self._inara_scan_dirty = False
-        if dirty and current:
+        requested_signature = self._inara_scan_requested_signature
+        if (
+            dirty and current
+            and (
+                not successful
+                or requested_signature != self._inara_scan_completed_signature
+            )
+        ):
             self._queue_inara_journal_scan()
 
 
@@ -1287,6 +1329,8 @@ class InaraMixin:
         self._inara_scan_token = 0
         self._inara_scan_in_flight = False
         self._inara_scan_dirty = False
+        self._inara_scan_requested_signature = None
+        self._inara_scan_completed_signature = None
         self._inara_cache = self._read_local_json(
             self.inara_journal_cache_file, {}
         )

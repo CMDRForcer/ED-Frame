@@ -900,7 +900,16 @@ class EddnMixin:
 
 
     def _sync_eddn_profile(self) -> bool:
-        return self._switch_profile_context(resolve_profile_context())
+        signature = (
+            str(os.environ.get("ED_FRAME_PROFILE_FID") or "").strip(),
+            journal_change_signature(),
+        )
+        if getattr(self, "_profile_sync_signature", None) == signature:
+            return True
+        if not self._switch_profile_context(resolve_profile_context()):
+            return False
+        self._profile_sync_signature = signature
+        return True
 
 
     def _save_eddn_cursor(self):

@@ -49,6 +49,7 @@ class ProfileContextTests(unittest.TestCase):
         controller._navroute_fingerprint = ""
         controller._eddn_baseline_established = False
         controller._eddn_context = {}
+        controller._profile_sync_signature = None
         controller._eddn_profile_paths_signature = None
         controller._eddn_profile_paths_cache = []
         controller._station_rejections = {}
@@ -201,6 +202,9 @@ class ProfileContextTests(unittest.TestCase):
             with mock.patch(
                 "ed_companion.phase14.controller_eddn.resolve_profile_context",
                 return_value=bravo,
+            ), mock.patch(
+                "ed_companion.phase14.controller_eddn.journal_change_signature",
+                return_value=("journal", (("bravo", 1, 1),)),
             ):
                 self.assertTrue(controller._sync_eddn_profile())
             self.assertEqual(controller.profile_context, bravo)
@@ -223,6 +227,9 @@ class ProfileContextTests(unittest.TestCase):
             with mock.patch(
                 "ed_companion.phase14.controller_eddn.resolve_profile_context",
                 return_value=alpha,
+            ), mock.patch(
+                "ed_companion.phase14.controller_eddn.journal_change_signature",
+                return_value=("journal", (("alpha", 1, 2),)),
             ):
                 self.assertTrue(controller._sync_eddn_profile())
             self.assertEqual(controller.profile_context, alpha)
@@ -255,6 +262,9 @@ class ProfileContextTests(unittest.TestCase):
             with mock.patch(
                 "ed_companion.phase14.controller_eddn.resolve_profile_context",
                 return_value=bravo,
+            ), mock.patch(
+                "ed_companion.phase14.controller_eddn.journal_change_signature",
+                return_value=("journal", (("bravo", 1, 2),)),
             ):
                 self.assertTrue(controller._sync_eddn_profile())
                 controller._inara_pending_events = [{"eventName": "setCommanderTravelLocation"}]
@@ -294,6 +304,9 @@ class ProfileContextTests(unittest.TestCase):
             with mock.patch(
                 "ed_companion.phase14.controller_eddn.resolve_profile_context",
                 return_value=bravo,
+            ), mock.patch(
+                "ed_companion.phase14.controller_eddn.journal_change_signature",
+                return_value=("journal", (("bravo", 2, 2),)),
             ):
                 self.assertTrue(controller._sync_eddn_profile())
 
@@ -312,6 +325,32 @@ class ProfileContextTests(unittest.TestCase):
             self.assertFalse((bravo.directory / "inara_receipts.json").exists())
             self.assertFalse((bravo.directory / "inara_journal_cache.json").exists())
             self.assertEqual(len(workers), 1)
+
+    def test_profile_resolution_is_reused_until_journal_signature_changes(self):
+        with TemporaryDirectory() as directory:
+            package_root = Path(__file__).resolve().parents[1]
+            alpha = self._context(directory, "F-ALPHA")
+            controller = self._controller(alpha, package_root)
+
+            with (
+                mock.patch(
+                    "ed_companion.phase14.controller_eddn.resolve_profile_context",
+                    return_value=alpha,
+                ) as resolver,
+                mock.patch(
+                    "ed_companion.phase14.controller_eddn.journal_change_signature",
+                    return_value=("journal", (("current", 10, 1),)),
+                ) as signature,
+            ):
+                self.assertTrue(controller._sync_eddn_profile())
+                self.assertTrue(controller._sync_eddn_profile())
+                resolver.assert_called_once_with()
+
+                signature.return_value = (
+                    "journal", (("current", 20, 2),)
+                )
+                self.assertTrue(controller._sync_eddn_profile())
+                self.assertEqual(resolver.call_count, 2)
 
     def test_spansh_catalog_updates_keep_normal_active_profile_behavior(self):
         with TemporaryDirectory() as directory:

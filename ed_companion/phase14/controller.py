@@ -2552,9 +2552,12 @@ class CockpitController(
         self._last_bgs_batch_monotonic = time.monotonic()
         self._last_mining_batch_monotonic = time.monotonic()
         self._profile_generation += 1
+        self._profile_sync_signature = None
         self._inara_scan_token = getattr(self, "_inara_scan_token", 0) + 1
         self._inara_scan_in_flight = False
         self._inara_scan_dirty = False
+        self._inara_scan_requested_signature = None
+        self._inara_scan_completed_signature = None
         self._frontier_request_token = getattr(
             self, "_frontier_request_token", 0
         ) + 1

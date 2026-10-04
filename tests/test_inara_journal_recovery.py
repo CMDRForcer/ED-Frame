@@ -101,6 +101,11 @@ class InaraJournalRecoveryTests(unittest.TestCase):
         controller._inara_recovery_candidate_file = ""
         controller._inara_pending_since = 0.0
         controller._inara_failure_count = 0
+        controller._inara_scan_token = 0
+        controller._inara_scan_in_flight = False
+        controller._inara_scan_dirty = False
+        controller._inara_scan_requested_signature = None
+        controller._inara_scan_completed_signature = None
         controller._sync_eddn_profile = lambda: True
         controller._save_inara_config = mock.Mock()
         controller._save_inara_journal_cache = mock.Mock()
@@ -241,6 +246,73 @@ class InaraJournalRecoveryTests(unittest.TestCase):
                 if event.get("eventName") == "addCommanderTravelFSDJump"
             }
             self.assertEqual(recovered_systems, {"Recovery 2"})
+
+    def test_periodic_scan_coalesces_duplicate_unchanged_requests(self):
+        with TemporaryDirectory() as directory:
+            controller = self._controller(Path(directory))
+            controller._journal_state_ready = True
+            controller._profile_generation = 1
+            workers = []
+            controller._start_network_worker = (
+                lambda target, _name: workers.append(target) or True
+            )
+            controller.inaraJournalScanReady = _Signal(
+                controller._finish_inara_journal_scan
+            )
+            controller._prepare_inara_journal_scan = mock.Mock(return_value={
+                "detected": {}, "prepared": [], "fingerprints": [],
+                "hasCommunityGoal": False, "lastPath": "Journal.01.log",
+                "recoveryComplete": True,
+                "journalRoot": controller.profile_context.journal_root,
+            })
+
+            with mock.patch(
+                "ed_companion.phase14.controller_inara.journal_change_signature",
+                return_value=("journal", (("Journal.01.log", 100, 1),)),
+            ):
+                self.assertTrue(controller._queue_inara_journal_scan())
+                self.assertFalse(controller._queue_inara_journal_scan())
+                workers[0]()
+
+            self.assertEqual(len(workers), 1)
+            self.assertEqual(
+                controller._prepare_inara_journal_scan.call_count, 1
+            )
+            self.assertFalse(controller._inara_scan_in_flight)
+
+    def test_periodic_scan_runs_again_when_journal_changes_in_flight(self):
+        with TemporaryDirectory() as directory:
+            controller = self._controller(Path(directory))
+            controller._journal_state_ready = True
+            controller._profile_generation = 1
+            workers = []
+            controller._start_network_worker = (
+                lambda target, _name: workers.append(target) or True
+            )
+            controller.inaraJournalScanReady = _Signal(
+                controller._finish_inara_journal_scan
+            )
+            controller._prepare_inara_journal_scan = mock.Mock(return_value={
+                "detected": {}, "prepared": [], "fingerprints": [],
+                "hasCommunityGoal": False, "lastPath": "Journal.01.log",
+                "recoveryComplete": True,
+                "journalRoot": controller.profile_context.journal_root,
+            })
+            signature = [
+                "journal", (("Journal.01.log", 100, 1),)
+            ]
+
+            with mock.patch(
+                "ed_companion.phase14.controller_inara.journal_change_signature",
+                side_effect=lambda: tuple(signature),
+            ):
+                self.assertTrue(controller._queue_inara_journal_scan())
+                signature[1] = (("Journal.01.log", 200, 2),)
+                self.assertFalse(controller._queue_inara_journal_scan())
+                workers[0]()
+
+            self.assertEqual(len(workers), 2)
+            self.assertTrue(controller._inara_scan_in_flight)
 
 
 if __name__ == "__main__":
