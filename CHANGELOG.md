@@ -1,5 +1,32 @@
 # Changelog
 
+## 1.5.30 — 2026-10-04
+
+### Added
+
+- **Community Mining yield catalog**: locally observed prospecting results are
+  retained as bounded, reusable evidence so repeated searches can distinguish
+  measured yields from unconfirmed ring information.
+
+### Fixed
+
+- **Smoother Mining and State Finds pages**: corrected derived-cache reuse,
+  reduced duplicate Journal profile scans and recycled long result lists to
+  keep navigation and scrolling responsive without reducing data freshness.
+- **Bounded application shutdown**: active catalog work now shares a short
+  shutdown grace period, while a busy SQLite writer no longer causes the UI to
+  wait indefinitely. WAL and full synchronous persistence remain enabled.
+- **Stable delayed route verification**: Mining result rows and typed arguments
+  are captured before deferred QML verification, preventing stale page state
+  from causing incompatible C++ calls after navigation or reloads.
+
+### Tests
+
+- **Performance and lifecycle coverage**: the full regression suite covers
+  coalesced Journal scans, non-blocking catalog checkpoints, bounded shutdown
+  and delayed Mining verification. Focused Mining/market tests and the honest
+  QML smoke test pass.
+
 ## 1.5.29 — 2026-10-03
 
 ### Added
