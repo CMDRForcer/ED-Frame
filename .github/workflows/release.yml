@@ -143,7 +143,7 @@ jobs:
           $projectZip = Join-Path $release "ED-Frame-$env:EDEC_VERSION-Full-Project.zip"
           Compress-Archive -Path "dist/ED-Frame/*" -DestinationPath $windowsZip `
             -CompressionLevel Optimal -Force
-          git archive --format=zip --output=$projectZip HEAD -- . ':(exclude)tests'
+          git archive --format=zip --output=$projectZip HEAD -- . ':(exclude,glob)**/tests/**'
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           $hashes = Get-FileHash -Algorithm SHA256 $windowsZip, $projectZip
           $lines = $hashes | ForEach-Object {

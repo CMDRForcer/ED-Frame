@@ -1,5 +1,13 @@
 # Changelog
 
+## 1.5.31 — 2026-10-04
+
+### Fixed
+
+- **Complete release privacy check**: the full-project archive now excludes
+  nested server test suites as well as the application's root test directory,
+  keeping release downloads consistent with the existing no-tests contract.
+
 ## 1.5.30 — 2026-10-04
 
 ### Added
