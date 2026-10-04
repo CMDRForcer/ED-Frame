@@ -23,6 +23,10 @@ def connection():
 def ensure_schema() -> None:
     schema = Path(__file__).with_name("schema.sql").read_text(encoding="utf-8")
     with connection() as conn:
+        # Uvicorn starts two workers and the collector starts independently.
+        # Serialise their idempotent DDL/backfill transaction so concurrent
+        # startup cannot deadlock while acquiring table and index locks.
+        conn.execute("SELECT pg_advisory_xact_lock(%s)", (45444652414,))
         conn.execute(schema)
 
 
