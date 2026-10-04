@@ -1470,6 +1470,8 @@ Item {
             id: routesList
             Layout.fillWidth: true; Layout.fillHeight: true
             spacing: 5; clip: true
+            reuseItems: true
+            cacheBuffer: 240
             model: alternativeRows
             section.property: "verificationGroupLabel"
             section.criteria: ViewSection.FullString

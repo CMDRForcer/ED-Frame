@@ -323,9 +323,7 @@ class UiSettingsMixin:
             and startup_hge_revision == self._hge_revision
             and startup_eddn_revision == self._eddn_revision
         ):
-            self._derived_cache["state_find_rows"] = ((
-                self._state_revision, self._hge_revision, self._eddn_revision,
-            ), startup_state_find_rows)
+            self._cache_state_find_rows(startup_state_find_rows)
         self.activityChanged.emit()
         self.connectionChanged.emit()
         if getattr(self, "_journal_auto", False):

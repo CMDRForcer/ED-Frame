@@ -43,6 +43,11 @@ class StartupStateGenerationTests(unittest.TestCase):
         controller._activity = "Starting"
         controller._log_consistency_issues = mock.Mock()
         controller._publish_full_state = mock.Mock()
+        controller._build_state_find_rows = mock.Mock(
+            side_effect=AssertionError(
+                "worker-built State Finds must be reused by the UI"
+            )
+        )
         controller._switch_profile_context = mock.Mock(return_value=True)
         controller.activityChanged = _Signal()
         controller.connectionChanged = _Signal()
@@ -69,10 +74,12 @@ class StartupStateGenerationTests(unittest.TestCase):
             self.assertEqual(
                 controller._eddn_context["StarSystem"], "Test System"
             )
-            self.assertEqual(
-                controller._derived_cache["state_find_rows"][1],
-                state_find_rows,
+            cache_key = ("state_find_rows", (0, 0, 0))
+            self.assertIs(
+                controller._derived_cache[cache_key], state_find_rows,
             )
+            self.assertIs(controller._state_find_rows(), state_find_rows)
+            controller._build_state_find_rows.assert_not_called()
             controller._publish_full_state.assert_called_once_with()
 
     def test_late_startup_state_cannot_overwrite_newer_refresh_or_profile(self):

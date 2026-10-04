@@ -210,6 +210,18 @@ class QmlInteractionContractTests(unittest.TestCase):
             )
             self.assertNotIn("onCurrentTextChanged:", block)
 
+    def test_mining_alternatives_reuse_scroll_delegates(self):
+        source = (ROOT / "qml" / "pages" / "MiningFinderPage.qml").read_text(
+            encoding="utf-8-sig"
+        )
+        routes = next(
+            block for _offset, block in qml_blocks(source, r"\bListView\s*\{")
+            if "id: routesList" in block
+        )
+
+        self.assertIn("reuseItems: true", routes)
+        self.assertRegex(routes, r"cacheBuffer:\s*[1-9]\d*")
+
     def test_journal_health_reads_last_complete_record_without_full_scan(self):
         with TemporaryDirectory() as directory:
             path = Path(directory) / "Journal.test.log"

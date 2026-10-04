@@ -1137,6 +1137,19 @@ class CockpitController(
             self._derived_cache[key] = builder()
         return self._derived_cache[key]
 
+    def _cache_state_find_rows(self, rows: list[dict[str, Any]]) -> None:
+        """Publish worker-built State Finds under the derived-cache key.
+
+        Startup and Journal refresh workers already perform the expensive
+        aggregation.  Store that result exactly where ``_state_find_rows``
+        looks for it so the first QML binding does not repeat the work on the
+        GUI thread.
+        """
+        revision = (
+            self._state_revision, self._hge_revision, self._eddn_revision,
+        )
+        self._derived_cache[("state_find_rows", revision)] = rows
+
     @Slot()
     def _invalidate_connection_cache(self) -> None:
         self._connection_revision += 1
@@ -2039,9 +2052,7 @@ class CockpitController(
             and source_hge_revision == self._hge_revision
             and source_eddn_revision == self._eddn_revision
         ):
-            self._derived_cache["state_find_rows"] = ((
-                self._state_revision, self._hge_revision, self._eddn_revision,
-            ), state_find_rows)
+            self._cache_state_find_rows(state_find_rows)
         self.activityChanged.emit()
         if getattr(self, "_journal_auto", False):
             self._queue_inara_journal_scan()
