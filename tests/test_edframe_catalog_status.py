@@ -68,7 +68,65 @@ class SyncStore:
         return True
 
 
+class BackupStore:
+    def __init__(self, due=True):
+        self.due = due
+        self.calls = 0
+
+    def backup_due(self):
+        return self.due
+
+    def backup(self):
+        self.calls += 1
+        return True
+
+
+class BackupController:
+    def __init__(self, store):
+        self._mining_market_store = store
+        self.started = 0
+
+    def _start_network_worker(self, target, name):
+        self.started += 1
+        self.worker_name = name
+        target()
+        return True
+
+
 class EdFrameCatalogStatusTests(unittest.TestCase):
+    def test_market_backup_is_skipped_while_recent(self):
+        store = BackupStore(due=False)
+        controller = BackupController(store)
+
+        result = NavigationMixin._schedule_mining_market_backup(controller)
+
+        self.assertTrue(result)
+        self.assertEqual(controller.started, 0)
+        self.assertEqual(store.calls, 0)
+
+    def test_market_backup_requests_are_coalesced_while_running(self):
+        store = BackupStore(due=True)
+        controller = BackupController(store)
+        controller._mining_market_backup_running = True
+
+        result = NavigationMixin._schedule_mining_market_backup(controller)
+
+        self.assertTrue(result)
+        self.assertEqual(controller.started, 0)
+        self.assertEqual(store.calls, 0)
+
+    def test_due_market_backup_runs_once_in_background(self):
+        store = BackupStore(due=True)
+        controller = BackupController(store)
+
+        result = NavigationMixin._schedule_mining_market_backup(controller)
+
+        self.assertTrue(result)
+        self.assertEqual(controller.started, 1)
+        self.assertEqual(controller.worker_name, "mining-market-backup")
+        self.assertEqual(store.calls, 1)
+        self.assertFalse(controller._mining_market_backup_running)
+
     def test_station_offer_page_is_merged_before_cursor_advances(self):
         store = SyncStore()
         page = _merge_edframe_station_offer_delta_page(store, {
@@ -140,6 +198,7 @@ class EdFrameCatalogStatusTests(unittest.TestCase):
                     "outfitting_stations": 8,
                     "shipyard_stations": 9,
                     "module_offers": 100,
+                    "priced_module_offers": 75,
                     "ship_offers": 20,
                 },
                 "completeness": {
@@ -170,6 +229,9 @@ class EdFrameCatalogStatusTests(unittest.TestCase):
         self.assertEqual(controller._edframe_catalog_stats["stateSignals"], 7)
         self.assertEqual(
             controller._edframe_catalog_stats["outfittingStations"], 8
+        )
+        self.assertEqual(
+            controller._edframe_catalog_stats["pricedModuleOffers"], 75
         )
         self.assertEqual(controller._edframe_catalog_stats["shipOffers"], 20)
         self.assertIn("20 stations", controller._edframe_catalog_status)

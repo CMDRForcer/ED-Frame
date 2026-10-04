@@ -665,6 +665,54 @@ class MiningPlannerTests(unittest.TestCase):
         self.assertIsNone(planned[0]["meritScore"])
         self.assertIn("CONTROLLING POWER MISSING", planned[0]["meritStatus"])
 
+    def test_reinforce_joins_selected_presence_with_system_control(self):
+        row = candidate("Shared Control", 10, markets=[{
+            "commodity": "Platinum", "station": "Local Port",
+            "system": "Shared Control", "sellPrice": 180000,
+            "demand": 12000, "observedAt": "2026-09-30T11:30:00Z",
+        }])
+        catalog = [{
+            "system": "Shared Control", "power": "Aisling Duval",
+            "powerState": "Fortified", "coordinates": [0, 0, 0],
+            "powerRelationship": "PRESENCE", "controlKnown": False,
+        }, {
+            "system": "Shared Control", "power": "Yuri Grom",
+            "powerState": "Stronghold",
+            "controllingPower": "Aisling Duval",
+            "powers": ["Aisling Duval", "Yuri Grom"],
+            "powerRelationship": "PRESENCE", "controlKnown": True,
+            "observedAt": "2026-09-30T11:45:00Z",
+        }]
+
+        planned = plan_mining_routes(
+            [row], "Platinum", OPTIMIZE_MERITS, power="Aisling Duval",
+            power_goal="REINFORCE", powerplay_systems=catalog, now=NOW,
+        )
+
+        self.assertEqual(planned[0]["meritScore"], 5.0)
+        self.assertEqual(planned[0]["powerplayStatus"], "POWERPLAY_VERIFIED")
+        self.assertIn("STRONGHOLD", planned[0]["meritStatus"])
+
+    def test_other_power_presence_state_does_not_leak_to_selected_power(self):
+        row = candidate("Opponent Only", 10, markets=[{
+            "commodity": "Platinum", "station": "Local Port",
+            "system": "Opponent Only", "sellPrice": 180000,
+            "demand": 12000, "observedAt": "2026-09-30T11:30:00Z",
+        }])
+        catalog = [{
+            "system": "Opponent Only", "power": "Yuri Grom",
+            "powerState": "Fortified", "powerRelationship": "PRESENCE",
+            "controlKnown": False,
+        }]
+
+        planned = plan_mining_routes(
+            [row], "Platinum", OPTIMIZE_MERITS, power="Aisling Duval",
+            power_goal="REINFORCE", powerplay_systems=catalog, now=NOW,
+        )
+
+        self.assertIsNone(planned[0]["meritScore"])
+        self.assertIn("SOURCE POWER STATE MISSING", planned[0]["meritStatus"])
+
     def test_power_presence_never_becomes_acquire_source_control(self):
         row = candidate("Presence Only", 10, coordinates=[0, 0, 0])
         catalog = [{
@@ -692,6 +740,40 @@ class MiningPlannerTests(unittest.TestCase):
         self.assertFalse(planned[0]["meritKnown"])
         self.assertIsNone(planned[0]["meritScore"])
         self.assertIn("CONTROLLING POWER MISSING", planned[0]["meritStatus"])
+
+    def test_acquire_joins_source_control_across_power_rows(self):
+        row = candidate("Shared Stronghold", 10, coordinates=[0, 0, 0])
+        catalog = [{
+            "system": "Shared Stronghold", "power": "Aisling Duval",
+            "powerState": "Stronghold", "coordinates": [0, 0, 0],
+            "powerRelationship": "PRESENCE", "controlKnown": False,
+        }, {
+            "system": "Shared Stronghold", "power": "Yuri Grom",
+            "powerState": "Stronghold",
+            "controllingPower": "Aisling Duval",
+            "powers": ["Aisling Duval", "Yuri Grom"],
+            "powerRelationship": "PRESENCE", "controlKnown": True,
+        }, {
+            "system": "Acquire Target", "power": "Aisling Duval",
+            "powerState": "Unoccupied", "coordinates": [25, 0, 0],
+            "powerRelationship": "PRESENCE", "controlKnown": False,
+        }]
+        markets = [{
+            "commodity": "Platinum", "station": "Target Port",
+            "system": "Acquire Target", "coordinates": [25, 0, 0],
+            "sellPrice": 200000, "demand": 12000,
+            "observedAt": "2026-09-30T11:30:00Z",
+        }]
+
+        planned = plan_mining_routes(
+            [row], "Platinum", OPTIMIZE_MERITS, power="Aisling Duval",
+            power_goal="ACQUIRE", powerplay_systems=catalog,
+            markets=markets, now=NOW,
+        )
+
+        self.assertEqual(planned[0]["meritScore"], 5.0)
+        self.assertEqual(planned[0]["sellSystem"], "Acquire Target")
+        self.assertIn("25.0/30 LY", planned[0]["meritStatus"])
 
     def test_same_system_merit_goals_never_offer_a_remote_sell_market(self):
         for goal, opposing_power in (
@@ -912,6 +994,65 @@ class MiningPlannerTests(unittest.TestCase):
 
         self.assertEqual(planned[0]["meritScore"], 5.0)
         self.assertIn("YURI GROM", planned[0]["meritStatus"])
+
+    def test_undermine_joins_opponent_control_across_power_rows(self):
+        row = candidate("Contested System", 10, powers=[], markets=[{
+            "commodity": "Platinum", "station": "Enemy Port",
+            "system": "Contested System", "sellPrice": 200000,
+            "demand": 12000, "observedAt": "2026-09-30T11:30:00Z",
+        }])
+        catalog = [{
+            "system": "Contested System", "power": "Aisling Duval",
+            "powerState": "Unoccupied", "powerRelationship": "PRESENCE",
+            "controlKnown": False,
+        }, {
+            "system": "Contested System", "power": "Yuri Grom",
+            "powerState": "Exploited", "controllingPower": "Yuri Grom",
+            "powers": ["Yuri Grom", "Aisling Duval"],
+            "powerRelationship": "CONTROL", "controlKnown": True,
+            "observedAt": "2026-09-30T11:45:00Z",
+        }]
+
+        planned = plan_mining_routes(
+            [row], "Platinum", OPTIMIZE_MERITS, power="Aisling Duval",
+            power_goal="UNDERMINE", opposing_power="Yuri Grom",
+            powerplay_systems=catalog, now=NOW,
+        )
+
+        self.assertEqual(planned[0]["meritScore"], 5.0)
+        self.assertEqual(planned[0]["powerplayStatus"], "POWERPLAY_VERIFIED")
+        self.assertIn("YURI GROM", planned[0]["meritStatus"])
+
+    def test_acquire_rejects_target_with_explicit_foreign_control(self):
+        row = candidate(
+            "Stronghold Source", 10, controllingPower="Aisling Duval",
+            powerState="Stronghold", coordinates=[0, 0, 0],
+        )
+        catalog = [{
+            "system": "Occupied Target", "power": "Aisling Duval",
+            "powerState": "Unoccupied", "coordinates": [25, 0, 0],
+            "powerRelationship": "PRESENCE", "controlKnown": False,
+        }, {
+            "system": "Occupied Target", "power": "Yuri Grom",
+            "powerState": "Fortified", "controllingPower": "Yuri Grom",
+            "powers": ["Yuri Grom", "Aisling Duval"],
+            "powerRelationship": "CONTROL", "controlKnown": True,
+        }]
+        markets = [{
+            "commodity": "Platinum", "station": "Occupied Port",
+            "system": "Occupied Target", "coordinates": [25, 0, 0],
+            "sellPrice": 200000, "demand": 12000,
+            "observedAt": "2026-09-30T11:30:00Z",
+        }]
+
+        planned = plan_mining_routes(
+            [row], "Platinum", OPTIMIZE_MERITS, power="Aisling Duval",
+            power_goal="ACQUIRE", powerplay_systems=catalog,
+            markets=markets, now=NOW,
+        )
+
+        self.assertEqual(planned[0]["meritScore"], 0.0)
+        self.assertIn("TARGET IS FORTIFIED", planned[0]["meritStatus"])
 
     def test_requested_pad_requires_confirmed_market_access(self):
         planned = plan_mining_routes([candidate("Unknown Pad", 10, markets=[{

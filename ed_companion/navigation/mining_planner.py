@@ -682,34 +682,129 @@ def _coordinate_distance(left: Any, right: Any) -> float | None:
 
 def _powerplay_index(
     rows: Iterable[dict[str, Any]],
-) -> dict[tuple[str, str], dict[str, Any]]:
-    result = {}
+) -> dict[str, dict[Any, dict[str, Any]]]:
+    """Index Powerplay presence per Power and control per system.
+
+    EDSM contributes one presence row per participating Power, while an
+    authoritative Journal/EDDN observation contributes a system-wide
+    ``ControllingPower`` and participant list.  Keeping only the historic
+    ``(system, power)`` row meant that a control fact stored on another Power's
+    row was invisible to the selected Power.  The two-level index preserves
+    each Power's own state while sharing only explicit system facts.
+    """
+    by_power: dict[tuple[str, str], dict[str, Any]] = {}
+    by_system: dict[str, dict[str, Any]] = {}
     for source in rows or []:
         if not isinstance(source, dict):
             continue
         system = _system_key(source.get("system") or source.get("name"))
         power = _power_key(source.get("power") or source.get("controllingPower"))
-        if system and power:
-            result[(system, power)] = dict(source)
-    return result
+        if not system:
+            continue
+
+        system_fact = by_system.setdefault(system, {
+            "system": str(source.get("system") or source.get("name") or ""),
+            "powers": [],
+        })
+        for field in (
+            "systemAddress", "coordinates", "systemState", "observedAt",
+            "source",
+        ):
+            if source.get(field) not in (None, "", []):
+                system_fact[field] = source.get(field)
+
+        known_powers = {
+            _power_key(item): str(item).strip()
+            for item in system_fact.get("powers") or []
+            if _power_key(item)
+        }
+        for item in [source.get("power"), *(source.get("powers") or [])]:
+            key = _power_key(item)
+            if key:
+                known_powers[key] = str(item).strip()
+        system_fact["powers"] = list(known_powers.values())
+
+        # Control is system-wide, but only an explicit control assertion may
+        # populate it.  An EDSM PRESENCE row must never become control merely
+        # because its ``power`` happens to match the selected Power.
+        controller = str(source.get("controllingPower") or "").strip()
+        if controller:
+            system_fact["controllingPower"] = controller
+            system_fact["controlKnown"] = True
+            state = str(source.get("powerState") or "").strip()
+            if state:
+                system_fact["controlPowerState"] = state
+            controller_key = _power_key(controller)
+            if controller_key:
+                known_powers[controller_key] = controller
+                system_fact["powers"] = list(known_powers.values())
+
+        if power:
+            fact = by_power.setdefault((system, power), {})
+            for field, value in source.items():
+                if value not in (None, "", []):
+                    fact[field] = value
+            fact.setdefault(
+                "system", str(source.get("system") or source.get("name") or "")
+            )
+    return {"byPower": by_power, "bySystem": by_system}
+
+
+def _indexed_power_fact(
+    system: Any, power: str,
+    catalog: dict[str, dict[Any, dict[str, Any]]],
+) -> dict[str, Any]:
+    """Join a Power-specific presence row with explicit system control."""
+    system_key = _system_key(system)
+    system_fact = dict(
+        (catalog.get("bySystem") or {}).get(system_key) or {}
+    )
+    power_fact = dict(
+        (catalog.get("byPower") or {}).get(
+            (system_key, _power_key(power))
+        ) or {}
+    )
+    fact = dict(system_fact)
+    fact.update(power_fact)
+
+    # A selected-Power row owns its state.  Explicit control and the complete
+    # participant list remain system-wide and therefore win after the join.
+    controller = str(system_fact.get("controllingPower") or "").strip()
+    if controller:
+        fact["controllingPower"] = controller
+        fact["controlKnown"] = True
+    combined_powers = {
+        _power_key(item): str(item).strip()
+        for item in [
+            *(system_fact.get("powers") or []),
+            *(power_fact.get("powers") or []),
+        ]
+        if _power_key(item)
+    }
+    if combined_powers:
+        fact["powers"] = list(combined_powers.values())
+    fact.setdefault("system", str(system or ""))
+    return fact
 
 
 def _candidate_power_fact(
     candidate: dict[str, Any], power: str,
-    catalog: dict[tuple[str, str], dict[str, Any]],
+    catalog: dict[str, dict[Any, dict[str, Any]]],
 ) -> dict[str, Any]:
-    system = _system_key(candidate.get("system"))
-    fact = dict(catalog.get((system, _power_key(power))) or {})
+    fact = _indexed_power_fact(candidate.get("system"), power, catalog)
     controlling = str(candidate.get("controllingPower") or "").strip()
     state = str(candidate.get("powerState") or "").strip()
     if controlling:
         fact["controllingPower"] = controlling
+        fact["controlKnown"] = True
     if state:
         fact["powerState"] = state
+        if controlling:
+            fact["controlPowerState"] = state
     if candidate.get("coordinates"):
         fact["coordinates"] = candidate.get("coordinates")
     candidate_powers = candidate.get("powers")
-    if isinstance(candidate_powers, list):
+    if isinstance(candidate_powers, list) and candidate_powers:
         fact["powers"] = list(candidate_powers)
     fact.setdefault("system", str(candidate.get("system") or ""))
     return fact
@@ -717,19 +812,30 @@ def _candidate_power_fact(
 
 def _market_power_fact(
     market: dict[str, Any], power: str,
-    catalog: dict[tuple[str, str], dict[str, Any]],
+    catalog: dict[str, dict[Any, dict[str, Any]]],
 ) -> dict[str, Any]:
-    system = _system_key(market.get("system"))
-    fact = dict(catalog.get((system, _power_key(power))) or {})
+    fact = _indexed_power_fact(market.get("system"), power, catalog)
+    controlling = str(market.get("controllingPower") or "").strip()
+    state = str(market.get("powerState") or "").strip()
+    if controlling:
+        fact["controllingPower"] = controlling
+        fact["controlKnown"] = True
+    if state:
+        fact["powerState"] = state
+        if controlling:
+            fact["controlPowerState"] = state
     if market.get("coordinates"):
         fact["coordinates"] = market.get("coordinates")
+    market_powers = market.get("powers")
+    if isinstance(market_powers, list) and market_powers:
+        fact["powers"] = list(market_powers)
     fact.setdefault("system", str(market.get("system") or ""))
     return fact
 
 
 def _route_system_state(
     candidate: dict[str, Any], market: dict[str, Any], power: str,
-    catalog: dict[tuple[str, str], dict[str, Any]],
+    catalog: dict[str, dict[Any, dict[str, Any]]],
 ) -> str:
     """Return the target/sale system state used by MeritMiner's filter."""
     target = _market_power_fact(market, power, catalog)
@@ -744,7 +850,7 @@ def _route_system_state(
 def _merit_status(
     candidate: dict[str, Any], market: dict[str, Any], power: str,
     power_goal: str, opposing_power: str,
-    catalog: dict[tuple[str, str], dict[str, Any]],
+    catalog: dict[str, dict[Any, dict[str, Any]]],
 ) -> tuple[str, float | None, float | None]:
     """Apply the same route relationships explained by MeritMiner.
 
@@ -766,7 +872,9 @@ def _merit_status(
     target = _market_power_fact(market, power, catalog)
     source_system = _system_key(candidate.get("system"))
     target_system = _system_key(market.get("system"))
-    source_state = str(source.get("powerState") or "").strip()
+    source_state = str(
+        source.get("controlPowerState") or source.get("powerState") or ""
+    ).strip()
     source_controller = _power_key(source.get("controllingPower"))
     # EDSM's daily dump contains one row for every Power present in a system.
     # Presence is useful for contesting/range context but is not proof of
@@ -824,7 +932,9 @@ def _merit_status(
         )
         if not radius:
             return "NOT ELIGIBLE · SOURCE MUST BE FORTIFIED OR STRONGHOLD", 0.0, None
-        target_state = str(target.get("powerState") or "").strip()
+        target_state = str(
+            target.get("controlPowerState") or target.get("powerState") or ""
+        ).strip()
         if not target_state:
             return "UNKNOWN · TARGET POWER STATE MISSING", None, None
         if target_state.casefold() != "unoccupied":

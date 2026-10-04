@@ -1,7 +1,9 @@
 from datetime import datetime, timedelta, timezone
+import os
 from pathlib import Path
 import sqlite3
 from tempfile import TemporaryDirectory
+import time
 import unittest
 from unittest.mock import patch
 
@@ -26,6 +28,28 @@ def _row(observed, **changes):
 
 
 class MiningMarketStoreTests(unittest.TestCase):
+    def test_recent_backup_is_not_recopied_until_interval_expires(self):
+        with TemporaryDirectory() as directory:
+            store = MarketCatalogStore(Path(directory, "market.sqlite3"))
+            self.assertTrue(store.backup())
+            self.assertFalse(store.backup_due(interval_seconds=3600))
+
+            old = time.time() - 3601
+            os.utime(store.backup_path, (old, old))
+
+            self.assertTrue(store.backup_due(interval_seconds=3600))
+
+    def test_checkpoint_flushes_wal_without_creating_another_backup(self):
+        with TemporaryDirectory() as directory:
+            store = MarketCatalogStore(Path(directory, "market.sqlite3"))
+            store.ingest(
+                [_row(datetime.now(timezone.utc))], create_backup=False,
+            )
+            store.backup_path.unlink(missing_ok=True)
+
+            self.assertTrue(store.checkpoint())
+            self.assertFalse(store.backup_path.exists())
+
     def test_station_offers_merge_independent_inventories_and_survive_restart(self):
         with TemporaryDirectory() as directory:
             path = Path(directory, "market.sqlite3")
@@ -57,7 +81,42 @@ class MiningMarketStoreTests(unittest.TestCase):
             ship = reopened.stations_offering("anaconda", kind="SHIPYARD")[0]
             self.assertEqual(module["station"], "Chelomey Orbital")
             self.assertEqual(module["coordinates"], [1.0, 2.0, 3.0])
+            self.assertIsNone(module["buyPrice"])
             self.assertEqual(ship["system"], "Cubeo")
+
+    def test_priced_module_offer_survives_sync_and_restart(self):
+        with TemporaryDirectory() as directory:
+            path = Path(directory, "market.sqlite3")
+            store = MarketCatalogStore(path)
+            store.ingest_station_offers([{
+                "kind": "OUTFITTING", "marketId": 42,
+                "system": "Cubeo", "station": "Chelomey Orbital",
+                "items": [{
+                    "name": "Hpt_BeamLaser_Fixed_Medium",
+                    "id": 128049429,
+                    "buyPrice": 145000,
+                    "buyMercCoinsPrice": 0,
+                    "priceObservedAt": "2026-10-03T08:00:00Z",
+                    "priceSource": "EDDN outfitting/3",
+                }],
+                "observedAt": "2026-10-03T08:00:00Z",
+                "receivedAt": "2026-10-03T08:00:01Z",
+                "source": "EDDN outfitting/3",
+            }])
+
+            result = MarketCatalogStore(path).stations_offering(
+                "HPT_BEAMLASER_FIXED_MEDIUM", kind="OUTFITTING"
+            )[0]
+
+            self.assertEqual(result["moduleId"], 128049429)
+            self.assertEqual(result["buyPrice"], 145000)
+            self.assertEqual(result["buyMercCoinsPrice"], 0)
+            self.assertEqual(
+                result["priceObservedAt"], "2026-10-03T08:00:00Z"
+            )
+            self.assertEqual(result["priceSource"], "EDDN outfitting/3")
+            self.assertEqual(result["moduleOffer"]["name"],
+                             "hpt_beamlaser_fixed_medium")
 
     def test_older_or_invalid_station_offer_does_not_replace_inventory(self):
         with TemporaryDirectory() as directory:

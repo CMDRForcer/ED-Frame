@@ -7887,10 +7887,11 @@ ApplicationWindow {
                                     visible: cockpit.edFrameCatalogOnline
                                     text: window.tf(
                                         "connections.edframe_offer_counts",
-                                        "STATION OFFERS · %1 OUTFITTING STATIONS · %2 SHIPYARDS · %3 MODULES · %4 SHIPS",
+                                        "STATION OFFERS · %1 OUTFITTING STATIONS · %2 SHIPYARDS · %3 MODULES · %4 PRICED · %5 SHIPS",
                                         [cockpit.edFrameCatalogStats.outfittingStations || 0,
                                          cockpit.edFrameCatalogStats.shipyardStations || 0,
                                          cockpit.edFrameCatalogStats.moduleOffers || 0,
+                                         cockpit.edFrameCatalogStats.pricedModuleOffers || 0,
                                          cockpit.edFrameCatalogStats.shipOffers || 0])
                                     color: textPrimary; font.pixelSize: 9; font.bold: true
                                     wrapMode: Text.WordWrap; Layout.fillWidth: true

@@ -60,6 +60,28 @@ class ShutdownWaitsForInFlightRefreshTests(unittest.TestCase):
 
         controller._save_ui_config.assert_called_once()
 
+    def test_shutdown_checkpoints_catalog_without_full_backup(self):
+        controller = self._controller()
+        store = mock.Mock()
+        controller._mining_market_store = store
+        controller._mining_market_backup_running = False
+
+        controller.shutdown()
+
+        store.checkpoint.assert_called_once_with()
+        store.backup.assert_not_called()
+
+    def test_shutdown_does_not_wait_on_running_catalog_backup(self):
+        controller = self._controller()
+        store = mock.Mock()
+        controller._mining_market_store = store
+        controller._mining_market_backup_running = True
+
+        controller.shutdown()
+
+        store.checkpoint.assert_not_called()
+        store.backup.assert_not_called()
+
 
 if __name__ == "__main__":
     unittest.main()

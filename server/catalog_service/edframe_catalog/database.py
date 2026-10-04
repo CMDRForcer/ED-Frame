@@ -267,8 +267,37 @@ def upsert_station_offer_batch(
         kind = str(row.get("kind") or "").upper()
         if kind == "OUTFITTING":
             table, items_column = "station_outfitting", "modules"
+            items_update = """
+                CASE
+                  WHEN EXCLUDED.source = 'EDDN outfitting/2' THEN (
+                    SELECT COALESCE(
+                      jsonb_agg(
+                        COALESCE(
+                          (
+                            SELECT retained.value
+                            FROM jsonb_array_elements(
+                              station_outfitting.modules
+                            ) retained(value)
+                            WHERE jsonb_typeof(retained.value) = 'object'
+                              AND LOWER(retained.value ->> 'name') = LOWER(
+                                incoming.value #>> '{}'
+                              )
+                            LIMIT 1
+                          ),
+                          incoming.value
+                        ) ORDER BY incoming.ordinality
+                      ),
+                      '[]'::jsonb
+                    )
+                    FROM jsonb_array_elements(EXCLUDED.modules)
+                      WITH ORDINALITY incoming(value, ordinality)
+                  )
+                  ELSE EXCLUDED.modules
+                END
+            """
         elif kind == "SHIPYARD":
             table, items_column = "station_shipyards", "ships"
+            items_update = "EXCLUDED.ships"
         else:
             continue
         conn.execute(
@@ -284,7 +313,7 @@ def upsert_station_offer_batch(
             ON CONFLICT (market_id) DO UPDATE SET
                 system_name = EXCLUDED.system_name,
                 station_name = EXCLUDED.station_name,
-                {items_column} = EXCLUDED.{items_column},
+                {items_column} = {items_update},
                 horizons = EXCLUDED.horizons,
                 odyssey = EXCLUDED.odyssey,
                 observed_at = EXCLUDED.observed_at,

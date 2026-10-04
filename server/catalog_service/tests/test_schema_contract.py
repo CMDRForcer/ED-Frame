@@ -56,7 +56,9 @@ class SchemaContractTests(unittest.TestCase):
         self.assertIn("WHERE expires_at > NOW()", source)
         self.assertIn('@app.get("/v1/sync/station-offers")', source)
         self.assertIn('@app.get("/v1/station-offers/search")', source)
-        self.assertIn("o.modules @> %s::jsonb", source)
+        self.assertIn("jsonb_array_elements(o.modules)", source)
+        self.assertIn('AS "moduleOffer"', source)
+        self.assertIn("priced_module_offers", source)
         self.assertIn("y.ships @> %s::jsonb", source)
 
 

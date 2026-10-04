@@ -25,6 +25,11 @@ HISTORY_RETENTION_DAYS = 30
 MAX_CURRENT_ROWS = 150_000
 MAX_HISTORY_ROWS = 500_000
 MAX_WARM_TARGETS = 96
+# The catalog is a rebuildable cache and the primary SQLite file already uses
+# WAL + synchronous=FULL.  A daily recovery snapshot is ample protection and
+# avoids copying more than a gigabyte during ordinary short app sessions.
+BACKUP_INTERVAL_SECONDS = 24 * 3600
+OPEN_INTEGRITY_CHECK_MAX_BYTES = 64 * 1024 * 1024
 
 _CORRUPTION_MARKERS = (
     "malformed", "not a database", "file is not a database",
@@ -89,6 +94,55 @@ def _optional_nonnegative(value: Any) -> int:
     return max(0, _integer(value)) if value not in (None, "") else -1
 
 
+def _module_offer(value: Any) -> dict[str, Any] | None:
+    if isinstance(value, str):
+        name = value.strip().casefold()
+        return {"name": name} if name else None
+    if not isinstance(value, dict):
+        return None
+    name = str(value.get("name") or value.get("Name") or "").strip().casefold()
+    if not name:
+        return None
+    result: dict[str, Any] = {"name": name}
+    for source_key, target_key in (
+        ("id", "id"),
+        ("BuyPrice", "buyPrice"),
+        ("buyPrice", "buyPrice"),
+        ("BuyMercCoinsPrice", "buyMercCoinsPrice"),
+        ("buyMercCoinsPrice", "buyMercCoinsPrice"),
+    ):
+        if target_key in result:
+            continue
+        number = _optional_nonnegative(value.get(source_key))
+        if number >= 0:
+            result[target_key] = number
+    for key in ("priceObservedAt", "priceSource"):
+        text = str(value.get(key) or "").strip()
+        if text:
+            result[key] = text
+    return result
+
+
+def _normalize_offer_items(value: Any, kind: str) -> list[Any]:
+    if not isinstance(value, list):
+        return []
+    if kind != "OUTFITTING":
+        return sorted({
+            str(item).strip().casefold()
+            for item in value if isinstance(item, str) and item.strip()
+        })
+    by_name: dict[str, str | dict[str, Any]] = {}
+    for item in value:
+        offer = _module_offer(item)
+        if not offer:
+            continue
+        name = offer["name"]
+        current = by_name.get(name)
+        if len(offer) > 1 or current is None:
+            by_name[name] = offer if len(offer) > 1 else name
+    return [by_name[name] for name in sorted(by_name)]
+
+
 def _market_key(row: dict[str, Any]) -> str:
     commodity = mining_commodity_id(row.get("commodity") or row.get("name"))
     system = str(row.get("system") or "").strip().casefold()
@@ -112,7 +166,16 @@ class MarketCatalogStore:
         self._lock = threading.RLock()
         try:
             self._ensure_schema()
-            self.integrity_check()
+            # A full quick_check touches the complete database.  That is a
+            # useful eager guard for small/local catalogs, but it made a
+            # healthy 1+ GB synchronized catalog saturate the disk on every
+            # launch.  Normal reads remain corruption-aware and recover from
+            # the last good backup if a damaged page is actually encountered.
+            if (
+                not self.path.is_file()
+                or self.path.stat().st_size <= OPEN_INTEGRITY_CHECK_MAX_BYTES
+            ):
+                self.integrity_check()
         except sqlite3.DatabaseError as exc:
             if not _is_corruption_error(exc):
                 raise
@@ -745,11 +808,7 @@ class MarketCatalogStore:
             system = str(row.get("system") or "").strip()
             station = str(row.get("station") or "").strip()
             observed = _timestamp(row.get("observedAt"))
-            items = sorted({
-                str(item).strip().casefold()
-                for item in row.get("items", [])
-                if isinstance(item, str) and str(item).strip()
-            })
+            items = _normalize_offer_items(row.get("items"), kind)
             if (
                 kind not in {"OUTFITTING", "SHIPYARD"}
                 or market_id <= 0 or not system or not station
@@ -873,7 +932,20 @@ class MarketCatalogStore:
         for row in self._read_rows(
             f"SELECT * FROM station_offers WHERE {column} <> '[]'"
         ):
-            if wanted not in _loaded_list(row[column]):
+            stored_items = _loaded_list(row[column])
+            matched_offer = None
+            if column == "modules_json":
+                matched_offer = next((
+                    offer for offer in map(_module_offer, stored_items)
+                    if offer and offer["name"] == wanted
+                ), None)
+                matches = matched_offer is not None
+            else:
+                matches = wanted in {
+                    str(value).strip().casefold() for value in stored_items
+                    if isinstance(value, str)
+                }
+            if not matches:
                 continue
             result.append({
                 "marketId": row["market_id"], "system": row["system"],
@@ -888,6 +960,25 @@ class MarketCatalogStore:
                     else []
                 ),
                 "services": _loaded_list(row["services_json"]),
+                "moduleOffer": matched_offer,
+                "moduleId": (
+                    matched_offer.get("id") if matched_offer else None
+                ),
+                "buyPrice": (
+                    matched_offer.get("buyPrice") if matched_offer else None
+                ),
+                "buyMercCoinsPrice": (
+                    matched_offer.get("buyMercCoinsPrice")
+                    if matched_offer else None
+                ),
+                "priceObservedAt": (
+                    matched_offer.get("priceObservedAt")
+                    if matched_offer else None
+                ),
+                "priceSource": (
+                    matched_offer.get("priceSource")
+                    if matched_offer else None
+                ),
                 "observedAt": row[
                     "outfitting_observed_at" if column == "modules_json"
                     else "shipyard_observed_at"
@@ -1173,14 +1264,43 @@ class MarketCatalogStore:
             self.set_metadata("legacy_migrated", "1")
             return self.backup()
 
+    def backup_due(self, interval_seconds: int = BACKUP_INTERVAL_SECONDS) -> bool:
+        """Return whether the recovery snapshot is old enough to refresh."""
+        if not self.backup_path.is_file():
+            return True
+        try:
+            age = datetime.now(timezone.utc).timestamp() - (
+                self.backup_path.stat().st_mtime
+            )
+        except OSError:
+            return True
+        return age >= max(0, int(interval_seconds or 0))
+
+    def checkpoint(self) -> bool:
+        """Durably merge WAL content without copying the complete catalog."""
+        try:
+            with self._lock, closing(self._connect()) as connection:
+                connection.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+            return True
+        except (OSError, sqlite3.DatabaseError):
+            LOGGER.warning(
+                "Mining market database checkpoint failed: %s", self.path,
+            )
+            return False
+
     def backup(self) -> bool:
         temporary = self.backup_path.with_name(self.backup_path.name + ".tmp")
         self.backup_path.parent.mkdir(parents=True, exist_ok=True)
         try:
-            with self._lock, closing(self._connect()) as source, closing(
+            # A killed prior backup may leave a very large partial target.
+            # Start with a clean snapshot and do not hold the store's Python
+            # lock for the whole copy: SQLite's online backup API provides the
+            # consistent snapshot while readers and writers remain usable.
+            temporary.unlink(missing_ok=True)
+            with closing(self._connect()) as source, closing(
                 sqlite3.connect(temporary, timeout=15)
             ) as target:
-                source.backup(target)
+                source.backup(target, pages=4096, sleep=0.01)
                 target.commit()
             os.replace(temporary, self.backup_path)
             return True

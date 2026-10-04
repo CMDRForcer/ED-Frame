@@ -1012,7 +1012,17 @@ class CockpitController(
                     archive_path = Path(config_dir) / "data_history.sqlite3"
                 archive = HistoryArchive(archive_path)
                 self._history_archive = archive
-            return archive.counts()
+            # count() caches per category and archive() invalidates only the
+            # category it changed.  This avoids a GROUP BY over a multi-GB
+            # archive every time one background source appends a row.
+            categories = (
+                "eddn_sent", "hge_observations", "inara_receipts",
+                "mining_observations", "mining_catalog",
+                "commander_credit_snapshots",
+            )
+            return {
+                category: archive.count(category) for category in categories
+            }
         except (OSError, sqlite3.Error):
             return {}
 
@@ -2812,8 +2822,15 @@ class CockpitController(
             self._save_inara_receipts()
             self._save_ui_config()
             store = getattr(self, "_mining_market_store", None)
-            if store is not None:
-                store.backup()
+            # The primary SQLite database is already durable (WAL + FULL).
+            # Copying a multi-gigabyte recovery snapshot synchronously here
+            # made closing appear frozen and duplicated a recent background
+            # backup.  A quick checkpoint is enough; if a background snapshot
+            # is still running, do not wait on its store lock during shutdown.
+            if store is not None and not getattr(
+                self, "_mining_market_backup_running", False
+            ):
+                store.checkpoint()
         except OSError as exc:
             LOGGER.warning("Final shutdown save failed: %s", exc)
 

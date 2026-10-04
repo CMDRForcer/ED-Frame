@@ -13,6 +13,19 @@ from ed_companion.services.upload_queue import partition_upload_queue
 
 
 class LosslessHistoryTests(unittest.TestCase):
+    def test_cached_counts_are_invalidated_only_when_their_rows_change(self):
+        with TemporaryDirectory() as directory:
+            archive = HistoryArchive(Path(directory) / "history.sqlite3")
+            archive.archive("eddn_sent", [{"id": "one"}], key_field="id")
+
+            self.assertEqual(archive.count(), 1)
+            self.assertEqual(archive.count("eddn_sent"), 1)
+            archive.archive("hge_observations", [{"system": "Cubeo"}])
+
+            self.assertEqual(archive.count(), 2)
+            self.assertEqual(archive.count("eddn_sent"), 1)
+            self.assertEqual(archive.count("hge_observations"), 1)
+
     def test_archive_is_profile_local_deduplicated_and_exportable(self):
         with TemporaryDirectory() as directory:
             root = Path(directory)

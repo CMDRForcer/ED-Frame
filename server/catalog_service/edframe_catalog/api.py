@@ -173,6 +173,11 @@ def status() -> dict:
               (SELECT COUNT(*) FROM station_shipyards) AS shipyard_stations,
               (SELECT COALESCE(SUM(jsonb_array_length(modules)), 0)
                  FROM station_outfitting) AS module_offers,
+              (SELECT COUNT(*)
+                 FROM station_outfitting o
+                 CROSS JOIN LATERAL jsonb_array_elements(o.modules) entry
+                WHERE jsonb_typeof(entry) = 'object'
+                  AND entry ? 'buyPrice') AS priced_module_offers,
               (SELECT COALESCE(SUM(jsonb_array_length(ships)), 0)
                  FROM station_shipyards) AS ship_offers,
               (SELECT COUNT(*) FROM state_bgs_snapshots
@@ -362,8 +367,34 @@ def search_station_offers(
     clauses = []
     values: list[object] = []
     if normalized_module:
-        clauses.append("o.modules @> %s::jsonb")
-        values.append(json.dumps([normalized_module]))
+        module_column = 'matched_module.offer AS "moduleOffer"'
+        module_join = """
+            LEFT JOIN LATERAL (
+                SELECT CASE
+                         WHEN jsonb_typeof(entry.value) = 'object'
+                           THEN entry.value
+                         ELSE jsonb_build_object(
+                           'name', entry.value #>> '{}'
+                         )
+                       END AS offer
+                FROM jsonb_array_elements(o.modules) AS entry(value)
+                WHERE LOWER(
+                    CASE
+                      WHEN jsonb_typeof(entry.value) = 'object'
+                        THEN entry.value ->> 'name'
+                      WHEN jsonb_typeof(entry.value) = 'string'
+                        THEN entry.value #>> '{}'
+                      ELSE NULL
+                    END
+                ) = %s
+                LIMIT 1
+            ) matched_module ON TRUE
+        """
+        clauses.append("matched_module.offer IS NOT NULL")
+        values.append(normalized_module)
+    else:
+        module_column = 'NULL::jsonb AS "moduleOffer"'
+        module_join = ""
     if normalized_ship:
         clauses.append("y.ships @> %s::jsonb")
         values.append(json.dumps([normalized_ship]))
@@ -381,10 +412,12 @@ def search_station_offers(
                    st.landing_pad_size AS "landingPadSize",
                    st.distance_to_arrival_ls AS "distanceToArrivalLs",
                    st.services, sy.x, sy.y, sy.z,
+                   {module_column},
                    o.observed_at AS "outfittingObservedAt",
                    y.observed_at AS "shipyardObservedAt"
             FROM station_outfitting o
             FULL OUTER JOIN station_shipyards y ON y.market_id = o.market_id
+            {module_join}
             LEFT JOIN stations st
               ON st.market_id = COALESCE(o.market_id, y.market_id)
             LEFT JOIN systems sy

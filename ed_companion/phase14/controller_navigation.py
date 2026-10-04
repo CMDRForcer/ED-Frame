@@ -2527,6 +2527,10 @@ class NavigationMixin:
                 "moduleOffers": int(counts.get(
                     "module_offers", counts.get("moduleOffers", 0)
                 ) or 0),
+                "pricedModuleOffers": int(counts.get(
+                    "priced_module_offers",
+                    counts.get("pricedModuleOffers", 0),
+                ) or 0),
                 "shipOffers": int(counts.get(
                     "ship_offers", counts.get("shipOffers", 0)
                 ) or 0),
@@ -3319,14 +3323,33 @@ class NavigationMixin:
 
 
     def _schedule_mining_market_backup(self):
-        """Snapshot SQLite off the GUI thread after a successful commit."""
+        """Coalesce and throttle recovery snapshots off the GUI thread."""
         store = getattr(self, "_mining_market_store", None)
         if store is None:
             return False
+        if getattr(self, "_mining_market_backup_running", False):
+            return True
+        if not store.backup_due():
+            return True
+
+        self._mining_market_backup_running = True
+
+        def backup_once():
+            try:
+                store.backup()
+            finally:
+                self._mining_market_backup_running = False
+
         starter = getattr(self, "_start_network_worker", None)
         if callable(starter):
-            return bool(starter(store.backup, "mining-market-backup"))
-        return store.backup()
+            started = bool(starter(backup_once, "mining-market-backup"))
+            if not started:
+                self._mining_market_backup_running = False
+            return started
+        try:
+            return store.backup()
+        finally:
+            self._mining_market_backup_running = False
 
 
     @Slot(object)

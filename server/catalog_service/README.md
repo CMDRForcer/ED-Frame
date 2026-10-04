@@ -12,8 +12,10 @@ anonymous public catalog facts ED-Frame can reuse:
 - complete public `commodity/3` rows for every commodity: mean, buy and sell
   prices, stock, demand, brackets, status flags, observation time and receipt
   time.
-- complete public `outfitting/2` and `shipyard/2` inventories, keyed by Market
-  ID and atomically replaced only by an equally new or newer observation;
+- complete public `outfitting/2`, priced `outfitting/3` and `shipyard/2`
+  inventories, keyed by Market ID and atomically replaced only by an equally
+  new or newer observation. Version 3 retains the observed `BuyPrice` and
+  `BuyMercCoinsPrice`; version 2 remains a compatible availability fallback;
 - current public BGS snapshots and supported FSS signal observations used by
   State Finds. BGS snapshots are retained for 24 hours; signals retain their
   reported lifetime and are never extended by the server.

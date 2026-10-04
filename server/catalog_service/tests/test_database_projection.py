@@ -109,6 +109,8 @@ class DatabaseProjectionTests(unittest.TestCase):
         self.assertEqual(projected, 2)
         self.assertIn("station_outfitting", conn.calls[0][0])
         self.assertIn("modules", conn.calls[0][0])
+        self.assertIn("jsonb_array_elements", conn.calls[0][0])
+        self.assertIn("EDDN outfitting/2", conn.calls[0][0])
         self.assertIn("station_shipyards", conn.calls[1][0])
         self.assertIn("ships", conn.calls[1][0])
 

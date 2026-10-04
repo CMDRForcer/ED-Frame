@@ -62,6 +62,7 @@ class HistoryArchive:
         self.path = Path(path)
         self._lock = threading.RLock()
         self._counts_cache = None
+        self._count_cache = {}
         try:
             self._ensure_schema()
         except sqlite3.DatabaseError as exc:
@@ -107,6 +108,7 @@ class HistoryArchive:
                 except OSError:
                     pass
             self._counts_cache = None
+            self._count_cache = {}
             self._ensure_schema()
 
     def _ensure_schema(self):
@@ -178,6 +180,8 @@ class HistoryArchive:
             """, rows)
             connection.commit()
         self._counts_cache = None
+        self._count_cache.pop(str(category), None)
+        self._count_cache.pop(None, None)
         return len(rows)
 
     def checkpoint(self) -> None:
@@ -205,6 +209,10 @@ class HistoryArchive:
 
     @_recoverable
     def count(self, category=None):
+        cache_key = None if category is None else str(category)
+        with self._lock:
+            if cache_key in self._count_cache:
+                return int(self._count_cache[cache_key])
         with self._lock, closing(self._connect()) as connection:
             if category is None:
                 row = connection.execute("SELECT COUNT(*) FROM history").fetchone()
@@ -212,7 +220,9 @@ class HistoryArchive:
                 row = connection.execute(
                     "SELECT COUNT(*) FROM history WHERE category=?", (category,)
                 ).fetchone()
-        return int(row[0] if row else 0)
+            value = int(row[0] if row else 0)
+            self._count_cache[cache_key] = value
+        return value
 
     @_recoverable
     def counts(self):
@@ -264,6 +274,8 @@ class HistoryArchive:
             )
             connection.commit()
         self._counts_cache = None
+        self._count_cache.pop(str(category), None)
+        self._count_cache.pop(None, None)
         return max(0, int(cursor.rowcount or 0))
 
     @_recoverable

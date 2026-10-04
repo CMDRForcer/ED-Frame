@@ -120,7 +120,10 @@ def project_stations(
 ) -> list[dict[str, Any]]:
     """Project anonymous public station facts from commodity or Journal frames."""
     schema = schema_name(payload)
-    if schema not in {"commodity/3", "journal/1", "outfitting/2", "shipyard/2"}:
+    if schema not in {
+        "commodity/3", "journal/1", "outfitting/2", "outfitting/3",
+        "shipyard/2",
+    }:
         return []
     message = _message(payload)
     event = str(message.get("event") or "")
@@ -173,13 +176,15 @@ def project_station_offers(
 ) -> list[dict[str, Any]]:
     """Project complete public outfitting or shipyard inventories.
 
-    EDDN v2 publishes invariant item identifiers only.  Normalising them to
-    casefolded strings makes exact server searches deterministic without
-    retaining uploader or Commander fields from the envelope.
+    EDDN v2 publishes invariant item identifiers only. EDDN v3 additionally
+    publishes the station's actual credit and ARX purchase prices. Both forms
+    remain accepted so older inventories keep working while priced snapshots
+    progressively replace them.
     """
     schema = schema_name(payload)
     contract = {
         "outfitting/2": ("OUTFITTING", "modules"),
+        "outfitting/3": ("OUTFITTING", "modules"),
         "shipyard/2": ("SHIPYARD", "ships"),
     }.get(schema)
     if contract is None:
@@ -194,11 +199,38 @@ def project_station_offers(
         or not isinstance(raw_items, list) or not raw_items
     ):
         return []
-    items = sorted({
-        str(item).strip().casefold()
-        for item in raw_items
-        if isinstance(item, str) and str(item).strip()
-    })
+    if schema == "outfitting/3":
+        priced_items: dict[str, dict[str, int | str]] = {}
+        price_observed_at = str(message.get("timestamp") or received_at)
+        for item in raw_items:
+            if not isinstance(item, dict):
+                continue
+            name = _text(item.get("Name") or item.get("name"))
+            module_id = _integer(item.get("id"))
+            buy_price = _integer(item.get("BuyPrice"))
+            merc_price = _integer(item.get("BuyMercCoinsPrice"))
+            if (
+                not name or module_id is None or module_id < 0
+                or buy_price is None or buy_price < 0
+                or merc_price is None or merc_price < 0
+            ):
+                continue
+            key = name.casefold()
+            priced_items[key] = {
+                "name": key,
+                "id": module_id,
+                "buyPrice": buy_price,
+                "buyMercCoinsPrice": merc_price,
+                "priceObservedAt": price_observed_at,
+                "priceSource": "EDDN outfitting/3",
+            }
+        items: list[Any] = [priced_items[key] for key in sorted(priced_items)]
+    else:
+        items = sorted({
+            str(item).strip().casefold()
+            for item in raw_items
+            if isinstance(item, str) and str(item).strip()
+        })
     if not items:
         return []
     observed_at = str(message.get("timestamp") or received_at)

@@ -1,3 +1,4 @@
+import json
 import unittest
 
 from edframe_catalog.projection import (
@@ -169,6 +170,39 @@ class ProjectionTests(unittest.TestCase):
         self.assertIn("int_fuelscoop_size8_class5", offer["items"])
         self.assertNotIn("private-name", offer["items"])
         self.assertEqual(station["station_name"], "Chelomey Orbital")
+
+    def test_outfitting_v3_retains_exact_station_module_prices(self):
+        payload = {
+            "$schemaRef": "https://eddn.edcd.io/schemas/outfitting/3",
+            "header": {"uploaderID": "private-name"},
+            "message": {
+                "timestamp": "2026-10-03T08:00:00Z",
+                "systemName": "Cubeo",
+                "stationName": "Chelomey Orbital",
+                "marketId": 42,
+                "modules": [{
+                    "id": 128049429,
+                    "Name": "Hpt_BeamLaser_Fixed_Medium",
+                    "BuyPrice": 145000,
+                    "BuyMercCoinsPrice": 0,
+                }],
+            },
+        }
+
+        offer = project_station_offers(payload, "2026-10-03T08:00:01Z")[0]
+        station = project_stations(payload, "2026-10-03T08:00:01Z")[0]
+
+        self.assertEqual(offer["source"], "EDDN outfitting/3")
+        self.assertEqual(json.loads(offer["items"]), [{
+            "name": "hpt_beamlaser_fixed_medium",
+            "id": 128049429,
+            "buyPrice": 145000,
+            "buyMercCoinsPrice": 0,
+            "priceObservedAt": "2026-10-03T08:00:00Z",
+            "priceSource": "EDDN outfitting/3",
+        }])
+        self.assertEqual(station["market_id"], 42)
+        self.assertNotIn("private-name", offer["items"])
 
     def test_shipyard_inventory_rejects_empty_and_keeps_exact_public_ids(self):
         payload = {
