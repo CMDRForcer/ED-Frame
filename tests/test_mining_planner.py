@@ -530,6 +530,46 @@ class MiningPlannerTests(unittest.TestCase):
         self.assertEqual(yield_first[0]["system"], "Strong Far")
         self.assertEqual(distance_first[0]["system"], "Weak Near")
 
+    def test_best_yield_prefers_measured_percentage_over_proxy_stars(self):
+        measured_high = candidate(
+            "Measured High", 80, target="LOCAL_YIELD",
+            localSampleCount=12, localYieldHits=9,
+            localAverageProportion=24.5,
+            yieldStats=[{
+                "commodity": "platinum", "prospectorHits": 9,
+                "proportionSamples": 9, "averageProportion": 24.5,
+                "maxProportion": 41.0,
+            }],
+        )
+        measured_low = candidate(
+            "Measured Low", 5, target="LOCAL_YIELD",
+            localSampleCount=30, localYieldHits=20,
+            localAverageProportion=18.0,
+            yieldStats=[{
+                "commodity": "platinum", "prospectorHits": 20,
+                "proportionSamples": 20, "averageProportion": 18.0,
+                "maxProportion": 32.0,
+            }],
+        )
+        estimated = candidate("Estimated Pristine", 1, target="HOTSPOT")
+
+        planned = plan_mining_routes(
+            [estimated, measured_low, measured_high],
+            "Platinum", OPTIMIZE_YIELD, now=NOW,
+        )
+
+        self.assertEqual(
+            [row["system"] for row in planned],
+            ["Measured High", "Measured Low", "Estimated Pristine"],
+        )
+        self.assertTrue(planned[0]["yieldMeasured"])
+        self.assertEqual(planned[0]["yieldAverageProportion"], 24.5)
+        self.assertEqual(planned[0]["yieldMaximumProportion"], 41.0)
+        self.assertEqual(planned[0]["yieldHitRate"], 75.0)
+        self.assertIn("24.5%", planned[0]["yieldEvidenceLabel"])
+        self.assertFalse(planned[-1]["yieldMeasured"])
+        self.assertIn("ESTIMATED", planned[-1]["yieldEvidenceLabel"])
+
     def test_profit_uses_only_fresh_market_with_required_demand(self):
         rows = [candidate("Fresh", 20, markets=[{
             "commodity": "Platinum", "station": "Fresh Hub",
@@ -1232,7 +1272,8 @@ class MiningFinderUiContractTests(unittest.TestCase):
         self.assertIn("BEST YIELD", qml)
         self.assertIn("HIGHEST PROFIT", qml)
         self.assertIn("SHORTEST ROUTE", qml)
-        self.assertIn("YIELD QUALITY", qml)
+        self.assertIn("YIELD ESTIMATE", qml)
+        self.assertIn("MEASURED YIELD", qml)
         self.assertIn("PROFITABILITY", qml)
         self.assertIn("MERIT SUITABILITY", qml)
         self.assertIn("DATA CONFIDENCE", qml)

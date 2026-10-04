@@ -17,7 +17,6 @@ import uuid
 import requests
 from bisect import bisect_left
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from copy import deepcopy
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Callable
@@ -129,7 +128,10 @@ from ed_companion.navigation.mining_finder import (
     mining_candidate_positions,
     mining_candidate_freshness,
     project_eddn_mining_candidates,
+    project_local_yield_observations,
     project_spansh_mining_candidates,
+    send_edframe_yield_observations,
+    yield_observation_key,
 )
 from ed_companion.navigation.mining_commodities import (
     MINING_COMMODITIES,
@@ -345,6 +347,8 @@ class NavigationMixin:
     edFrameStateFindSyncFinished = Signal(object)
 
     edFrameStationOfferSyncFinished = Signal(object)
+
+    edFrameYieldUploadFinished = Signal(object)
 
 
     miningPowerplayFinished = Signal(object)
@@ -2065,6 +2069,34 @@ class NavigationMixin:
     )
 
 
+    edFrameYieldSharingEnabled = Property(
+        bool,
+        lambda self: bool(getattr(
+            self, "_edframe_yield_sharing_enabled", False
+        )),
+        notify=CoreControllerMixin.connectionChanged,
+    )
+
+
+    edFrameYieldUploadBusy = Property(
+        bool,
+        lambda self: bool(getattr(
+            self, "_edframe_yield_upload_busy", False
+        )),
+        notify=CoreControllerMixin.connectionChanged,
+    )
+
+
+    edFrameYieldUploadStatus = Property(
+        str,
+        lambda self: str(getattr(
+            self, "_edframe_yield_upload_status",
+            "Off · measurements remain local",
+        )),
+        notify=CoreControllerMixin.connectionChanged,
+    )
+
+
     edFrameCatalogSyncBusy = Property(
         bool,
         lambda self: bool(getattr(self, "_edframe_catalog_sync_busy", False)),
@@ -2123,7 +2155,9 @@ class NavigationMixin:
     miningCurrentAction = Property(
         str,
         lambda self: (
-            "SERVER CHECK"
+            "YIELD SHARE"
+            if getattr(self, "_edframe_yield_upload_busy", False)
+            else "SERVER CHECK"
             if getattr(self, "_edframe_catalog_busy", False)
             else "CATALOG SYNC"
             if getattr(self, "_edframe_catalog_sync_busy", False)
@@ -2426,6 +2460,170 @@ class NavigationMixin:
             self.refreshEdFrameCatalogStatus()
 
 
+    @Slot(bool)
+    def setEdFrameYieldSharingEnabled(self, enabled):
+        enabled = bool(enabled)
+        self._edframe_yield_sharing_enabled = enabled
+        if enabled:
+            self._edframe_yield_upload_status = (
+                "Ready · checking local Prospector measurements…"
+            )
+            self._append_edframe_catalog_log(
+                "Anonymous Prospector yield sharing enabled"
+            )
+        else:
+            self._active_edframe_yield_upload = None
+            self._edframe_yield_upload_busy = False
+            self._edframe_yield_upload_status = (
+                "Off · measurements remain local"
+            )
+            self._append_edframe_catalog_log(
+                "Prospector yield sharing disabled · local measurements retained"
+            )
+        self._save_ui_config()
+        self.connectionChanged.emit()
+        if enabled:
+            self._maybe_share_mining_yields()
+
+
+    def _maybe_share_mining_yields(self):
+        if (
+            not getattr(self, "_edframe_yield_sharing_enabled", False)
+            or getattr(self, "_edframe_yield_upload_busy", False)
+            or getattr(self, "_shutdown_complete", False)
+        ):
+            return
+        local = self._state.get("localMiningEvidence", {})
+        if not isinstance(local, dict) or not local.get("prospectorSamples"):
+            self._edframe_yield_upload_status = (
+                "Ready · no ring-bound Prospector measurements yet"
+            )
+            self.connectionChanged.emit()
+            return
+        request = {
+            "id": uuid.uuid4().hex,
+            "profileKey": self.profile_context.key,
+            "generation": self._profile_generation,
+            "receiptsPath": str(self.edframe_yield_receipts_file),
+        }
+        # State replacement is atomic and the published mapping is no longer
+        # mutated.  Capture that immutable snapshot by reference so a large
+        # Journal history is never copied on the Qt/UI thread.
+        local_snapshot = local
+        uploaded = set(getattr(self, "_edframe_yield_uploaded", set()))
+        self._active_edframe_yield_upload = request
+        self._edframe_yield_upload_busy = True
+        self._edframe_yield_upload_status = (
+            "Preparing anonymous Prospector measurements…"
+        )
+        self.connectionChanged.emit()
+
+        def worker():
+            result = dict(request)
+            try:
+                observations = project_local_yield_observations(
+                    local_snapshot, exclude_keys=uploaded, limit=100,
+                )
+                pending = []
+                batch_keys = set()
+                for row in observations:
+                    key = yield_observation_key(row)
+                    if key in batch_keys:
+                        continue
+                    batch_keys.add(key)
+                    pending.append((key, row))
+                if not pending:
+                    result.update({
+                        "success": True, "empty": True,
+                        "keys": [], "response": {"accepted": 0},
+                    })
+                else:
+                    response = send_edframe_yield_observations(
+                        [row for _key, row in pending], requests.post,
+                    )
+                    result.update({
+                        "success": True,
+                        "keys": [key for key, _row in pending],
+                        "response": response,
+                    })
+            except Exception as exc:
+                result.update({"success": False, "error": str(exc)})
+            self.edFrameYieldUploadFinished.emit(result)
+
+        if not self._start_network_worker(worker, "edframe-yield-upload"):
+            self._active_edframe_yield_upload = None
+            self._edframe_yield_upload_busy = False
+            self._edframe_yield_upload_status = (
+                "Paused during shutdown · measurements retained locally"
+            )
+            self.connectionChanged.emit()
+
+
+    @Slot(object)
+    def _finish_edframe_yield_upload(self, result):
+        request = getattr(self, "_active_edframe_yield_upload", None)
+        if not request or result.get("id") != request.get("id"):
+            return
+        self._active_edframe_yield_upload = None
+        self._edframe_yield_upload_busy = False
+        if not getattr(self, "_edframe_yield_sharing_enabled", False):
+            return
+        if not (
+            result.get("profileKey") == self.profile_context.key
+            and result.get("generation") == self._profile_generation
+            and result.get("receiptsPath")
+                == str(self.edframe_yield_receipts_file)
+        ):
+            self._edframe_yield_upload_status = (
+                "Discarded stale profile upload response"
+            )
+            self.connectionChanged.emit()
+            return
+        if not result.get("success"):
+            error = str(result.get("error") or "unknown error")
+            self._edframe_yield_upload_status = (
+                "Upload paused · local measurements retained · " + error
+            )
+            self._append_edframe_catalog_log(
+                "Prospector yield upload failed · " + error
+            )
+            self.connectionChanged.emit()
+            return
+        keys = list(result.get("keys") or [])
+        accepted = int(
+            (result.get("response") or {}).get("accepted", 0) or 0
+        )
+        if keys and accepted == len(keys):
+            self._edframe_yield_uploaded.update(keys)
+            retained = sorted(self._edframe_yield_uploaded)
+            self._persist_json(
+                self.edframe_yield_receipts_file,
+                {"uploaded": retained, "updatedAt": datetime.now(
+                    timezone.utc
+                ).isoformat(timespec="seconds")},
+                "ED-Frame yield upload receipts",
+            )
+            self._edframe_yield_upload_status = (
+                f"Shared {accepted} anonymous measurements · checking backlog"
+            )
+            self._append_edframe_catalog_log(
+                f"Shared {accepted} anonymous Prospector measurements"
+            )
+            self.connectionChanged.emit()
+            QTimer.singleShot(6000, self._maybe_share_mining_yields)
+            return
+        if keys:
+            self._edframe_yield_upload_status = (
+                "Server accepted only part of the batch · retained for retry"
+            )
+        else:
+            self._edframe_yield_upload_status = (
+                f"Up to date · {len(self._edframe_yield_uploaded):,} "
+                "measurements shared"
+            )
+        self.connectionChanged.emit()
+
+
     @Slot()
     def refreshEdFrameCatalogStatus(self):
         if not getattr(self, "_edframe_catalog_enabled", True):
@@ -2520,6 +2718,16 @@ class NavigationMixin:
                 "stations": stations,
                 "markets": markets,
                 "sites": sites,
+                "yieldSamples": int(counts.get(
+                    "yield_samples", counts.get("yieldSamples", 0)
+                ) or 0),
+                "measuredSites": int(counts.get(
+                    "measured_sites", counts.get("measuredSites", 0)
+                ) or 0),
+                "measuredCommodities": int(counts.get(
+                    "measured_commodities",
+                    counts.get("measuredCommodities", 0),
+                ) or 0),
                 "stateBgsSnapshots": state_bgs,
                 "stateSignals": state_signals,
                 "outfittingStations": outfitting_stations,

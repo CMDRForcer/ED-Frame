@@ -317,6 +317,7 @@ class UiSettingsMixin:
         self._activity = "Journal synchronized · live inventory loaded"
         self._log_consistency_issues(state)
         self._publish_full_state()
+        self._maybe_share_mining_yields()
         if (
             isinstance(startup_state_find_rows, list)
             and startup_hge_revision == self._hge_revision
@@ -378,6 +379,9 @@ class UiSettingsMixin:
             ),
             "edframe_catalog_last_success": getattr(
                 self, "_edframe_catalog_last_success", ""
+            ),
+            "edframe_yield_sharing_enabled": getattr(
+                self, "_edframe_yield_sharing_enabled", False
             ),
             "background_mode": self._background_mode,
             "autostart_enabled": self._autostart_enabled,

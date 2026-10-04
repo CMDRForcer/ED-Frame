@@ -156,6 +156,36 @@ CREATE INDEX IF NOT EXISTS mining_sites_system_idx
 CREATE INDEX IF NOT EXISTS mining_sites_hotspots_idx
     ON mining_sites USING GIN (hotspots);
 
+CREATE TABLE IF NOT EXISTS mining_yield_samples (
+    sample_id TEXT PRIMARY KEY,
+    site_identity TEXT NOT NULL REFERENCES mining_sites(identity) ON DELETE CASCADE,
+    system_address BIGINT,
+    system_name TEXT NOT NULL,
+    ring_name TEXT NOT NULL,
+    body_id INTEGER,
+    observed_at TIMESTAMPTZ NOT NULL,
+    received_at TIMESTAMPTZ NOT NULL,
+    source TEXT NOT NULL DEFAULT 'ED-Frame Journal · ProspectedAsteroid'
+);
+
+CREATE INDEX IF NOT EXISTS mining_yield_samples_site_idx
+    ON mining_yield_samples (site_identity, observed_at DESC);
+CREATE INDEX IF NOT EXISTS mining_yield_samples_observed_idx
+    ON mining_yield_samples (observed_at DESC);
+
+CREATE TABLE IF NOT EXISTS mining_yield_materials (
+    sample_id TEXT NOT NULL REFERENCES mining_yield_samples(sample_id)
+        ON DELETE CASCADE,
+    commodity TEXT NOT NULL,
+    proportion DOUBLE PRECISION NOT NULL CHECK (
+        proportion >= 0 AND proportion <= 100
+    ),
+    PRIMARY KEY (sample_id, commodity)
+);
+
+CREATE INDEX IF NOT EXISTS mining_yield_materials_commodity_idx
+    ON mining_yield_materials (commodity, sample_id);
+
 CREATE TABLE IF NOT EXISTS state_bgs_snapshots (
     identity TEXT PRIMARY KEY,
     system_address BIGINT,

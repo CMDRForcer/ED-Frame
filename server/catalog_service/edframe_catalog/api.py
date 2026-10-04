@@ -5,13 +5,20 @@ import binascii
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 import json
+import threading
+import time
 from typing import Annotated
 
-from fastapi import FastAPI, HTTPException, Query
+from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.responses import ORJSONResponse
 
 from . import __version__
-from .database import connection, ensure_schema
+from .database import (
+    connection,
+    ensure_schema,
+    upsert_yield_observations,
+)
+from .projection import project_yield_observations
 
 
 def _now() -> str:
@@ -32,6 +39,9 @@ app = FastAPI(
     default_response_class=ORJSONResponse,
     lifespan=lifespan,
 )
+
+_yield_rate_lock = threading.Lock()
+_yield_rate_buckets: dict[str, list[float]] = {}
 
 
 def _percent(part: int, whole: int) -> float:
@@ -149,6 +159,7 @@ def root() -> dict:
         "marketSync": "/v1/sync/markets",
         "stationOfferSync": "/v1/sync/station-offers",
         "stateFindSync": "/v1/sync/state-finds",
+        "yieldObservations": "/v1/yields/observations",
     }
 
 
@@ -169,6 +180,11 @@ def status() -> dict:
               (SELECT COUNT(*) FROM stations) AS stations,
               (SELECT COUNT(*) FROM markets) AS markets,
               (SELECT COUNT(*) FROM mining_sites) AS sites,
+              (SELECT COUNT(*) FROM mining_yield_samples) AS yield_samples,
+              (SELECT COUNT(DISTINCT site_identity)
+                 FROM mining_yield_samples) AS measured_sites,
+              (SELECT COUNT(DISTINCT commodity)
+                 FROM mining_yield_materials) AS measured_commodities,
               (SELECT COUNT(*) FROM station_outfitting) AS outfitting_stations,
               (SELECT COUNT(*) FROM station_shipyards) AS shipyard_stations,
               (SELECT COALESCE(SUM(jsonb_array_length(modules)), 0)
@@ -516,6 +532,52 @@ def suggest_systems(
     return {"generatedAt": _now(), "results": rows}
 
 
+@app.post("/v1/yields/observations")
+def receive_yield_observations(
+    request: Request, payload: dict,
+) -> dict:
+    """Accept privacy-minimised, idempotent ProspectedAsteroid samples."""
+    observations = payload.get("observations")
+    if not isinstance(observations, list) or len(observations) > 100:
+        raise HTTPException(
+            status_code=422,
+            detail="observations must be a list containing at most 100 items",
+        )
+    forwarded = request.headers.get("x-forwarded-for", "").split(",", 1)[0]
+    remote = forwarded.strip() or (
+        request.client.host if request.client else "unknown"
+    )
+    now = time.monotonic()
+    with _yield_rate_lock:
+        if len(_yield_rate_buckets) > 4096:
+            _yield_rate_buckets.clear()
+        recent = [
+            stamp for stamp in _yield_rate_buckets.get(remote, [])
+            if now - stamp < 60.0
+        ]
+        if len(recent) >= 12:
+            raise HTTPException(
+                status_code=429,
+                detail="yield observation request budget exceeded",
+            )
+        recent.append(now)
+        _yield_rate_buckets[remote] = recent
+    received_at = _now()
+    projected = project_yield_observations(payload, received_at)
+    if observations and not projected:
+        raise HTTPException(
+            status_code=422,
+            detail="no valid yield observations in request",
+        )
+    with connection() as conn:
+        accepted = upsert_yield_observations(conn, projected)
+    return {
+        "receivedAt": received_at,
+        "accepted": accepted,
+        "rejected": len(observations) - accepted,
+    }
+
+
 @app.get("/v1/sync/markets")
 def sync_markets(
     cursor: Annotated[str | None, Query(max_length=512)] = None,
@@ -765,37 +827,80 @@ def search_sites(
     max_distance: Annotated[float | None, Query(gt=0, le=2000)] = None,
     limit: Annotated[int, Query(ge=1, le=200)] = 100,
 ) -> dict:
-    clauses = ["observed_at >= NOW() - (%s * INTERVAL '1 day')"]
+    clauses = ["ms.observed_at >= NOW() - (%s * INTERVAL '1 day')"]
     values: list[object] = [max_age_days]
     if commodity:
         clauses.append(
-            "EXISTS (SELECT 1 FROM jsonb_array_elements(hotspots) h "
-            "WHERE LOWER(h->>'commodity') = LOWER(%s))"
+            "(EXISTS (SELECT 1 FROM jsonb_array_elements(ms.hotspots) h "
+            "WHERE LOWER(h->>'commodity') = LOWER(%s)) OR EXISTS ("
+            "SELECT 1 FROM mining_yield_samples ys "
+            "JOIN mining_yield_materials ym "
+            "ON ym.sample_id = ys.sample_id "
+            "WHERE ys.site_identity = ms.identity "
+            "AND LOWER(ym.commodity) = LOWER(%s)))"
         )
         values.append(commodity.strip())
+        values.append(commodity.strip())
     if system:
-        clauses.append("LOWER(system_name) = LOWER(%s)")
+        clauses.append("LOWER(ms.system_name) = LOWER(%s)")
         values.append(system.strip())
     if all(value is not None for value in (x, y, z, max_distance)):
         clauses.append(
-            "POWER(x - %s, 2) + POWER(y - %s, 2) + "
-            "POWER(z - %s, 2) <= POWER(%s, 2)"
+            "POWER(ms.x - %s, 2) + POWER(ms.y - %s, 2) + "
+            "POWER(ms.z - %s, 2) <= POWER(%s, 2)"
         )
         values.extend((x, y, z, max_distance))
     values.append(limit)
     with connection() as conn:
         rows = conn.execute(
             f"""
-            SELECT system_address AS "systemAddress", system_name AS system,
-                   x, y, z, body_id AS "bodyId", body_name AS body,
-                   ring_name AS ring, ring_type AS "ringType",
-                   reserve_level AS "reserveLevel",
-                   distance_to_arrival_ls AS "distanceToArrivalLs",
-                   hotspots, evidence, source,
-                   observed_at AS "observedAt", received_at AS "receivedAt"
-            FROM mining_sites
+            SELECT ms.system_address AS "systemAddress",
+                   ms.system_name AS system, ms.x, ms.y, ms.z,
+                   ms.body_id AS "bodyId", ms.body_name AS body,
+                   ms.ring_name AS ring, ms.ring_type AS "ringType",
+                   ms.reserve_level AS "reserveLevel",
+                   ms.distance_to_arrival_ls AS "distanceToArrivalLs",
+                   ms.hotspots, ms.evidence, ms.source,
+                   ms.observed_at AS "observedAt",
+                   ms.received_at AS "receivedAt",
+                   COALESCE(yield_data.sample_count, 0)
+                       AS "prospectorSampleCount",
+                   COALESCE(yield_data.stats, '[]'::jsonb) AS "yieldStats"
+            FROM mining_sites ms
+            LEFT JOIN LATERAL (
+                SELECT (
+                           SELECT COUNT(*)
+                           FROM mining_yield_samples counted
+                           WHERE counted.site_identity = ms.identity
+                       ) AS sample_count,
+                       (
+                         SELECT jsonb_agg(
+                           jsonb_build_object(
+                               'commodity', grouped.commodity,
+                               'prospectorHits', grouped.hits,
+                               'proportionSamples', grouped.hits,
+                               'proportionTotal', grouped.total,
+                               'averageProportion', grouped.average,
+                               'maxProportion', grouped.maximum,
+                               'lastObservedAt', grouped.last_observed_at
+                           ) ORDER BY grouped.commodity
+                         )
+                         FROM (
+                    SELECT ym.commodity, COUNT(*) AS hits,
+                           SUM(ym.proportion) AS total,
+                           AVG(ym.proportion) AS average,
+                           MAX(ym.proportion) AS maximum,
+                           MAX(material_sample.observed_at) AS last_observed_at
+                    FROM mining_yield_materials ym
+                    JOIN mining_yield_samples material_sample
+                      ON material_sample.sample_id = ym.sample_id
+                    WHERE material_sample.site_identity = ms.identity
+                    GROUP BY ym.commodity
+                         ) grouped
+                       ) AS stats
+            ) yield_data ON TRUE
             WHERE {' AND '.join(clauses)}
-            ORDER BY observed_at DESC
+            ORDER BY ms.observed_at DESC
             LIMIT %s
             """,
             values,

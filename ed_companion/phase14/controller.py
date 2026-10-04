@@ -347,6 +347,9 @@ class CockpitController(
         self.eddn_cursor_file = self.config_dir / "eddn_journal_cursor.json"
         self.hge_cache_file = self.config_dir / "hge_live_sightings.json"
         self.state_find_sync_file = self.config_dir / "state_find_sync.json"
+        self.edframe_yield_receipts_file = (
+            self.config_dir / "edframe_yield_receipts.json"
+        )
         self.trader_catalog_file = user_trader_catalog_path(context)
         self.tech_broker_catalog_file = self.config_dir / "tech_broker_catalog_user.json"
         self.mining_catalog_file = self.config_dir / "mining_finder_catalog.json"
@@ -479,6 +482,26 @@ class CockpitController(
         )
         self._edframe_catalog_stats = {}
         self._edframe_catalog_log = []
+        self._edframe_yield_sharing_enabled = bool(
+            ui_config.get("edframe_yield_sharing_enabled", False)
+        )
+        self._edframe_yield_upload_busy = False
+        self._edframe_yield_upload_status = (
+            "Ready · anonymous Prospector sharing enabled"
+            if self._edframe_yield_sharing_enabled
+            else "Off · measurements remain local"
+        )
+        self._active_edframe_yield_upload = None
+        yield_receipts = self._read_local_json(
+            self.edframe_yield_receipts_file, {}
+        )
+        uploaded_yields = (
+            yield_receipts.get("uploaded", [])
+            if isinstance(yield_receipts, dict) else []
+        )
+        self._edframe_yield_uploaded = {
+            str(value) for value in uploaded_yields if value
+        }
         self._active_edframe_catalog_request = None
         self._edframe_catalog_sync_busy = False
         self._edframe_catalog_sync_status = (
@@ -661,6 +684,9 @@ class CockpitController(
         )
         self.edFrameStationOfferSyncFinished.connect(
             self._finish_edframe_station_offer_sync
+        )
+        self.edFrameYieldUploadFinished.connect(
+            self._finish_edframe_yield_upload
         )
         self._mining_powerplay_catalog = self._read_local_json(
             self.mining_powerplay_catalog_file, {}
@@ -2007,6 +2033,7 @@ class CockpitController(
         self._log_consistency_issues(self._state)
         self._journal_state_ready = True
         self._publish_full_state(previous)
+        self._maybe_share_mining_yields()
         if (
             isinstance(state_find_rows, list)
             and source_hge_revision == self._hge_revision
@@ -2492,6 +2519,13 @@ class CockpitController(
         self._edframe_state_find_sync_status = (
             "State Finds waiting for profile sync"
         )
+        self._active_edframe_yield_upload = None
+        self._edframe_yield_upload_busy = False
+        self._edframe_yield_upload_status = (
+            "Ready · anonymous Prospector sharing enabled"
+            if getattr(self, "_edframe_yield_sharing_enabled", False)
+            else "Off · measurements remain local"
+        )
         self._active_mining_market_request = None
         self._pending_mining_market_query = None
         self._mining_market_busy = False
@@ -2619,6 +2653,16 @@ class CockpitController(
         )
         if not isinstance(self._edframe_state_find_sync_meta, dict):
             self._edframe_state_find_sync_meta = {}
+        yield_receipts = self._read_local_json(
+            self.edframe_yield_receipts_file, {}
+        )
+        uploaded_yields = (
+            yield_receipts.get("uploaded", [])
+            if isinstance(yield_receipts, dict) else []
+        )
+        self._edframe_yield_uploaded = {
+            str(value) for value in uploaded_yields if value
+        }
         self._mining_catalog = {"candidates": []}
         self._mining_catalog_revision = getattr(
             self, "_mining_catalog_revision", 0

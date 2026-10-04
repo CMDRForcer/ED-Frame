@@ -79,6 +79,14 @@ def _reserve_score(value: Any) -> float:
 
 
 def _yield_score(row: dict[str, Any]) -> float:
+    measured = row.get("localAverageProportion")
+    samples = int(row.get("localSampleCount", 0) or 0)
+    hits = int(row.get("localYieldHits", 0) or 0)
+    if measured is not None and samples > 0 and hits > 0:
+        # A measured percentage is a different (and stronger) fact than the
+        # reserve/hotspot proxy below.  Keep the familiar five-star display,
+        # but expose and sort by the percentage itself elsewhere.
+        return max(1.0, min(5.0, 2.0 + _number(measured) / 10.0))
     target = str(row.get("targetMatch") or "")
     base = {
         "LOCAL_YIELD": 5.0,
@@ -1553,6 +1561,43 @@ def plan_mining_routes(
             for item in secondary_resources
         )
         row["yieldScore"] = round(yield_score, 2)
+        measured_yield = row.get("localAverageProportion")
+        measured_samples = int(row.get("localSampleCount", 0) or 0)
+        measured_hits = int(row.get("localYieldHits", 0) or 0)
+        measured_known = bool(
+            measured_yield is not None
+            and measured_samples > 0
+            and measured_hits > 0
+        )
+        measured_maximum = None
+        for stat in row.get("yieldStats") or []:
+            if not isinstance(stat, dict) or mining_commodity_id(
+                stat.get("commodity")
+            ) != selected_commodity:
+                continue
+            measured_maximum = stat.get("maxProportion")
+            break
+        row.update({
+            "yieldMeasured": measured_known,
+            "yieldAverageProportion": (
+                round(_number(measured_yield), 2) if measured_known else None
+            ),
+            "yieldMaximumProportion": (
+                round(_number(measured_maximum), 2)
+                if measured_maximum is not None else None
+            ),
+            "yieldSampleCount": measured_samples,
+            "yieldHitCount": measured_hits,
+            "yieldHitRate": (
+                round(measured_hits * 100.0 / measured_samples, 1)
+                if measured_samples else None
+            ),
+            "yieldEvidenceLabel": (
+                f"MEASURED · AVG {_number(measured_yield):.1f}% · "
+                f"{measured_hits}/{measured_samples} PROSPECTORS"
+                if measured_known else "ESTIMATED · HOTSPOT / RING EVIDENCE"
+            ),
+        })
         row["dataScore"] = round(data_score, 2)
         row["secondaryCommodities"] = secondary_resources
         row["secondaryCommodityNames"] = [
@@ -1686,6 +1731,14 @@ def plan_mining_routes(
     prepared.sort(key=lambda row: (
         int(row.get("powerplayVerificationRank", 0) or 0)
         if optimization == OPTIMIZE_MERITS else 0,
+        not bool(row.get("yieldMeasured"))
+        if optimization == OPTIMIZE_YIELD else False,
+        -_number(row.get("yieldAverageProportion"), -1.0)
+        if optimization == OPTIMIZE_YIELD and row.get("yieldMeasured")
+        else 0.0,
+        -int(row.get("yieldHitCount", 0) or 0)
+        if optimization == OPTIMIZE_YIELD and row.get("yieldMeasured")
+        else 0,
         row.get(score_key) is None,
         -_number(row.get(score_key), -1.0),
         not bool(row.get("marketMatchesFilters")),

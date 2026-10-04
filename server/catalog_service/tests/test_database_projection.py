@@ -2,6 +2,7 @@ import unittest
 
 from edframe_catalog.database import (
     upsert_batch, upsert_state_find_batch, upsert_station_offer_batch,
+    upsert_yield_observations,
 )
 
 
@@ -14,6 +15,26 @@ class RecordingConnection:
 
 
 class DatabaseProjectionTests(unittest.TestCase):
+    def test_yield_observations_create_site_sample_and_material_rows(self):
+        conn = RecordingConnection()
+        projected = upsert_yield_observations(conn, [{
+            "sample_id": "sample", "site_identity": "site",
+            "system_address": 7, "system_name": "Yield Test",
+            "x": 1.0, "y": 2.0, "z": 3.0, "body_id": 11,
+            "body_name": "Yield Test 2", "ring_name": "Yield Test 2 A Ring",
+            "ring_type": "Metallic", "reserve_level": "PristineResources",
+            "distance_to_arrival_ls": 400.0,
+            "materials": {"platinum": 32.5, "osmium": 11.25},
+            "observed_at": "2026-10-03T08:00:00Z",
+            "received_at": "2026-10-03T08:00:01Z",
+            "source": "ED-Frame Journal · ProspectedAsteroid",
+        }])
+        self.assertEqual(projected, 1)
+        self.assertIn("mining_sites", conn.calls[0][0])
+        self.assertIn("mining_yield_samples", conn.calls[1][0])
+        self.assertIn("mining_yield_materials", conn.calls[2][0])
+        self.assertIn("mining_yield_materials", conn.calls[3][0])
+
     def test_station_and_market_rows_are_serialized_for_jsonb(self):
         conn = RecordingConnection()
         projected = upsert_batch(

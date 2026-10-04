@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import hashlib
 from datetime import datetime, timezone
 from math import sqrt
 from typing import Any, Iterable
@@ -13,6 +14,9 @@ from .mining_commodities import RHINO_SURFACE, mining_commodity_id
 SPANSH_DUMP_URL = "https://spansh.co.uk/api/dump/{system_address}"
 EDFRAME_CATALOG_SITES_URL = (
     "https://vps-20b25c36.vps.ovh.net/v1/sites/search"
+)
+EDFRAME_YIELD_OBSERVATIONS_URL = (
+    "https://vps-20b25c36.vps.ovh.net/v1/yields/observations"
 )
 
 MINING_EVIDENCE_RANK = {
@@ -84,6 +88,15 @@ def project_edframe_mining_candidates(
             "reserveLevel": _text(source.get("reserveLevel")),
             "distanceToArrivalLs": source.get("distanceToArrivalLs"),
             "hotspots": _signal_rows(source.get("hotspots")),
+            "prospectorSampleCount": int(
+                source.get("prospectorSampleCount", 0) or 0
+            ),
+            "yieldAggregationScope": "COMMUNITY",
+            "yieldStats": [
+                dict(stat) for stat in (source.get("yieldStats") or [])
+                if isinstance(stat, dict)
+                and _commodity_id(stat.get("commodity"))
+            ],
             "evidence": _text(source.get("evidence")) or "LIVE_REPORTED",
             "observedAt": _text(source.get("observedAt")),
             "learnedAt": _text(source.get("receivedAt"))
@@ -111,6 +124,95 @@ def fetch_edframe_mining_candidates(
     response = get(EDFRAME_CATALOG_SITES_URL, params=params, timeout=timeout)
     response.raise_for_status()
     return project_edframe_mining_candidates(response.json(), origin)
+
+
+def project_local_yield_observations(
+    local_evidence: Any, *, exclude_keys: set[str] | None = None,
+    limit: int = 0,
+) -> list[dict[str, Any]]:
+    """Build the public, Commander-free subset of local prospector samples."""
+    if not isinstance(local_evidence, dict):
+        return []
+    candidates = [
+        row for row in (local_evidence.get("candidates") or [])
+        if isinstance(row, dict)
+    ]
+    by_site = {
+        _candidate_identity(row): row
+        for row in candidates
+        if _text(row.get("system")) and _text(row.get("ring"))
+    }
+    observations = []
+    for sample in local_evidence.get("prospectorSamples") or []:
+        if not isinstance(sample, dict) or not sample.get("boundToRing"):
+            continue
+        site = by_site.get(_candidate_identity(sample))
+        if site is None:
+            continue
+        materials = []
+        for material in sample.get("materials") or []:
+            if not isinstance(material, dict):
+                continue
+            commodity = _commodity_id(material.get("commodity"))
+            try:
+                proportion = float(material.get("proportion"))
+            except (TypeError, ValueError):
+                continue
+            if commodity and 0 <= proportion <= 100:
+                materials.append({
+                    "commodity": commodity,
+                    "proportion": round(proportion, 4),
+                })
+        if not materials:
+            continue
+        observation = {
+            "system": _text(site.get("system")),
+            "systemAddress": site.get("systemAddress"),
+            "coordinates": _coordinates(site.get("coordinates")),
+            "body": _text(site.get("body")),
+            "bodyId": site.get("bodyId"),
+            "ring": _text(site.get("ring")),
+            "ringType": _text(site.get("ringType")),
+            "reserveLevel": _text(site.get("reserveLevel")),
+            "distanceToArrivalLs": site.get("distanceToArrivalLs"),
+            "observedAt": _text(sample.get("observedAt")),
+            "materials": sorted(
+                materials, key=lambda row: row["commodity"]
+            ),
+        }
+        if exclude_keys and yield_observation_key(observation) in exclude_keys:
+            continue
+        observations.append(observation)
+        if limit > 0 and len(observations) >= limit:
+            break
+    return observations
+
+
+def yield_observation_key(observation: Any) -> str:
+    """Return a stable local receipt key without adding user identity."""
+    payload = json.dumps(
+        observation if isinstance(observation, dict) else {},
+        sort_keys=True, ensure_ascii=True, separators=(",", ":"),
+    )
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+
+def send_edframe_yield_observations(
+    observations: Iterable[dict[str, Any]], post: Any, timeout: int = 20,
+) -> dict[str, Any]:
+    """Send one bounded anonymous batch to the ED-Frame catalog."""
+    rows = [dict(row) for row in observations if isinstance(row, dict)]
+    if len(rows) > 100:
+        raise ValueError("A yield upload batch may contain at most 100 samples")
+    response = post(
+        EDFRAME_YIELD_OBSERVATIONS_URL,
+        json={"observations": rows}, timeout=timeout,
+    )
+    response.raise_for_status()
+    payload = response.json()
+    if not isinstance(payload, dict):
+        raise ValueError("ED-Frame yield service returned invalid data")
+    return payload
 
 
 def _text(value: Any) -> str:
@@ -350,11 +452,29 @@ def merge_mining_candidates(
             int(source.get("planetaryMiningLocationCount", 0) or 0)
             for source in observations
         )
-        strongest["prospectorSampleCount"] = sum(
+        community_observations = [
+            source for source in observations
+            if source.get("yieldAggregationScope") == "COMMUNITY"
+        ]
+        local_observations = [
+            source for source in observations
+            if source.get("yieldAggregationScope") != "COMMUNITY"
+        ]
+        community_samples = max((
             int(source.get("prospectorSampleCount", 0) or 0)
-            for source in observations
+            for source in community_observations
+        ), default=0)
+        local_samples = sum(
+            int(source.get("prospectorSampleCount", 0) or 0)
+            for source in local_observations
+        )
+        strongest["prospectorSampleCount"] = (
+            max(community_samples, local_samples)
+            if community_observations and local_observations
+            else community_samples + local_samples
         )
         yield_stats: dict[str, dict[str, Any]] = {}
+        stat_sources: dict[str, list[tuple[dict[str, Any], dict[str, Any]]]] = {}
         for source in observations:
             for stat in source.get("yieldStats") or []:
                 if not isinstance(stat, dict):
@@ -362,6 +482,42 @@ def merge_mining_candidates(
                 commodity = _commodity_id(stat.get("commodity"))
                 if not commodity:
                     continue
+                stat_sources.setdefault(commodity, []).append((source, stat))
+        selected_scope = ""
+        for commodity, entries in stat_sources.items():
+            community_entries = [
+                entry for entry in entries
+                if entry[0].get("yieldAggregationScope") == "COMMUNITY"
+            ]
+            local_entries = [
+                entry for entry in entries
+                if entry[0].get("yieldAggregationScope") != "COMMUNITY"
+            ]
+            measurement_entries = entries
+            if community_entries and local_entries:
+                community_best = max(community_entries, key=lambda entry: int(
+                    entry[1].get("proportionSamples",
+                                 entry[1].get("prospectorHits", 0)) or 0
+                ))
+                community_count = int(
+                    community_best[1].get(
+                        "proportionSamples",
+                        community_best[1].get("prospectorHits", 0),
+                    ) or 0
+                )
+                local_count = sum(int(
+                    stat.get("proportionSamples", stat.get(
+                        "prospectorHits", 0
+                    )) or 0
+                ) for _source, stat in local_entries)
+                measurement_entries = (
+                    [community_best]
+                    if community_count >= local_count else local_entries
+                )
+                selected_scope = (
+                    "COMMUNITY" if community_count >= local_count else "LOCAL"
+                )
+            for source, stat in measurement_entries:
                 combined = yield_stats.setdefault(commodity, {
                     "commodity": commodity,
                     "prospectorHits": 0,
@@ -384,9 +540,6 @@ def merge_mining_candidates(
                 combined["prospectorHits"] += hits
                 combined["proportionSamples"] += proportion_samples
                 combined["proportionTotal"] += float(proportion_total or 0)
-                combined["refinedCount"] += int(
-                    stat.get("refinedCount", 0) or 0
-                )
                 maximum = stat.get("maxProportion")
                 if maximum is not None:
                     maximum = float(maximum)
@@ -399,6 +552,12 @@ def merge_mining_candidates(
                     combined["lastObservedAt"],
                     _text(stat.get("lastObservedAt")),
                 )
+            combined = yield_stats[commodity]
+            combined["refinedCount"] = sum(
+                int(stat.get("refinedCount", 0) or 0)
+                for source, stat in entries
+                if source.get("yieldAggregationScope") != "COMMUNITY"
+            )
         strongest["yieldStats"] = []
         for commodity in sorted(yield_stats):
             stat = yield_stats[commodity]
@@ -409,6 +568,8 @@ def merge_mining_candidates(
             )
             stat["proportionTotal"] = round(stat["proportionTotal"], 3)
             strongest["yieldStats"].append(stat)
+        if selected_scope:
+            strongest["yieldAggregationScope"] = selected_scope
         strongest["learnedAt"] = max(
             (_text(source.get("learnedAt")) for source in observations),
             default="",
@@ -542,6 +703,7 @@ def project_local_mining_evidence(
                 "evidence": "LOCAL_CONFIRMED",
                 "observedAt": observed_at,
                 "source": source,
+                "yieldAggregationScope": "LOCAL",
             }
             rings[key] = row
             candidates.append(row)

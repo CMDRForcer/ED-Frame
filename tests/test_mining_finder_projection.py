@@ -15,9 +15,12 @@ from ed_companion.navigation.mining_finder import (
     mining_candidate_positions,
     mining_candidate_freshness,
     project_local_mining_evidence,
+    project_local_yield_observations,
     project_edframe_mining_candidates,
     project_spansh_mining_candidates,
     project_eddn_mining_candidates,
+    send_edframe_yield_observations,
+    yield_observation_key,
 )
 from ed_companion.navigation.mining_market_store import MarketCatalogStore
 from ed_companion.phase14.controller import CockpitController, _eddn_relay_relevant
@@ -29,6 +32,110 @@ FIXTURE = json.loads(Path(__file__).with_name("fixtures").joinpath(
 
 
 class MiningFinderProjectionTests(unittest.TestCase):
+    def test_yield_sharing_runs_off_thread_and_persists_receipt(self):
+        with TemporaryDirectory() as directory:
+            controller = CockpitController.__new__(CockpitController)
+            controller._edframe_yield_sharing_enabled = True
+            controller._edframe_yield_upload_busy = False
+            controller._shutdown_complete = False
+            controller._profile_generation = 4
+            controller.profile_context = Mock(key="alpha")
+            controller.edframe_yield_receipts_file = (
+                Path(directory) / "yield-receipts.json"
+            )
+            controller._edframe_yield_uploaded = set()
+            controller._edframe_catalog_log = []
+            controller.connectionChanged = Mock()
+            controller.edFrameYieldUploadFinished = Mock()
+            controller._state = {"localMiningEvidence": {
+                "candidates": [{
+                    "system": "Yield Test", "systemAddress": 7,
+                    "coordinates": [1, 2, 3],
+                    "ring": "Yield Test 2 A Ring", "bodyId": 11,
+                }],
+                "prospectorSamples": [{
+                    "system": "Yield Test", "systemAddress": 7,
+                    "ring": "Yield Test 2 A Ring", "bodyId": 11,
+                    "observedAt": "2026-10-03T08:01:00Z",
+                    "boundToRing": True,
+                    "materials": [{
+                        "commodity": "platinum", "proportion": 32.5,
+                    }],
+                }],
+            }}
+            workers = []
+            controller._start_network_worker = (
+                lambda target, _name: workers.append(target) or True
+            )
+
+            controller._maybe_share_mining_yields()
+
+            self.assertTrue(controller._edframe_yield_upload_busy)
+            self.assertEqual(len(workers), 1)
+            with patch(
+                "ed_companion.phase14.controller_navigation."
+                "send_edframe_yield_observations",
+                return_value={"accepted": 1, "rejected": 0},
+            ) as send:
+                workers[0]()
+            sent = send.call_args.args[0]
+            self.assertEqual(sent[0]["materials"][0]["commodity"], "platinum")
+            result = controller.edFrameYieldUploadFinished.emit.call_args.args[0]
+            with patch(
+                "ed_companion.phase14.controller_navigation.QTimer.singleShot"
+            ):
+                controller._finish_edframe_yield_upload(result)
+            receipt = json.loads(
+                controller.edframe_yield_receipts_file.read_text(
+                    encoding="utf-8"
+                )
+            )
+            self.assertEqual(len(receipt["uploaded"]), 1)
+            self.assertIn("Shared 1", controller._edframe_yield_upload_status)
+
+    def test_yield_upload_projection_is_commodity_neutral_and_private(self):
+        local = project_local_mining_evidence([{
+            "event": "Location", "StarSystem": "Yield Test",
+            "SystemAddress": 7, "StarPos": [1, 2, 3],
+        }, {
+            "event": "SupercruiseExit", "timestamp": "2026-10-03T08:00:00Z",
+            "StarSystem": "Yield Test", "SystemAddress": 7,
+            "Body": "Yield Test 2 A Ring", "BodyID": 11,
+            "BodyType": "PlanetaryRing",
+        }, {
+            "event": "ProspectedAsteroid", "timestamp": "2026-10-03T08:01:00Z",
+            "Materials": [
+                {"Name": "Platinum", "Proportion": 32.5},
+                {"Name": "Osmium", "Proportion": 11.25},
+            ],
+            "Commander": "must not upload", "Cargo": ["private"],
+        }])
+        rows = project_local_yield_observations(local)
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(
+            [item["commodity"] for item in rows[0]["materials"]],
+            ["osmium", "platinum"],
+        )
+        serialized = json.dumps(rows)
+        self.assertNotIn("must not upload", serialized)
+        self.assertNotIn("Cargo", serialized)
+        self.assertEqual(
+            yield_observation_key(rows[0]), yield_observation_key(rows[0])
+        )
+
+    def test_yield_sender_posts_only_one_bounded_public_batch(self):
+        response = Mock()
+        response.json.return_value = {"accepted": 1, "rejected": 0}
+        post = Mock(return_value=response)
+        payload = {"system": "Test", "ring": "Test A Ring"}
+        result = send_edframe_yield_observations([payload], post)
+        self.assertEqual(result["accepted"], 1)
+        post.assert_called_once()
+        self.assertEqual(
+            post.call_args.kwargs["json"], {"observations": [payload]}
+        )
+        response.raise_for_status.assert_called_once()
+
     def test_more_resources_reads_all_retained_commodity_markets(self):
         controller = CockpitController.__new__(CockpitController)
         controller._mining_find_page = Mock(return_value=[])
@@ -1619,6 +1726,35 @@ class MiningFinderProjectionTests(unittest.TestCase):
         )
         self.assertEqual(merged["yieldStats"][0]["maxProportion"], 35.0)
         self.assertEqual(merged["yieldStats"][0]["refinedCount"], 5)
+
+    def test_community_yield_does_not_double_count_the_local_contributor(self):
+        common = {
+            "system": "Merge Test", "systemAddress": 9,
+            "ring": "Merge Test A Ring", "evidence": "LOCAL_CONFIRMED",
+            "hotspots": [],
+        }
+        local = {
+            **common, "yieldAggregationScope": "LOCAL",
+            "prospectorSampleCount": 2, "yieldStats": [{
+                "commodity": "platinum", "prospectorHits": 2,
+                "proportionSamples": 2, "proportionTotal": 50.0,
+                "averageProportion": 25.0, "maxProportion": 30.0,
+                "refinedCount": 1,
+            }],
+        }
+        community = {
+            **common, "yieldAggregationScope": "COMMUNITY",
+            "prospectorSampleCount": 2, "yieldStats": [{
+                "commodity": "platinum", "prospectorHits": 2,
+                "proportionSamples": 2, "proportionTotal": 50.0,
+                "averageProportion": 25.0, "maxProportion": 30.0,
+            }],
+        }
+        merged = merge_mining_candidates([local, community], now=self.NOW)[0]
+        self.assertEqual(merged["prospectorSampleCount"], 2)
+        self.assertEqual(merged["yieldStats"][0]["proportionSamples"], 2)
+        self.assertEqual(merged["yieldStats"][0]["averageProportion"], 25.0)
+        self.assertEqual(merged["yieldStats"][0]["refinedCount"], 1)
 
     def test_spansh_dump_projects_catalog_candidate_and_source_timestamp(self):
         candidates = project_spansh_mining_candidates(

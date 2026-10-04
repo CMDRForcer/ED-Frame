@@ -207,6 +207,85 @@ def upsert_batch(
     return projected
 
 
+def upsert_yield_observations(
+    conn: psycopg.Connection,
+    observations: Iterable[dict[str, Any]],
+) -> int:
+    """Retain de-duplicated anonymous Journal prospector observations."""
+    projected = 0
+    for row in observations:
+        conn.execute(
+            """
+            INSERT INTO mining_sites
+                (identity, system_address, system_name, x, y, z, body_id,
+                 body_name, ring_name, ring_type, reserve_level,
+                 distance_to_arrival_ls, hotspots, evidence, source,
+                 observed_at, received_at)
+            VALUES
+                (%(site_identity)s, %(system_address)s, %(system_name)s,
+                 %(x)s, %(y)s, %(z)s, %(body_id)s, %(body_name)s,
+                 %(ring_name)s, %(ring_type)s, %(reserve_level)s,
+                 %(distance_to_arrival_ls)s, '[]'::jsonb, 'LIVE_REPORTED',
+                 'ED-Frame community yield', %(observed_at)s,
+                 %(received_at)s)
+            ON CONFLICT (identity) DO UPDATE SET
+                system_address = COALESCE(
+                    EXCLUDED.system_address, mining_sites.system_address
+                ),
+                x = COALESCE(EXCLUDED.x, mining_sites.x),
+                y = COALESCE(EXCLUDED.y, mining_sites.y),
+                z = COALESCE(EXCLUDED.z, mining_sites.z),
+                body_id = COALESCE(EXCLUDED.body_id, mining_sites.body_id),
+                body_name = COALESCE(
+                    NULLIF(EXCLUDED.body_name, ''), mining_sites.body_name
+                ),
+                ring_type = COALESCE(
+                    NULLIF(EXCLUDED.ring_type, ''), mining_sites.ring_type
+                ),
+                reserve_level = COALESCE(
+                    NULLIF(EXCLUDED.reserve_level, ''),
+                    mining_sites.reserve_level
+                ),
+                distance_to_arrival_ls = COALESCE(
+                    EXCLUDED.distance_to_arrival_ls,
+                    mining_sites.distance_to_arrival_ls
+                ),
+                observed_at = GREATEST(
+                    EXCLUDED.observed_at, mining_sites.observed_at
+                ),
+                received_at = GREATEST(
+                    EXCLUDED.received_at, mining_sites.received_at
+                )
+            """,
+            row,
+        )
+        conn.execute(
+            """
+            INSERT INTO mining_yield_samples
+                (sample_id, site_identity, system_address, system_name,
+                 ring_name, body_id, observed_at, received_at, source)
+            VALUES
+                (%(sample_id)s, %(site_identity)s, %(system_address)s,
+                 %(system_name)s, %(ring_name)s, %(body_id)s,
+                 %(observed_at)s, %(received_at)s, %(source)s)
+            ON CONFLICT (sample_id) DO NOTHING
+            """,
+            row,
+        )
+        for commodity, proportion in (row.get("materials") or {}).items():
+            conn.execute(
+                """
+                INSERT INTO mining_yield_materials
+                    (sample_id, commodity, proportion)
+                VALUES (%s, %s, %s)
+                ON CONFLICT (sample_id, commodity) DO NOTHING
+                """,
+                (row["sample_id"], commodity, proportion),
+            )
+        projected += 1
+    return projected
+
+
 def upsert_state_find_batch(
     conn: psycopg.Connection,
     snapshots: Iterable[dict[str, Any]],

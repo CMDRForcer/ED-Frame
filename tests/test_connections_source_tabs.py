@@ -59,6 +59,13 @@ class ConnectionSourceTabTests(unittest.TestCase):
         ).read_text(encoding="utf-8")
         self.assertIn('"CATALOG SYNC"', controller_source)
 
+    def test_edframe_yield_sharing_is_explicit_and_separate(self):
+        qml = (ROOT / "Main.qml").read_text(encoding="utf-8")
+        self.assertIn("cockpit.edFrameYieldSharingEnabled", qml)
+        self.assertIn("cockpit.setEdFrameYieldSharingEnabled(checked)", qml)
+        self.assertIn("Commander name, cargo and Journal path", qml)
+        self.assertIn("cockpit.edFrameCatalogEnabled", qml)
+
 
 if __name__ == "__main__":
     unittest.main()

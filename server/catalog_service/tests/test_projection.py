@@ -8,6 +8,7 @@ from edframe_catalog.projection import (
     project_system,
     project_state_bgs_snapshot,
     project_state_signals,
+    project_yield_observations,
     projected_systems,
     schema_name,
 )
@@ -28,6 +29,43 @@ def commodity(name, *, sell_price=0, demand=0, status_flags=None):
 
 
 class ProjectionTests(unittest.TestCase):
+    def test_yield_observations_are_anonymous_validated_and_deduplicated(self):
+        observation = {
+            "system": "Yield Test", "systemAddress": 7,
+            "coordinates": [1, 2, 3], "body": "Yield Test 2",
+            "bodyId": 11, "ring": "Yield Test 2 A Ring",
+            "ringType": "Metallic", "reserveLevel": "PristineResources",
+            "observedAt": "2026-10-03T08:00:00Z",
+            "materials": [
+                {"commodity": "Platinum", "proportion": 32.5},
+                {"commodity": "Osmium", "proportion": 11.25},
+            ],
+            "commander": "must not survive",
+            "journalPath": "must not survive",
+        }
+        rows = project_yield_observations(
+            {"observations": [observation, observation]},
+            "2026-10-03T08:00:01Z",
+        )
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]["materials"], {
+            "platinum": 32.5, "osmium": 11.25,
+        })
+        serialized = json.dumps(rows[0])
+        self.assertNotIn("must not survive", serialized)
+        self.assertNotIn("commander", serialized.casefold())
+
+    def test_yield_observations_reject_missing_materials_and_bad_time(self):
+        self.assertEqual(project_yield_observations({"observations": [{
+            "system": "Yield Test", "ring": "Yield Test A Ring",
+            "observedAt": "2026-10-03T08:00:00Z", "materials": [],
+        }]}, "2026-10-03T08:00:01Z"), [])
+        self.assertEqual(project_yield_observations({"observations": [{
+            "system": "Yield Test", "ring": "Yield Test A Ring",
+            "observedAt": "2040-10-03T08:00:00Z",
+            "materials": [{"commodity": "Platinum", "proportion": 20}],
+        }]}, "2026-10-03T08:00:01Z"), [])
+
     def test_schema_name_uses_only_contract_tail(self):
         self.assertEqual(
             schema_name({

@@ -9,6 +9,9 @@ anonymous public catalog facts ED-Frame can reuse:
   carrier access when the source message supplies those fields;
 - public ring and hotspot observations projected through ED-Frame's existing
   mining evidence contract;
+- opt-in, anonymous `ProspectedAsteroid` material percentages from ED-Frame,
+  de-duplicated by site, timestamp and material payload so measured yield can
+  gradually replace hotspot/reserve estimates for every mining commodity;
 - complete public `commodity/3` rows for every commodity: mean, buy and sell
   prices, stock, demand, brackets, status flags, observation time and receipt
   time.
@@ -26,8 +29,10 @@ station messages retain richer facts already observed. Schema changes are
 idempotent and do not clear existing tables or rows.
 
 It does not accept or store Commander names, FIDs, private groups, cargo,
-Journal files, builds, wishlists, credentials or tokens. PostgreSQL is reachable
-only by the private Compose network. The public surface is a read-only HTTPS API.
+Journal files or paths, builds, wishlists, credentials or tokens. PostgreSQL is
+reachable only by the private Compose network. The public surface is read-only
+except for the bounded, rate-limited yield-observation endpoint; sharing through
+that endpoint is disabled by default in ED-Frame and requires explicit consent.
 
 ## Production deployment
 
@@ -60,6 +65,7 @@ removed. Mining evidence and system geography are deliberately retained.
 - `GET /v1/sync/markets`
 - `GET /v1/sync/station-offers`
 - `GET /v1/sync/state-finds`
+- `POST /v1/yields/observations` (maximum 100 anonymous observations per batch)
 
 Market and site search accept optional `x`, `y`, `z` and `max_distance`
 parameters. This keeps route-radius filtering on the server while preserving

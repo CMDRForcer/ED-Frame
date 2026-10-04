@@ -7876,6 +7876,17 @@ ApplicationWindow {
                                 Label {
                                     visible: cockpit.edFrameCatalogOnline
                                     text: window.tf(
+                                        "connections.edframe_yield_counts",
+                                        "MEASURED YIELD · %1 SAMPLES · %2 SITES · %3 COMMODITIES",
+                                        [cockpit.edFrameCatalogStats.yieldSamples || 0,
+                                         cockpit.edFrameCatalogStats.measuredSites || 0,
+                                         cockpit.edFrameCatalogStats.measuredCommodities || 0])
+                                    color: textPrimary; font.pixelSize: 9; font.bold: true
+                                    wrapMode: Text.WordWrap; Layout.fillWidth: true
+                                }
+                                Label {
+                                    visible: cockpit.edFrameCatalogOnline
+                                    text: window.tf(
                                         "connections.edframe_state_counts",
                                         "STATE FINDS · %1 CURRENT BGS SNAPSHOTS · %2 LIVE SIGNALS",
                                         [cockpit.edFrameCatalogStats.stateBgsSnapshots || 0,
@@ -7975,6 +7986,29 @@ ApplicationWindow {
                                                  && !cockpit.edFrameStateFindSyncBusy
                                         onClicked: cockpit.refreshEdFrameCatalogStatus()
                                     }
+                                }
+                                CheckBox {
+                                    Layout.fillWidth: true
+                                    text: window.t(
+                                        "connections.edframe_share_yield",
+                                        "Share anonymous Prospector yield measurements with the ED-Frame community catalog")
+                                    checked: cockpit.edFrameYieldSharingEnabled
+                                    onToggled: cockpit.setEdFrameYieldSharingEnabled(checked)
+                                }
+                                Label {
+                                    Layout.fillWidth: true
+                                    text: window.t(
+                                        "connections.edframe_share_yield_privacy",
+                                        "Only public system, ring, timestamp, commodity and percentage data is sent. Commander name, cargo and Journal path are never included.")
+                                    color: muted; font.pixelSize: 9
+                                    wrapMode: Text.WordWrap
+                                }
+                                Label {
+                                    Layout.fillWidth: true
+                                    text: cockpit.edFrameYieldUploadStatus
+                                    color: cockpit.edFrameYieldUploadBusy ? cyan : textSecondary
+                                    font.pixelSize: 9; font.bold: true
+                                    wrapMode: Text.WordWrap
                                 }
                                 Rectangle {
                                     Layout.fillWidth: true

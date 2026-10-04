@@ -391,6 +391,85 @@ def project_markets(
     return result
 
 
+def _mining_site_identity(
+    system_address: Any, system_name: Any, body_id: Any, ring_name: Any,
+) -> str:
+    identity_source = "|".join((
+        str(system_address or system_name).strip().casefold(),
+        str(body_id or ""),
+        str(ring_name or "").strip().casefold(),
+    ))
+    return hashlib.sha256(identity_source.encode("utf-8")).hexdigest()
+
+
+def project_yield_observations(
+    payload: Any, received_at: str,
+) -> list[dict[str, Any]]:
+    """Validate anonymous Journal prospector samples for public aggregation."""
+    observations = payload.get("observations") if isinstance(payload, dict) else None
+    if not isinstance(observations, list) or len(observations) > 100:
+        return []
+    received = _timestamp(received_at) or datetime.now(timezone.utc)
+    result = []
+    seen = set()
+    for source in observations:
+        if not isinstance(source, dict):
+            continue
+        system = str(source.get("system") or "").strip()
+        ring = str(source.get("ring") or "").strip()
+        observed = _timestamp(source.get("observedAt"))
+        if (
+            not system or not ring or observed is None
+            or observed > received + timedelta(minutes=5)
+            or observed < received - timedelta(days=3650)
+        ):
+            continue
+        address = _integer(source.get("systemAddress"))
+        body_id = _integer(source.get("bodyId"))
+        x, y, z = _coordinates(source.get("coordinates"))
+        materials = {}
+        for material in source.get("materials") or []:
+            if not isinstance(material, dict):
+                continue
+            commodity = mining_commodity_id(material.get("commodity"))
+            proportion = _number(material.get("proportion"))
+            if not commodity or proportion is None or not 0 <= proportion <= 100:
+                continue
+            materials[commodity] = round(proportion, 4)
+        if not materials:
+            continue
+        site_identity = _mining_site_identity(address, system, body_id, ring)
+        sample_payload = json.dumps({
+            "site": site_identity,
+            "observedAt": observed.isoformat(),
+            "materials": sorted(materials.items()),
+        }, ensure_ascii=True, separators=(",", ":"))
+        sample_id = hashlib.sha256(sample_payload.encode("utf-8")).hexdigest()
+        if sample_id in seen:
+            continue
+        seen.add(sample_id)
+        result.append({
+            "sample_id": sample_id,
+            "site_identity": site_identity,
+            "system_address": address,
+            "system_name": system,
+            "x": x, "y": y, "z": z,
+            "body_id": body_id,
+            "body_name": str(source.get("body") or "").strip(),
+            "ring_name": ring,
+            "ring_type": str(source.get("ringType") or "").strip(),
+            "reserve_level": str(source.get("reserveLevel") or "").strip(),
+            "distance_to_arrival_ls": _number(
+                source.get("distanceToArrivalLs")
+            ),
+            "materials": materials,
+            "observed_at": observed.isoformat(),
+            "received_at": received.isoformat(),
+            "source": "ED-Frame Journal · ProspectedAsteroid",
+        })
+    return result
+
+
 def project_sites(
     payload: dict[str, Any], received_at: str,
 ) -> list[dict[str, Any]]:
@@ -402,13 +481,10 @@ def project_sites(
             continue
         coordinates = row.get("coordinates") or []
         x, y, z = _coordinates(coordinates)
-        identity_source = "|".join((
-            str(row.get("systemAddress") or system).casefold(),
-            str(row.get("bodyId") or ""),
-            ring.casefold(),
-        ))
         result.append({
-            "identity": hashlib.sha256(identity_source.encode("utf-8")).hexdigest(),
+            "identity": _mining_site_identity(
+                row.get("systemAddress"), system, row.get("bodyId"), ring,
+            ),
             "system_address": row.get("systemAddress"),
             "system_name": system,
             "x": x,

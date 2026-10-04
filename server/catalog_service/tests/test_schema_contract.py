@@ -38,6 +38,10 @@ class SchemaContractTests(unittest.TestCase):
         self.assertIn("CREATE TABLE IF NOT EXISTS station_shipyards", schema)
         self.assertIn("station_outfitting_modules_idx", schema)
         self.assertIn("station_shipyards_ships_idx", schema)
+        self.assertIn("CREATE TABLE IF NOT EXISTS mining_yield_samples", schema)
+        self.assertIn("CREATE TABLE IF NOT EXISTS mining_yield_materials", schema)
+        self.assertIn("mining_yield_samples_site_idx", schema)
+        self.assertIn("mining_yield_materials_commodity_idx", schema)
 
     def test_public_api_exposes_station_and_full_market_contract(self):
         source = (SERVICE / "edframe_catalog" / "api.py").read_text(
@@ -66,6 +70,9 @@ class SchemaContractTests(unittest.TestCase):
         self.assertIn('AS "moduleOffer"', source)
         self.assertIn("priced_module_offers", source)
         self.assertIn("y.ships @> %s::jsonb", source)
+        self.assertIn('@app.post("/v1/yields/observations")', source)
+        self.assertIn('AS "prospectorSampleCount"', source)
+        self.assertIn('AS "yieldStats"', source)
 
 
 if __name__ == "__main__":

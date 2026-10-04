@@ -246,6 +246,22 @@ Item {
         if (seconds < 3600) return Math.round(seconds / 60) + " MIN"
         return Math.round(seconds / 3600) + " H"
     }
+    function yieldQuality(row) {
+        if (row && row.yieldMeasured) {
+            let average = Number(row.yieldAverageProportion || 0)
+                    .toLocaleString(Qt.locale(), "f", 1) + "%"
+            return average + " · " + formatNumber(row.yieldHitCount)
+                    + "/" + formatNumber(row.yieldSampleCount)
+        }
+        return row && row.yieldStars ? String(row.yieldStars) : "—"
+    }
+    function yieldEvidence(row) {
+        if (!row) return "—"
+        let evidence = String(row.yieldEvidenceLabel || "")
+        let mining = String(row.targetMatchName || "")
+        return evidence && mining && evidence !== mining
+                ? evidence + " · " + mining : (evidence || mining || "—")
+    }
     function marketName(row) {
         if (!row.marketKnown && row.sameSystemSaleRequired)
             return appWindow.t("mining.market_same_system_missing", "NO VERIFIED SAME-SYSTEM MARKET")
@@ -1308,7 +1324,10 @@ Item {
                     Layout.fillWidth: true; columns: 4; columnSpacing: 7
                     Repeater {
                         model: [
-                            {"label": appWindow.t("mining.yield_quality", "YIELD QUALITY"), "value": bestRoute.yieldStars},
+                            {"label": bestRoute.yieldMeasured
+                                      ? appWindow.t("mining.yield_measured", "MEASURED YIELD")
+                                      : appWindow.t("mining.yield_quality", "YIELD ESTIMATE"),
+                             "value": yieldQuality(bestRoute)},
                             {"label": appWindow.t("mining.profitability", "PROFITABILITY"), "value": bestRoute.profitStars},
                             {"label": appWindow.t("mining.merit_fit", "MERIT SUITABILITY"), "value": bestRoute.meritStars},
                             {"label": appWindow.t("mining.data_confidence", "DATA CONFIDENCE"), "value": bestRoute.dataStars}
@@ -1357,7 +1376,7 @@ Item {
                 Repeater {
                     model: [
                         {"ok": bestRoute.meritKnown, "title": appWindow.t("mining.reason_merit", "Powerplay suitability"), "detail": (bestRoute.meritKnown || (bestRoute.sameSystemSaleRequired && !bestRoute.marketKnown)) ? bestRoute.meritStatus : (miningFinderPage.marketFiltersBlockRoute() ? appWindow.t("mining.reason_merit_filtered", "Unknown — active market filters leave no sell route to verify") : appWindow.t("mining.reason_merit_unknown", "Unknown — no merit claim is made"))},
-                        {"ok": bestRoute.targetMatch === "LOCAL_YIELD" || bestRoute.targetMatch === "HOTSPOT", "title": appWindow.t("mining.reason_method", "Mining evidence"), "detail": bestRoute.targetMatchName || "—"},
+                        {"ok": bestRoute.targetMatch === "LOCAL_YIELD" || bestRoute.targetMatch === "HOTSPOT", "title": appWindow.t("mining.reason_method", "Mining evidence"), "detail": yieldEvidence(bestRoute)},
                         {"ok": bestRoute.marketKnown, "title": appWindow.t("mining.reason_market", "Market demand"), "detail": bestRoute.marketKnown ? String(bestRoute.marketQualityStatus || "MARKET KNOWN") + " · " + (bestRoute.demandInfinite ? "∞" : formatNumber(bestRoute.demand) + " T") + " · " + String(bestRoute.marketSource || "EDDN") : miningFinderPage.marketDetail(bestRoute)},
                         {"ok": !bestRoute.stale, "title": appWindow.t("mining.reason_age", "Data freshness"), "detail": bestRoute.confirmationStatus || "—"}
                     ]
