@@ -3,6 +3,7 @@ import os
 from pathlib import Path
 import sqlite3
 from tempfile import TemporaryDirectory
+import threading
 import time
 import unittest
 from unittest.mock import patch
@@ -49,6 +50,28 @@ class MiningMarketStoreTests(unittest.TestCase):
 
             self.assertTrue(store.checkpoint())
             self.assertFalse(store.backup_path.exists())
+
+    def test_idle_checkpoint_never_waits_for_an_active_catalog_writer(self):
+        with TemporaryDirectory() as directory:
+            store = MarketCatalogStore(Path(directory, "market.sqlite3"))
+            locked = threading.Event()
+            release = threading.Event()
+
+            def hold_store_lock():
+                with store._lock:
+                    locked.set()
+                    release.wait(timeout=1)
+
+            worker = threading.Thread(target=hold_store_lock, daemon=True)
+            worker.start()
+            self.assertTrue(locked.wait(timeout=1))
+            started = time.monotonic()
+            try:
+                self.assertFalse(store.checkpoint_if_idle())
+                self.assertLess(time.monotonic() - started, 0.1)
+            finally:
+                release.set()
+                worker.join(timeout=1)
 
     def test_station_offers_merge_independent_inventories_and_survive_restart(self):
         with TemporaryDirectory() as directory:

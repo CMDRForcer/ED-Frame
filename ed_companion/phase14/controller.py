@@ -313,6 +313,15 @@ def _wishlist_unexpectedly_empty(state: dict) -> bool:
 # the 25 s transport timeout, with margin.
 FRONTIER_REQUEST_WATCHDOG_MS = 120_000
 
+# Closing previously waited up to 1.5 s for the EDDN listener and then up to
+# another 3 s for unrelated workers.  Use one shared grace window so a slow
+# network request cannot make Windows report the app as hung during exit.
+SHUTDOWN_GRACE_SECONDS = 1.5
+SHUTDOWN_PRIORITY_WORKER_PREFIXES = (
+    "hge-cache-save", "mining-catalog-save",
+    "initial-journal-state", "journal-state-",
+)
+
 
 class CockpitController(
     CommanderMixin, EddnMixin, EngineeringMixin, ExobiologyMixin,
@@ -2855,16 +2864,22 @@ class CockpitController(
             timer = getattr(self, timer_name, None)
             if timer is not None:
                 timer.stop()
+        deadline = time.monotonic() + SHUTDOWN_GRACE_SECONDS
         self._eddn_stop.set()
         thread = self._eddn_thread
         if (
             thread and thread.is_alive()
             and thread is not threading.current_thread()
         ):
-            thread.join(timeout=1.5)
-        deadline = time.monotonic() + 3.0
+            thread.join(timeout=max(0.0, deadline - time.monotonic()))
         with self._network_threads_lock:
             network_threads = list(self._network_threads)
+        network_threads.sort(key=lambda worker: (
+            0 if worker.name.startswith(
+                SHUTDOWN_PRIORITY_WORKER_PREFIXES
+            ) else 1,
+            worker.name,
+        ))
         for worker in network_threads:
             remaining = deadline - time.monotonic()
             if remaining <= 0:
@@ -2883,12 +2898,12 @@ class CockpitController(
             # The primary SQLite database is already durable (WAL + FULL).
             # Copying a multi-gigabyte recovery snapshot synchronously here
             # made closing appear frozen and duplicated a recent background
-            # backup.  A quick checkpoint is enough; if a background snapshot
-            # is still running, do not wait on its store lock during shutdown.
+            # backup. A quick checkpoint is enough; never wait on its store
+            # lock while ingestion is finishing, and skip it during backup.
             if store is not None and not getattr(
                 self, "_mining_market_backup_running", False
             ):
-                store.checkpoint()
+                store.checkpoint_if_idle()
         except OSError as exc:
             LOGGER.warning("Final shutdown save failed: %s", exc)
 

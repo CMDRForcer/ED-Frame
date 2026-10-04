@@ -1288,6 +1288,15 @@ class MarketCatalogStore:
             )
             return False
 
+    def checkpoint_if_idle(self) -> bool:
+        """Checkpoint only when no catalog operation owns the store lock."""
+        if not self._lock.acquire(blocking=False):
+            return False
+        try:
+            return self.checkpoint()
+        finally:
+            self._lock.release()
+
     def backup(self) -> bool:
         temporary = self.backup_path.with_name(self.backup_path.name + ".tmp")
         self.backup_path.parent.mkdir(parents=True, exist_ok=True)

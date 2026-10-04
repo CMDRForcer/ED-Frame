@@ -68,7 +68,8 @@ class ShutdownWaitsForInFlightRefreshTests(unittest.TestCase):
 
         controller.shutdown()
 
-        store.checkpoint.assert_called_once_with()
+        store.checkpoint_if_idle.assert_called_once_with()
+        store.checkpoint.assert_not_called()
         store.backup.assert_not_called()
 
     def test_shutdown_does_not_wait_on_running_catalog_backup(self):
@@ -79,8 +80,28 @@ class ShutdownWaitsForInFlightRefreshTests(unittest.TestCase):
 
         controller.shutdown()
 
+        store.checkpoint_if_idle.assert_not_called()
         store.checkpoint.assert_not_called()
         store.backup.assert_not_called()
+
+    def test_shutdown_uses_one_bounded_grace_window_for_slow_workers(self):
+        controller = self._controller()
+        controller._eddn_thread = threading.Thread(
+            target=lambda: time.sleep(0.3), daemon=True,
+            name="eddn-relay-test",
+        )
+        controller._eddn_thread.start()
+        controller._start_network_worker(
+            lambda: time.sleep(0.3), "frontier-capi-profile",
+        )
+
+        started = time.monotonic()
+        with mock.patch(
+            "ed_companion.phase14.controller.SHUTDOWN_GRACE_SECONDS", 0.05,
+        ):
+            controller.shutdown()
+
+        self.assertLess(time.monotonic() - started, 0.2)
 
 
 if __name__ == "__main__":
