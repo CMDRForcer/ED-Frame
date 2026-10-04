@@ -476,18 +476,29 @@ Item {
     function executeSearch() {
         applySearch()
         searchGoalExpanded = false
+        // Snapshot typed values before yielding. The page may be reloaded or
+        // navigated away from before callLater runs; reading its properties
+        // from the delayed closure would then pass undefined to the C++ slot.
+        let verificationRoutes = []
+        for (let index = 0; index < resultRows.length; ++index)
+            verificationRoutes.push(resultRows[index])
+        let verificationStartSystem = String(appliedStartSystem || "")
+        let verificationCommodity = String(appliedCommodityFilter || "")
+        let verificationMaxAge = Number(appliedMaxMarketAgeHours || 0)
+        let verificationMinDemand = Number(appliedMinDemand || 0)
+        let verificationLandingPad = String(appliedLandingPad || "ANY")
         cockpit.refreshMiningMarkets(
                     appliedStartSystem, appliedCommodityFilter,
                     appliedNearbyLy, appliedMinDemand,
                     appliedMaxMarketAgeHours, appliedLandingPad)
         Qt.callLater(function() {
             cockpit.verifyMiningRoutes(
-                        miningFinderPage.resultRows,
-                        miningFinderPage.appliedStartSystem,
-                        miningFinderPage.appliedCommodityFilter,
-                        miningFinderPage.appliedMaxMarketAgeHours,
-                        miningFinderPage.appliedMinDemand,
-                        miningFinderPage.appliedLandingPad)
+                        verificationRoutes,
+                        verificationStartSystem,
+                        verificationCommodity,
+                        verificationMaxAge,
+                        verificationMinDemand,
+                        verificationLandingPad)
         })
         _miningRevisionSnapshot = cockpit.miningRevision
     }
