@@ -1485,6 +1485,11 @@ class MiningFinderProjectionTests(unittest.TestCase):
                 "id": "warm", "profileKey": "alpha", "generation": 3,
                 "path": "market-cache.json", "success": True,
                 "query": warm_query, "origin": {},
+                "providerStatus": {
+                    "ED-Frame": "OK (1 rows)",
+                    "Ardent": "OK (1 rows)",
+                    "EDData": "NOT NEEDED",
+                },
                 "markets": [{
                     "commodity": "painite", "station": "Warm Port",
                     "system": "Cubeo", "marketId": 9,
@@ -1502,6 +1507,15 @@ class MiningFinderProjectionTests(unittest.TestCase):
             )
             controller._persist_json.assert_not_called()
             controller._mining_market_retry_timer.start.assert_called_with(60000)
+            self.assertIn(
+                "ED-Frame OK (1 rows)", controller._mining_market_status,
+            )
+            self.assertIn(
+                "Ardent OK (1 rows)", controller._mining_market_status,
+            )
+            self.assertIn(
+                "EDData NOT NEEDED", controller._mining_market_status,
+            )
 
     def test_known_mining_origin_prefers_journal_then_cached_edsm(self):
         controller = CockpitController.__new__(CockpitController)

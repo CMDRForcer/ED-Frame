@@ -153,6 +153,7 @@ from ed_companion.navigation.mining_market import (
     fetch_edsm_system_coordinates,
     fetch_market_imports,
     latest_market_rows,
+    market_provider_status_summary,
     nearby_catalog_markets,
     project_local_market_snapshot,
 )
@@ -3399,6 +3400,7 @@ class NavigationMixin:
                         )
                     except Exception as exc:
                         result["originError"] = str(exc)
+            provider_status = {}
             try:
                 hours = max(1, query["maxMarketAgeHours"])
                 result["markets"] = fetch_market_imports(
@@ -3410,10 +3412,15 @@ class NavigationMixin:
                     include_edframe=getattr(
                         self, "_edframe_catalog_enabled", True,
                     ),
+                    provider_status=provider_status,
                 )
+                result["providerStatus"] = provider_status
                 result["success"] = True
             except Exception as exc:
-                result.update({"success": False, "error": str(exc)})
+                result.update({
+                    "success": False, "error": str(exc),
+                    "providerStatus": provider_status,
+                })
             self.miningMarketFinished.emit(result)
 
         if not self._start_network_worker(worker, "mining-market-sync"):
@@ -3659,10 +3666,17 @@ class NavigationMixin:
             f"{warm_summary.get('total', 0)} warm"
             if warm_summary.get("total") else ""
         )
+        provider_status = result.get("providerStatus")
+        provider_summary = (
+            market_provider_status_summary(provider_status)
+            if isinstance(provider_status, dict) and provider_status else ""
+        )
         self._mining_market_status = (
-            ("Catalog warmed" if background else "EDDN market data updated")
+            ("Catalog warmed" if background
+             else "Community market data updated")
             + f" · {len(markets)} nearby · {retained} retained"
             + warm_progress
+            + (f" · {provider_summary}" if provider_summary else "")
         )
         launched_pending = self._launch_pending_mining_market_refresh()
         if not launched_pending and retry_timer is not None and not getattr(

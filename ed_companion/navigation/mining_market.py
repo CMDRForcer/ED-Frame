@@ -24,8 +24,8 @@ EDDATA_API_BASE = "https://api.eddata.dev/v2"
 EDSM_SYSTEM_URL = "https://www.edsm.net/api-v1/system"
 EDFRAME_CATALOG_BASE = "https://vps-20b25c36.vps.ovh.net"
 MARKET_API_BASES = (
-    (ARDENT_API_BASE, "Ardent API · EDDN commodity/3"),
-    (EDDATA_API_BASE, "EDData API · EDDN commodity/3"),
+    (ARDENT_API_BASE, "Ardent", "Ardent API · EDDN commodity/3"),
+    (EDDATA_API_BASE, "EDData", "EDData API · EDDN commodity/3"),
 )
 # Kept as the generic public adapter label for callers and old tests.
 EDDATA_MARKET_SOURCE = "EDDN commodity market index"
@@ -36,6 +36,26 @@ MARKET_CATALOG_MAX_ROWS = 20000
 
 class MiningMarketError(RuntimeError):
     """A concise, user-displayable market lookup failure."""
+
+
+def _market_provider_error(exc: Exception) -> str:
+    response = getattr(exc, "response", None)
+    status = getattr(response, "status_code", None)
+    if status:
+        return f"HTTP {status}"
+    name = type(exc).__name__
+    if "timeout" in name.casefold():
+        return "TIMEOUT"
+    return name
+
+
+def market_provider_status_summary(statuses: Any) -> str:
+    """Return a stable, user-readable status for each market source."""
+    values = statuses if isinstance(statuses, dict) else {}
+    return " · ".join(
+        f"{name} {str(values.get(name) or 'NOT CHECKED')}"
+        for name in ("ED-Frame", "Ardent", "EDData")
+    )
 
 
 def fetch_edframe_catalog_status(*, get: Any, timeout: int = 12) -> dict[str, Any]:
@@ -590,6 +610,7 @@ def fetch_market_imports(
     timeout: int = 20,
     include_edframe: bool = True,
     landing_pad: str = "ANY",
+    provider_status: dict[str, str] | None = None,
 ) -> list[dict[str, Any]]:
     """Fetch nearby sell markets without sending Commander-identifying data."""
     system = str(start_system or "").strip()
@@ -598,8 +619,15 @@ def fetch_market_imports(
         raise MiningMarketError("Start system and commodity are required")
     distance = max(1, min(1000, int(max_distance or 1)))
     days = max(1, min(14, int(max_days_ago or 1)))
-    errors = []
+    statuses = provider_status if provider_status is not None else {}
+    statuses.clear()
+    statuses.update({
+        "ED-Frame": "NOT CHECKED" if include_edframe else "DISABLED",
+        "Ardent": "NOT CHECKED",
+        "EDData": "NOT CHECKED",
+    })
     central_rows = []
+    central_succeeded = False
     if include_edframe:
         try:
             central_rows = _fetch_edframe_catalog_markets(
@@ -607,9 +635,15 @@ def fetch_market_imports(
                 max_days_ago=days, landing_pad=landing_pad,
                 get=get, timeout=timeout,
             )
+            central_succeeded = True
+            statuses["ED-Frame"] = f"OK ({len(central_rows)} rows)"
         except Exception as exc:
-            errors.append(f"ED-Frame live catalog: {type(exc).__name__}")
-    for base_url, source_label in MARKET_API_BASES:
+            statuses["ED-Frame"] = (
+                f"UNAVAILABLE ({_market_provider_error(exc)})"
+            )
+    for index, (base_url, provider_name, source_label) in enumerate(
+        MARKET_API_BASES
+    ):
         url = (
             f"{base_url}/system/name/{quote(system, safe='')}"
             f"/commodity/name/{quote(commodity_id, safe='')}/nearby/imports"
@@ -633,11 +667,17 @@ def fetch_market_imports(
                 response.json(), commodity_id,
                 source=source_label, source_url=base_url,
             )
+            statuses[provider_name] = f"OK ({len(provider_rows)} rows)"
+            for _, remaining_name, _ in MARKET_API_BASES[index + 1:]:
+                statuses[remaining_name] = "NOT NEEDED"
             return latest_market_rows(central_rows, provider_rows)
         except Exception as exc:
-            errors.append(f"{source_label}: {type(exc).__name__}")
-    if central_rows:
+            statuses[provider_name] = (
+                f"UNAVAILABLE ({_market_provider_error(exc)})"
+            )
+    if central_succeeded:
         return central_rows
     raise MiningMarketError(
-        "EDDN market lookup failed via all providers (" + ", ".join(errors) + ")"
+        "Community market lookup failed · "
+        + market_provider_status_summary(statuses)
     )

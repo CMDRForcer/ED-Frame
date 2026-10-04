@@ -11,6 +11,7 @@ from ed_companion.navigation.mining_market import (
     fetch_edsm_system_coordinates,
     fetch_market_imports,
     latest_market_rows,
+    market_provider_status_summary,
     merge_market_catalog,
     nearby_catalog_markets,
     project_local_market_snapshot,
@@ -306,6 +307,7 @@ class MiningMarketTests(unittest.TestCase):
 
     def test_fetch_falls_back_when_primary_index_is_unavailable(self):
         calls = []
+        provider_status = {}
 
         def get(url, **kwargs):
             calls.append(url)
@@ -317,9 +319,58 @@ class MiningMarketTests(unittest.TestCase):
 
         self.assertEqual(fetch_market_imports(
             "Sol", "Gold", max_distance=100, max_days_ago=1, get=get,
+            provider_status=provider_status,
         ), [])
         self.assertTrue(any("api.ardent-insight.com" in url for url in calls))
         self.assertTrue(any("api.eddata.dev" in url for url in calls))
+        self.assertIn("UNAVAILABLE", provider_status["ED-Frame"])
+        self.assertIn("UNAVAILABLE", provider_status["Ardent"])
+        self.assertEqual(provider_status["EDData"], "OK (0 rows)")
+
+    def test_empty_edframe_result_is_success_when_fallbacks_are_down(self):
+        provider_status = {}
+
+        def get(url, **_kwargs):
+            if url.endswith("/v1/systems/suggest"):
+                return _Response({"results": [{
+                    "name": "Cubeo", "x": 1, "y": 2, "z": 3,
+                }]})
+            if url.endswith("/v1/markets/search"):
+                return _Response({"results": []})
+            raise RuntimeError("fallback down")
+
+        self.assertEqual(fetch_market_imports(
+            "Cubeo", "Platinum", max_distance=250, max_days_ago=1,
+            get=get, provider_status=provider_status,
+        ), [])
+        self.assertEqual(provider_status["ED-Frame"], "OK (0 rows)")
+        self.assertIn("UNAVAILABLE", provider_status["Ardent"])
+        self.assertIn("UNAVAILABLE", provider_status["EDData"])
+
+    def test_total_failure_names_sources_without_calling_them_eddn(self):
+        provider_status = {}
+
+        def get(_url, **_kwargs):
+            raise TimeoutError("offline")
+
+        with self.assertRaises(MiningMarketError) as raised:
+            fetch_market_imports(
+                "Sol", "Gold", max_distance=100, max_days_ago=1,
+                get=get, provider_status=provider_status,
+            )
+
+        message = str(raised.exception)
+        self.assertIn("Community market lookup failed", message)
+        self.assertNotIn("EDDN market lookup failed", message)
+        self.assertIn("ED-Frame UNAVAILABLE (TIMEOUT)", message)
+        self.assertIn("Ardent UNAVAILABLE (TIMEOUT)", message)
+        self.assertIn("EDData UNAVAILABLE (TIMEOUT)", message)
+        self.assertEqual(
+            market_provider_status_summary(provider_status),
+            "ED-Frame UNAVAILABLE (TIMEOUT) · "
+            "Ardent UNAVAILABLE (TIMEOUT) · "
+            "EDData UNAVAILABLE (TIMEOUT)",
+        )
 
     def test_disabled_central_catalog_is_not_contacted(self):
         calls = []
