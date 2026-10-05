@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import os
 from pathlib import Path
+import re
 from typing import Any, Iterable
 
 import psycopg
@@ -28,6 +29,147 @@ def ensure_schema() -> None:
         # startup cannot deadlock while acquiring table and index locks.
         conn.execute("SELECT pg_advisory_xact_lock(%s)", (45444652414,))
         conn.execute(schema)
+        seed_reference_catalog(conn)
+
+
+def _reference_data_dir() -> Path | None:
+    resolved = Path(__file__).resolve()
+    candidates = [Path("/app/ed_data"), resolved.parents[1] / "ed_data"]
+    if len(resolved.parents) > 3:
+        candidates.append(resolved.parents[3] / "ed_data")
+    return next((path for path in candidates if path.is_dir()), None)
+
+
+def seed_reference_catalog(conn: psycopg.Connection) -> None:
+    """Upsert the small public module/ship identity catalog shipped by ED-Frame."""
+    data_dir = _reference_data_dir()
+    if data_dir is None:
+        return
+    try:
+        display_payload = json.loads(
+            (data_dir / "module_display.json").read_text(encoding="utf-8")
+        )
+        power_payload = json.loads(
+            (data_dir / "module_power.json").read_text(encoding="utf-8")
+        )
+        ships_payload = json.loads(
+            (data_dir / "ships.json").read_text(encoding="utf-8")
+        )
+    except (OSError, UnicodeError, ValueError, TypeError):
+        return
+    display_modules = display_payload.get("modules", {})
+    power_modules = power_payload.get("modules", {})
+    module_rows = []
+    if isinstance(display_modules, dict):
+        for raw_symbol, raw_display in display_modules.items():
+            if (
+                not isinstance(raw_display, list) or len(raw_display) < 2
+                or not str(raw_symbol).strip() or not str(raw_display[0]).strip()
+            ):
+                continue
+            size_rating = str(raw_display[1] or "").strip().upper()
+            match = re.fullmatch(r"(\d+)([A-Z])", size_rating)
+            power = power_modules.get(raw_symbol, {})
+            module_rows.append({
+                "symbol": str(raw_symbol).strip().casefold(),
+                "display_name": str(raw_display[0]).strip(),
+                "module_class": int(match.group(1)) if match else None,
+                "rating": match.group(2) if match else None,
+                "size_rating": size_rating or None,
+                "power_draw_mw": (
+                    power.get("powerDrawMW")
+                    if isinstance(power, dict) else None
+                ),
+                "source": str(display_payload.get("source") or "ED-Frame"),
+            })
+    if module_rows:
+        conn.execute(
+            """
+            INSERT INTO module_catalog
+                (symbol, display_name, module_class, rating, size_rating,
+                 power_draw_mw, source, updated_at)
+            SELECT symbol, display_name, module_class, rating, size_rating,
+                   power_draw_mw, source, NOW()
+            FROM jsonb_to_recordset(%s::jsonb) AS incoming(
+                symbol TEXT, display_name TEXT, module_class SMALLINT,
+                rating TEXT, size_rating TEXT, power_draw_mw DOUBLE PRECISION,
+                source TEXT
+            )
+            ON CONFLICT (symbol) DO UPDATE SET
+                display_name = EXCLUDED.display_name,
+                module_class = EXCLUDED.module_class,
+                rating = EXCLUDED.rating,
+                size_rating = EXCLUDED.size_rating,
+                power_draw_mw = EXCLUDED.power_draw_mw,
+                source = EXCLUDED.source,
+                updated_at = NOW()
+            WHERE (module_catalog.display_name, module_catalog.module_class,
+                   module_catalog.rating, module_catalog.size_rating,
+                   module_catalog.power_draw_mw, module_catalog.source)
+                  IS DISTINCT FROM
+                  (EXCLUDED.display_name, EXCLUDED.module_class,
+                   EXCLUDED.rating, EXCLUDED.size_rating,
+                   EXCLUDED.power_draw_mw, EXCLUDED.source)
+            """,
+            (json.dumps(module_rows),),
+        )
+    ship_rows = []
+    if isinstance(ships_payload, list):
+        for ship in ships_payload:
+            if not isinstance(ship, dict):
+                continue
+            symbol = str(ship.get("symbol") or "").strip()
+            display_name = str(ship.get("name") or "").strip()
+            if not symbol or not display_name:
+                continue
+            ship_rows.append({
+                "symbol": symbol.casefold(),
+                "display_name": display_name,
+                "manufacturer": ship.get("manufacturer"),
+                "ship_size": ship.get("size"),
+                "maximum_speed": ship.get("maximumSpeed"),
+                "boost_speed": ship.get("boost"),
+                "specifications": {
+                    key: ship[key] for key in (
+                        "core", "hardpoints", "utility", "optional"
+                    ) if key in ship
+                },
+                "source": "ED-Frame ship reference catalog",
+            })
+    if ship_rows:
+        conn.execute(
+            """
+            INSERT INTO ship_catalog
+                (symbol, display_name, manufacturer, ship_size, maximum_speed,
+                 boost_speed, specifications, source, updated_at)
+            SELECT symbol, display_name, manufacturer, ship_size,
+                   maximum_speed, boost_speed, specifications, source, NOW()
+            FROM jsonb_to_recordset(%s::jsonb) AS incoming(
+                symbol TEXT, display_name TEXT, manufacturer TEXT,
+                ship_size TEXT, maximum_speed INTEGER, boost_speed INTEGER,
+                specifications JSONB, source TEXT
+            )
+            ON CONFLICT (symbol) DO UPDATE SET
+                display_name = EXCLUDED.display_name,
+                manufacturer = EXCLUDED.manufacturer,
+                ship_size = EXCLUDED.ship_size,
+                maximum_speed = EXCLUDED.maximum_speed,
+                boost_speed = EXCLUDED.boost_speed,
+                specifications = EXCLUDED.specifications,
+                source = EXCLUDED.source,
+                updated_at = NOW()
+            WHERE (ship_catalog.display_name, ship_catalog.manufacturer,
+                   ship_catalog.ship_size, ship_catalog.maximum_speed,
+                   ship_catalog.boost_speed, ship_catalog.specifications,
+                   ship_catalog.source)
+                  IS DISTINCT FROM
+                  (EXCLUDED.display_name, EXCLUDED.manufacturer,
+                   EXCLUDED.ship_size, EXCLUDED.maximum_speed,
+                   EXCLUDED.boost_speed, EXCLUDED.specifications,
+                   EXCLUDED.source)
+            """,
+            (json.dumps(ship_rows),),
+        )
 
 
 def upsert_batch(
@@ -380,7 +522,34 @@ def upsert_station_offer_batch(
             """
         elif kind == "SHIPYARD":
             table, items_column = "station_shipyards", "ships"
-            items_update = "EXCLUDED.ships"
+            items_update = """
+                CASE
+                  WHEN EXCLUDED.source = 'EDDN shipyard/2' THEN (
+                    SELECT COALESCE(
+                      jsonb_agg(
+                        COALESCE(
+                          (
+                            SELECT retained.value
+                            FROM jsonb_array_elements(
+                              station_shipyards.ships
+                            ) retained(value)
+                            WHERE jsonb_typeof(retained.value) = 'object'
+                              AND LOWER(retained.value ->> 'name') = LOWER(
+                                incoming.value #>> '{}'
+                              )
+                            LIMIT 1
+                          ),
+                          incoming.value
+                        ) ORDER BY incoming.ordinality
+                      ),
+                      '[]'::jsonb
+                    )
+                    FROM jsonb_array_elements(EXCLUDED.ships)
+                      WITH ORDINALITY incoming(value, ordinality)
+                  )
+                  ELSE EXCLUDED.ships
+                END
+            """
         else:
             continue
         conn.execute(
@@ -407,8 +576,139 @@ def upsert_station_offer_batch(
             """,
             row,
         )
+        _replace_normalized_station_offers(
+            conn, row, kind=kind, parent_table=table
+        )
         projected += 1
     return projected
+
+
+def _replace_normalized_station_offers(
+    conn: psycopg.Connection,
+    row: dict[str, Any],
+    *,
+    kind: str,
+    parent_table: str,
+) -> None:
+    """Keep a query-friendly projection of one accepted complete inventory."""
+    if kind == "OUTFITTING":
+        target = "station_module_offers"
+        symbol_column = "module_symbol"
+        id_column = "module_id"
+        merc_select = """
+            CASE WHEN jsonb_typeof(value) = 'object'
+                 THEN NULLIF(value ->> 'buyMercCoinsPrice', '')::BIGINT
+                 ELSE NULL END
+        """
+        merc_insert_columns = ", buy_merc_coins_price"
+        merc_select_column = ", buy_merc_coins_price"
+        merc_update = """
+            buy_merc_coins_price = CASE
+              WHEN EXCLUDED.buy_price IS NOT NULL
+               AND (station_module_offers.price_observed_at IS NULL
+                    OR EXCLUDED.price_observed_at >=
+                       station_module_offers.price_observed_at)
+                THEN EXCLUDED.buy_merc_coins_price
+              ELSE station_module_offers.buy_merc_coins_price END,
+        """
+    else:
+        target = "station_ship_offers"
+        symbol_column = "ship_symbol"
+        id_column = "ship_id"
+        merc_select = "NULL::BIGINT"
+        merc_insert_columns = ""
+        merc_select_column = ""
+        merc_update = ""
+    conn.execute(
+        f"""
+        WITH eligible AS MATERIALIZED (
+            SELECT 1
+            WHERE %(observed_at)s::timestamptz >= COALESCE(
+                (SELECT observed_at FROM {parent_table}
+                 WHERE market_id = %(market_id)s),
+                '-infinity'::timestamptz
+            )
+        ), incoming AS MATERIALIZED (
+            SELECT LOWER(
+                       CASE
+                         WHEN jsonb_typeof(value) = 'object'
+                           THEN value ->> 'name'
+                         WHEN jsonb_typeof(value) = 'string'
+                           THEN value #>> '{{}}'
+                         ELSE NULL
+                       END
+                   ) AS symbol,
+                   CASE WHEN jsonb_typeof(value) = 'object'
+                        THEN NULLIF(value ->> 'id', '')::BIGINT
+                        ELSE NULL END AS item_id,
+                   CASE WHEN jsonb_typeof(value) = 'object'
+                        THEN NULLIF(value ->> 'buyPrice', '')::BIGINT
+                        ELSE NULL END AS buy_price,
+                   {merc_select} AS buy_merc_coins_price,
+                   CASE WHEN jsonb_typeof(value) = 'object'
+                         AND NULLIF(value ->> 'priceObservedAt', '') IS NOT NULL
+                        THEN (value ->> 'priceObservedAt')::timestamptz
+                        WHEN jsonb_typeof(value) = 'object'
+                         AND NULLIF(value ->> 'buyPrice', '') IS NOT NULL
+                        THEN %(observed_at)s::timestamptz
+                        ELSE NULL END AS price_observed_at,
+                   CASE WHEN jsonb_typeof(value) = 'object'
+                        THEN NULLIF(value ->> 'priceSource', '')
+                        ELSE NULL END AS price_source
+            FROM eligible,
+                 jsonb_array_elements(%(items)s::jsonb) entry(value)
+            WHERE jsonb_typeof(value) IN ('object', 'string')
+              AND NULLIF(
+                    CASE WHEN jsonb_typeof(value) = 'object'
+                           THEN value ->> 'name'
+                         ELSE value #>> '{{}}' END,
+                    ''
+                  ) IS NOT NULL
+        ), removed AS (
+            DELETE FROM {target} current
+            WHERE current.market_id = %(market_id)s
+              AND EXISTS (SELECT 1 FROM eligible)
+              AND NOT EXISTS (
+                  SELECT 1 FROM incoming
+                  WHERE incoming.symbol = current.{symbol_column}
+              )
+            RETURNING 1
+        )
+        INSERT INTO {target}
+            (market_id, {symbol_column}, {id_column}, buy_price
+             {merc_insert_columns}, observed_at, price_observed_at,
+             availability_source, price_source, updated_at)
+        SELECT %(market_id)s, symbol, item_id, buy_price
+               {merc_select_column}, %(observed_at)s::timestamptz,
+               price_observed_at, %(source)s, price_source, NOW()
+        FROM incoming
+        ON CONFLICT (market_id, {symbol_column}) DO UPDATE SET
+            {id_column} = COALESCE(EXCLUDED.{id_column}, {target}.{id_column}),
+            buy_price = CASE
+              WHEN EXCLUDED.buy_price IS NOT NULL
+               AND ({target}.price_observed_at IS NULL
+                    OR EXCLUDED.price_observed_at >= {target}.price_observed_at)
+                THEN EXCLUDED.buy_price
+              ELSE {target}.buy_price END,
+            {merc_update}
+            observed_at = EXCLUDED.observed_at,
+            price_observed_at = CASE
+              WHEN EXCLUDED.buy_price IS NOT NULL
+               AND ({target}.price_observed_at IS NULL
+                    OR EXCLUDED.price_observed_at >= {target}.price_observed_at)
+                THEN EXCLUDED.price_observed_at
+              ELSE {target}.price_observed_at END,
+            availability_source = EXCLUDED.availability_source,
+            price_source = CASE
+              WHEN EXCLUDED.buy_price IS NOT NULL
+               AND ({target}.price_observed_at IS NULL
+                    OR EXCLUDED.price_observed_at >= {target}.price_observed_at)
+                THEN EXCLUDED.price_source
+              ELSE {target}.price_source END,
+            updated_at = NOW()
+        """,
+        row,
+    )
 
 
 def record_state(
@@ -443,4 +743,3 @@ def record_state(
             "errors": errors,
         },
     )
-

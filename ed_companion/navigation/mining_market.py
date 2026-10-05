@@ -23,6 +23,9 @@ ARDENT_API_BASE = "https://api.ardent-insight.com/v2"
 EDDATA_API_BASE = "https://api.eddata.dev/v2"
 EDSM_SYSTEM_URL = "https://www.edsm.net/api-v1/system"
 EDFRAME_CATALOG_BASE = "https://vps-20b25c36.vps.ovh.net"
+EDFRAME_STATION_OFFER_OBSERVATIONS_URL = (
+    f"{EDFRAME_CATALOG_BASE}/v1/station-offers/observations"
+)
 MARKET_API_BASES = (
     (ARDENT_API_BASE, "Ardent", "Ardent API · EDDN commodity/3"),
     (EDDATA_API_BASE, "EDData", "EDData API · EDDN commodity/3"),
@@ -133,6 +136,160 @@ def fetch_edframe_station_offer_delta(
         "hasMore": has_more,
         "generatedAt": str(payload.get("generatedAt") or ""),
     }
+
+
+def project_local_shipyard_observation(
+    snapshot: Any, station_message: Any,
+) -> dict[str, Any] | None:
+    """Keep exact public ship prices without Commander or filesystem data."""
+    if not isinstance(snapshot, dict):
+        return None
+    identity = station_message if isinstance(station_message, dict) else {}
+    try:
+        market_id = int(
+            identity.get("marketId") or snapshot.get("MarketID") or 0
+        )
+    except (TypeError, ValueError):
+        market_id = 0
+    system = str(
+        identity.get("systemName") or snapshot.get("StarSystem") or ""
+    ).strip()
+    station = str(
+        identity.get("stationName") or snapshot.get("StationName") or ""
+    ).strip()
+    observed_at = str(
+        snapshot.get("timestamp") or identity.get("timestamp") or ""
+    ).strip()
+    if market_id <= 0 or not system or not station or not observed_at:
+        return None
+    ships = {}
+    for source in snapshot.get("PriceList") or []:
+        if not isinstance(source, dict):
+            continue
+        name = str(source.get("ShipType") or "").strip()
+        try:
+            ship_id = int(source.get("id"))
+            buy_price = int(source.get("ShipPrice"))
+        except (TypeError, ValueError):
+            continue
+        if not name or ship_id < 0 or buy_price < 0:
+            continue
+        key = name.casefold()
+        ships[key] = {
+            "name": key,
+            "id": ship_id,
+            "buyPrice": buy_price,
+            "priceObservedAt": observed_at,
+            "priceSource": "ED-Frame Journal · Shipyard.json",
+        }
+    if not ships:
+        return None
+    result = {
+        "kind": "SHIPYARD",
+        "marketId": market_id,
+        "system": system,
+        "station": station,
+        "observedAt": observed_at,
+        "ships": [ships[key] for key in sorted(ships)],
+    }
+    for direct, source in (("horizons", "Horizons"), ("odyssey", "Odyssey")):
+        value = identity.get(direct, snapshot.get(source))
+        if isinstance(value, bool):
+            result[direct] = value
+    return result
+
+
+def project_local_outfitting_observation(
+    snapshot: Any, station_message: Any,
+) -> dict[str, Any] | None:
+    """Keep exact public module prices without Commander or filesystem data."""
+    if not isinstance(snapshot, dict):
+        return None
+    identity = station_message if isinstance(station_message, dict) else {}
+    try:
+        market_id = int(
+            identity.get("marketId") or snapshot.get("MarketID") or 0
+        )
+    except (TypeError, ValueError):
+        market_id = 0
+    system = str(
+        identity.get("systemName") or snapshot.get("StarSystem") or ""
+    ).strip()
+    station = str(
+        identity.get("stationName") or snapshot.get("StationName") or ""
+    ).strip()
+    observed_at = str(
+        snapshot.get("timestamp") or identity.get("timestamp") or ""
+    ).strip()
+    if market_id <= 0 or not system or not station or not observed_at:
+        return None
+    modules = {}
+    for source in snapshot.get("Items") or []:
+        if not isinstance(source, dict):
+            continue
+        name = str(source.get("Name") or "").strip()
+        try:
+            module_id = int(source.get("id"))
+            buy_price = int(source.get("BuyPrice"))
+            merc_price = int(source.get("BuyMercCoinsPrice", 0))
+        except (TypeError, ValueError):
+            continue
+        if (
+            not name or module_id < 0 or buy_price < 0 or merc_price < 0
+        ):
+            continue
+        key = name.casefold()
+        modules[key] = {
+            "name": key,
+            "id": module_id,
+            "buyPrice": buy_price,
+            "buyMercCoinsPrice": merc_price,
+            "priceObservedAt": observed_at,
+            "priceSource": "ED-Frame Journal · Outfitting.json",
+        }
+    if not modules:
+        return None
+    result = {
+        "kind": "OUTFITTING",
+        "marketId": market_id,
+        "system": system,
+        "station": station,
+        "observedAt": observed_at,
+        "modules": [modules[key] for key in sorted(modules)],
+    }
+    for direct, source in (("horizons", "Horizons"), ("odyssey", "Odyssey")):
+        value = identity.get(direct, snapshot.get(source))
+        if isinstance(value, bool):
+            result[direct] = value
+    return result
+
+
+def station_offer_observation_key(observation: Any) -> str:
+    payload = json.dumps(
+        observation if isinstance(observation, dict) else {},
+        sort_keys=True, ensure_ascii=True, separators=(",", ":"),
+    )
+    import hashlib
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+
+def send_edframe_station_offer_observations(
+    observations: Any, post: Any, timeout: int = 20,
+) -> dict[str, Any]:
+    rows = [dict(row) for row in observations if isinstance(row, dict)]
+    if len(rows) > 20:
+        raise ValueError("A station offer upload may contain at most 20 observations")
+    response = post(
+        EDFRAME_STATION_OFFER_OBSERVATIONS_URL,
+        json={"observations": rows}, timeout=timeout,
+    )
+    response.raise_for_status()
+    payload = response.json()
+    if not isinstance(payload, dict):
+        raise MiningMarketError(
+            "ED-Frame station offer service returned invalid data"
+        )
+    return payload
 
 
 def fetch_edframe_system_coordinates(

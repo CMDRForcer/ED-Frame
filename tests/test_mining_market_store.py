@@ -141,6 +141,54 @@ class MiningMarketStoreTests(unittest.TestCase):
             self.assertEqual(result["moduleOffer"]["name"],
                              "hpt_beamlaser_fixed_medium")
 
+    def test_priced_ship_offer_survives_sync_and_restart(self):
+        with TemporaryDirectory() as directory:
+            path = Path(directory, "market.sqlite3")
+            store = MarketCatalogStore(path)
+            store.ingest_station_offers([{
+                "kind": "SHIPYARD", "marketId": 42,
+                "system": "Cubeo", "station": "Chelomey Orbital",
+                "items": [{
+                    "name": "Anaconda", "id": 128049363,
+                    "buyPrice": 146969451,
+                    "priceObservedAt": "2026-10-03T08:00:00Z",
+                    "priceSource": "ED-Frame Journal · Shipyard.json",
+                }],
+                "observedAt": "2026-10-03T08:00:00Z",
+                "receivedAt": "2026-10-03T08:00:01Z",
+                "source": "ED-Frame Journal · Shipyard.json",
+            }])
+
+            result = MarketCatalogStore(path).stations_offering(
+                "ANACONDA", kind="SHIPYARD"
+            )[0]
+            self.assertEqual(result["shipId"], 128049363)
+            self.assertEqual(result["buyPrice"], 146969451)
+            self.assertEqual(result["priceObservedAt"],
+                             "2026-10-03T08:00:00Z")
+            self.assertEqual(result["shipOffer"]["name"], "anaconda")
+            self.assertIsNone(result["moduleOffer"])
+
+            # A newer EDDN shipyard/2 snapshot confirms availability but has
+            # no price. It must not erase the locally observed purchase price.
+            MarketCatalogStore(path).ingest_station_offers([{
+                "kind": "SHIPYARD", "marketId": 42,
+                "system": "Cubeo", "station": "Chelomey Orbital",
+                "items": ["Anaconda", "CobraMkIII"],
+                "observedAt": "2026-10-03T09:00:00Z",
+                "receivedAt": "2026-10-03T09:00:01Z",
+                "source": "EDDN shipyard/2",
+            }])
+            retained = MarketCatalogStore(path).stations_offering(
+                "ANACONDA", kind="SHIPYARD"
+            )[0]
+            self.assertEqual(retained["buyPrice"], 146969451)
+            self.assertEqual(retained["priceObservedAt"],
+                             "2026-10-03T08:00:00Z")
+            self.assertEqual(len(MarketCatalogStore(path).stations_offering(
+                "cobramkiii", kind="SHIPYARD"
+            )), 1)
+
     def test_older_or_invalid_station_offer_does_not_replace_inventory(self):
         with TemporaryDirectory() as directory:
             store = MarketCatalogStore(Path(directory, "market.sqlite3"))

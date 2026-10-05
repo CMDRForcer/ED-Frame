@@ -7898,12 +7898,23 @@ ApplicationWindow {
                                     visible: cockpit.edFrameCatalogOnline
                                     text: window.tf(
                                         "connections.edframe_offer_counts",
-                                        "STATION OFFERS · %1 OUTFITTING STATIONS · %2 SHIPYARDS · %3 MODULES · %4 PRICED · %5 SHIPS",
+                                        "STATION OFFERS · %1 OUTFITTING STATIONS · %2 SHIPYARDS · %3 MODULES · %4 PRICED · %5 SHIPS · %6 PRICED",
                                         [cockpit.edFrameCatalogStats.outfittingStations || 0,
                                          cockpit.edFrameCatalogStats.shipyardStations || 0,
                                          cockpit.edFrameCatalogStats.moduleOffers || 0,
                                          cockpit.edFrameCatalogStats.pricedModuleOffers || 0,
-                                         cockpit.edFrameCatalogStats.shipOffers || 0])
+                                         cockpit.edFrameCatalogStats.shipOffers || 0,
+                                         cockpit.edFrameCatalogStats.pricedShipOffers || 0])
+                                    color: textPrimary; font.pixelSize: 9; font.bold: true
+                                    wrapMode: Text.WordWrap; Layout.fillWidth: true
+                                }
+                                Label {
+                                    visible: cockpit.edFrameCatalogOnline
+                                    text: window.tf(
+                                        "connections.edframe_reference_counts",
+                                        "REFERENCE CATALOG · %1 MODULE DEFINITIONS · %2 SHIPS",
+                                        [cockpit.edFrameCatalogStats.catalogModules || 0,
+                                         cockpit.edFrameCatalogStats.catalogShips || 0])
                                     color: textPrimary; font.pixelSize: 9; font.bold: true
                                     wrapMode: Text.WordWrap; Layout.fillWidth: true
                                 }
@@ -8007,6 +8018,29 @@ ApplicationWindow {
                                     Layout.fillWidth: true
                                     text: cockpit.edFrameYieldUploadStatus
                                     color: cockpit.edFrameYieldUploadBusy ? cyan : textSecondary
+                                    font.pixelSize: 9; font.bold: true
+                                    wrapMode: Text.WordWrap
+                                }
+                                CheckBox {
+                                    Layout.fillWidth: true
+                                    text: window.t(
+                                        "connections.edframe_share_ship_prices",
+                                        "Share anonymously observed module and ship prices with the ED-Frame community catalog")
+                                    checked: cockpit.edFrameStationPriceSharingEnabled
+                                    onToggled: cockpit.setEdFrameStationPriceSharingEnabled(checked)
+                                }
+                                Label {
+                                    Layout.fillWidth: true
+                                    text: window.t(
+                                        "connections.edframe_share_ship_prices_privacy",
+                                        "Only public station, module/ship identifier, observed price and timestamp data is sent. Commander name and Journal path are never included.")
+                                    color: muted; font.pixelSize: 9
+                                    wrapMode: Text.WordWrap
+                                }
+                                Label {
+                                    Layout.fillWidth: true
+                                    text: cockpit.edFrameStationPriceUploadStatus
+                                    color: cockpit.edFrameStationPriceUploadBusy ? cyan : textSecondary
                                     font.pixelSize: 9; font.bold: true
                                     wrapMode: Text.WordWrap
                                 }

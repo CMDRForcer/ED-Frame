@@ -511,6 +511,23 @@ class CockpitController(
         self._edframe_yield_uploaded = {
             str(value) for value in uploaded_yields if value
         }
+        self._edframe_station_price_sharing_enabled = bool(
+            ui_config.get("edframe_station_price_sharing_enabled", False)
+        )
+        self._edframe_station_price_upload_busy = False
+        self._edframe_station_price_upload_status = (
+            "Ready · anonymous module and ship price sharing enabled"
+            if self._edframe_station_price_sharing_enabled
+            else "Off · observed module and ship prices remain local"
+        )
+        self._edframe_station_price_last_key = str(
+            ui_config.get("edframe_station_price_last_key") or ""
+        )
+        self._edframe_station_price_next_retry_at = 0.0
+        self._active_edframe_station_price_upload = None
+        self._pending_edframe_station_price_observation = None
+        self._local_shipyard_snapshot_fingerprint = ""
+        self._local_outfitting_snapshot_fingerprint = ""
         self._active_edframe_catalog_request = None
         self._edframe_catalog_sync_busy = False
         self._edframe_catalog_sync_status = (
@@ -696,6 +713,9 @@ class CockpitController(
         )
         self.edFrameYieldUploadFinished.connect(
             self._finish_edframe_yield_upload
+        )
+        self.edFrameStationPriceUploadFinished.connect(
+            self._finish_edframe_station_price_upload
         )
         self._mining_powerplay_catalog = self._read_local_json(
             self.mining_powerplay_catalog_file, {}
@@ -2545,6 +2565,16 @@ class CockpitController(
             "Ready · anonymous Prospector sharing enabled"
             if getattr(self, "_edframe_yield_sharing_enabled", False)
             else "Off · measurements remain local"
+        )
+        self._active_edframe_station_price_upload = None
+        self._pending_edframe_station_price_observation = None
+        self._edframe_station_price_upload_busy = False
+        self._edframe_station_price_next_retry_at = 0.0
+        self._local_shipyard_snapshot_fingerprint = ""
+        self._edframe_station_price_upload_status = (
+            "Ready · anonymous Shipyard price sharing enabled"
+            if getattr(self, "_edframe_station_price_sharing_enabled", False)
+            else "Off · observed ship prices remain local"
         )
         self._active_mining_market_request = None
         self._pending_mining_market_query = None

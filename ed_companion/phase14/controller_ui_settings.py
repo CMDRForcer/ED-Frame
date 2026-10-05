@@ -381,6 +381,12 @@ class UiSettingsMixin:
             "edframe_yield_sharing_enabled": getattr(
                 self, "_edframe_yield_sharing_enabled", False
             ),
+            "edframe_station_price_sharing_enabled": getattr(
+                self, "_edframe_station_price_sharing_enabled", False
+            ),
+            "edframe_station_price_last_key": getattr(
+                self, "_edframe_station_price_last_key", ""
+            ),
             "background_mode": self._background_mode,
             "autostart_enabled": self._autostart_enabled,
             "trader_preference": self._trader_preference,

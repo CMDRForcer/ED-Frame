@@ -66,6 +66,15 @@ class ConnectionSourceTabTests(unittest.TestCase):
         self.assertIn("Commander name, cargo and Journal path", qml)
         self.assertIn("cockpit.edFrameCatalogEnabled", qml)
 
+    def test_edframe_station_price_sharing_is_explicit_and_private(self):
+        qml = (ROOT / "Main.qml").read_text(encoding="utf-8")
+        self.assertIn("cockpit.edFrameStationPriceSharingEnabled", qml)
+        self.assertIn(
+            "cockpit.setEdFrameStationPriceSharingEnabled(checked)", qml
+        )
+        self.assertIn("module and ship prices", qml)
+        self.assertIn("Commander name and Journal path are never included", qml)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -351,6 +351,8 @@ class NavigationMixin:
 
     edFrameYieldUploadFinished = Signal(object)
 
+    edFrameStationPriceUploadFinished = Signal(object)
+
 
     miningPowerplayFinished = Signal(object)
 
@@ -2079,6 +2081,34 @@ class NavigationMixin:
     )
 
 
+    edFrameStationPriceSharingEnabled = Property(
+        bool,
+        lambda self: bool(getattr(
+            self, "_edframe_station_price_sharing_enabled", False
+        )),
+        notify=CoreControllerMixin.connectionChanged,
+    )
+
+
+    edFrameStationPriceUploadBusy = Property(
+        bool,
+        lambda self: bool(getattr(
+            self, "_edframe_station_price_upload_busy", False
+        )),
+        notify=CoreControllerMixin.connectionChanged,
+    )
+
+
+    edFrameStationPriceUploadStatus = Property(
+        str,
+        lambda self: str(getattr(
+            self, "_edframe_station_price_upload_status",
+            "Off · observed ship prices remain local",
+        )),
+        notify=CoreControllerMixin.connectionChanged,
+    )
+
+
     edFrameYieldUploadBusy = Property(
         bool,
         lambda self: bool(getattr(
@@ -2487,6 +2517,72 @@ class NavigationMixin:
             self._maybe_share_mining_yields()
 
 
+    @Slot(bool)
+    def setEdFrameStationPriceSharingEnabled(self, enabled):
+        self._edframe_station_price_sharing_enabled = bool(enabled)
+        self._edframe_station_price_upload_status = (
+            "Ready · checking the latest Outfitting and Shipyard snapshots…"
+            if enabled else "Off · observed module and ship prices remain local"
+        )
+        self._append_edframe_catalog_log(
+            "Anonymous module and ship price sharing enabled"
+            if enabled else
+            "Module and ship price sharing disabled · prices stay local"
+        )
+        self._save_ui_config()
+        self.connectionChanged.emit()
+        if enabled:
+            self._scan_local_shipyard_price_file()
+
+
+    @Slot(object)
+    def _finish_edframe_station_price_upload(self, result):
+        key = str((result or {}).get("key") or "")
+        if key != str(getattr(
+            self, "_active_edframe_station_price_upload", ""
+        ) or ""):
+            return
+        self._active_edframe_station_price_upload = None
+        self._edframe_station_price_upload_busy = False
+        if not getattr(self, "_edframe_station_price_sharing_enabled", False):
+            return
+        if not result.get("success"):
+            error = str(result.get("error") or "unknown error")
+            self._edframe_station_price_next_retry_at = time.monotonic() + 60.0
+            self._edframe_station_price_upload_status = (
+                "Upload paused · prices retained locally · " + error
+            )
+            self._append_edframe_catalog_log(
+                "Station price upload failed · " + error
+            )
+            self.connectionChanged.emit()
+            return
+        accepted = int(
+            (result.get("response") or {}).get("accepted", 0) or 0
+        )
+        sent = int(result.get("sent", 0) or 0)
+        if sent > 0 and accepted == sent:
+            self._edframe_station_price_last_key = key
+            self._edframe_station_price_upload_status = (
+                "Shared latest anonymous module and ship prices"
+            )
+            self._append_edframe_catalog_log(
+                f"Shared {accepted} observed station price list(s)"
+            )
+            self._save_ui_config()
+        else:
+            self._edframe_station_price_upload_status = (
+                "Server did not accept every station price list · retained locally"
+            )
+        self.connectionChanged.emit()
+        pending = getattr(
+            self, "_pending_edframe_station_price_observation", None
+        )
+        self._pending_edframe_station_price_observation = None
+        if pending and pending[0] != self._edframe_station_price_last_key:
+            self._start_edframe_station_price_upload(*pending)
+
+
     def _maybe_share_mining_yields(self):
         if (
             not getattr(self, "_edframe_yield_sharing_enabled", False)
@@ -2742,6 +2838,15 @@ class NavigationMixin:
                 ) or 0),
                 "shipOffers": int(counts.get(
                     "ship_offers", counts.get("shipOffers", 0)
+                ) or 0),
+                "pricedShipOffers": int(counts.get(
+                    "priced_ship_offers", counts.get("pricedShipOffers", 0)
+                ) or 0),
+                "catalogModules": int(counts.get(
+                    "catalog_modules", counts.get("catalogModules", 0)
+                ) or 0),
+                "catalogShips": int(counts.get(
+                    "catalog_ships", counts.get("catalogShips", 0)
                 ) or 0),
                 "commodities": int(counts.get("commodities", 0) or 0),
                 "marketCoordinatePercent": float(

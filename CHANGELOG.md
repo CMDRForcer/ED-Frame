@@ -1,5 +1,19 @@
 # Changelog
 
+## Unreleased
+
+### Added
+
+- **Observed module and Shipyard prices**: ED-Frame now retains exact
+  `BuyPrice`/`ShipPrice` values from local `Outfitting.json` and
+  `Shipyard.json` immediately and can, with separate explicit consent, share
+  only anonymous station, item, price and timestamp facts with the central
+  catalog. Availability-only EDDN updates preserve richer prices.
+- **Finder-ready station catalog**: the server maintains indexed, normalized
+  module/ship offers beside its atomic inventory snapshots, seeds public
+  module class/rating and ship specification reference data, and exposes
+  suggestion endpoints with availability and observed-price coverage.
+
 ## 1.5.31 — 2026-10-04
 
 ### Fixed

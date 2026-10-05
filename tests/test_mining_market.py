@@ -14,9 +14,12 @@ from ed_companion.navigation.mining_market import (
     market_provider_status_summary,
     merge_market_catalog,
     nearby_catalog_markets,
+    project_local_outfitting_observation,
+    project_local_shipyard_observation,
     project_local_market_snapshot,
     project_edframe_catalog_markets,
     project_market_imports,
+    send_edframe_station_offer_observations,
 )
 
 
@@ -35,6 +38,49 @@ class _Response:
 
 
 class MiningMarketTests(unittest.TestCase):
+    def test_local_outfitting_projection_keeps_exact_public_prices(self):
+        observation = project_local_outfitting_observation({
+            "timestamp": "2026-10-03T08:00:00Z",
+            "MarketID": 42,
+            "StationName": "Chelomey Orbital",
+            "StarSystem": "Cubeo",
+            "Items": [{
+                "id": 128049511, "Name": "Hpt_AdvancedTorpPylon_Fixed_Large",
+                "BuyPrice": 157960,
+            }],
+            "Commander": "must not leave the app",
+        }, None)
+        self.assertEqual(observation["kind"], "OUTFITTING")
+        self.assertEqual(observation["modules"][0]["buyPrice"], 157960)
+        self.assertEqual(observation["modules"][0]["buyMercCoinsPrice"], 0)
+        self.assertNotIn("Commander", observation)
+
+    def test_local_shipyard_projection_and_upload_keep_exact_public_prices(self):
+        observation = project_local_shipyard_observation({
+            "timestamp": "2026-10-03T08:00:00Z",
+            "PriceList": [{
+                "id": 128049363, "ShipType": "Anaconda",
+                "ShipPrice": 146969451,
+            }],
+            "Commander": "must not leave the app",
+        }, {
+            "marketId": 42, "systemName": "Cubeo",
+            "stationName": "Chelomey Orbital", "odyssey": True,
+        })
+        self.assertEqual(observation["ships"][0]["buyPrice"], 146969451)
+        self.assertNotIn("Commander", observation)
+
+        calls = []
+        def post(url, **kwargs):
+            calls.append((url, kwargs))
+            return _Response({"accepted": 1, "rejected": 0})
+
+        response = send_edframe_station_offer_observations(
+            [observation], post
+        )
+        self.assertEqual(response["accepted"], 1)
+        self.assertTrue(calls[0][0].endswith("/v1/station-offers/observations"))
+        self.assertEqual(calls[0][1]["json"]["observations"], [observation])
     def test_incremental_sync_is_anonymous_bounded_and_resumable(self):
         calls = []
 

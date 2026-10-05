@@ -16,9 +16,13 @@ from . import __version__
 from .database import (
     connection,
     ensure_schema,
+    upsert_station_offer_batch,
     upsert_yield_observations,
 )
-from .projection import project_yield_observations
+from .projection import (
+    project_station_offer_observations,
+    project_yield_observations,
+)
 
 
 def _now() -> str:
@@ -42,6 +46,8 @@ app = FastAPI(
 
 _yield_rate_lock = threading.Lock()
 _yield_rate_buckets: dict[str, list[float]] = {}
+_station_offer_rate_lock = threading.Lock()
+_station_offer_rate_buckets: dict[str, list[float]] = {}
 
 
 def _percent(part: int, whole: int) -> float:
@@ -158,6 +164,7 @@ def root() -> dict:
         "stationOffers": "/v1/station-offers/search",
         "marketSync": "/v1/sync/markets",
         "stationOfferSync": "/v1/sync/station-offers",
+        "stationOfferObservations": "/v1/station-offers/observations",
         "stateFindSync": "/v1/sync/state-finds",
         "yieldObservations": "/v1/yields/observations",
     }
@@ -187,15 +194,14 @@ def status() -> dict:
                  FROM mining_yield_materials) AS measured_commodities,
               (SELECT COUNT(*) FROM station_outfitting) AS outfitting_stations,
               (SELECT COUNT(*) FROM station_shipyards) AS shipyard_stations,
-              (SELECT COALESCE(SUM(jsonb_array_length(modules)), 0)
-                 FROM station_outfitting) AS module_offers,
-              (SELECT COUNT(*)
-                 FROM station_outfitting o
-                 CROSS JOIN LATERAL jsonb_array_elements(o.modules) entry
-                WHERE jsonb_typeof(entry) = 'object'
-                  AND entry ? 'buyPrice') AS priced_module_offers,
-              (SELECT COALESCE(SUM(jsonb_array_length(ships)), 0)
-                 FROM station_shipyards) AS ship_offers,
+              (SELECT COUNT(*) FROM station_module_offers) AS module_offers,
+              (SELECT COUNT(*) FROM station_module_offers
+                WHERE buy_price IS NOT NULL) AS priced_module_offers,
+              (SELECT COUNT(*) FROM station_ship_offers) AS ship_offers,
+              (SELECT COUNT(*) FROM station_ship_offers
+                WHERE buy_price IS NOT NULL) AS priced_ship_offers,
+              (SELECT COUNT(*) FROM module_catalog) AS catalog_modules,
+              (SELECT COUNT(*) FROM ship_catalog) AS catalog_ships,
               (SELECT COUNT(*) FROM state_bgs_snapshots
                  WHERE observed_at >= NOW() - INTERVAL '24 hours')
                    AS state_bgs_snapshots,
@@ -383,65 +389,73 @@ def search_station_offers(
     clauses = []
     values: list[object] = []
     if normalized_module:
-        module_column = 'matched_module.offer AS "moduleOffer"'
-        module_join = """
-            LEFT JOIN LATERAL (
-                SELECT CASE
-                         WHEN jsonb_typeof(entry.value) = 'object'
-                           THEN entry.value
-                         ELSE jsonb_build_object(
-                           'name', entry.value #>> '{}'
-                         )
-                       END AS offer
-                FROM jsonb_array_elements(o.modules) AS entry(value)
-                WHERE LOWER(
-                    CASE
-                      WHEN jsonb_typeof(entry.value) = 'object'
-                        THEN entry.value ->> 'name'
-                      WHEN jsonb_typeof(entry.value) = 'string'
-                        THEN entry.value #>> '{}'
-                      ELSE NULL
-                    END
-                ) = %s
-                LIMIT 1
-            ) matched_module ON TRUE
-        """
-        clauses.append("matched_module.offer IS NOT NULL")
+        clauses.append("mo.module_symbol = %s")
         values.append(normalized_module)
-    else:
-        module_column = 'NULL::jsonb AS "moduleOffer"'
-        module_join = ""
     if normalized_ship:
-        clauses.append("y.ships @> %s::jsonb")
-        values.append(json.dumps([normalized_ship]))
+        clauses.append("so.ship_symbol = %s")
+        values.append(normalized_ship)
+    if normalized_module and normalized_ship:
+        offer_tables = """
+            FROM station_module_offers mo
+            JOIN station_ship_offers so ON so.market_id = mo.market_id
+        """
+    elif normalized_module:
+        offer_tables = """
+            FROM station_module_offers mo
+            LEFT JOIN station_ship_offers so ON FALSE
+        """
+    else:
+        offer_tables = """
+            FROM station_ship_offers so
+            LEFT JOIN station_module_offers mo ON FALSE
+        """
     if system:
-        clauses.append("LOWER(COALESCE(o.system_name, y.system_name)) = LOWER(%s)")
+        clauses.append(
+            "LOWER(COALESCE(o.system_name, y.system_name, st.system_name)) "
+            "= LOWER(%s)"
+        )
         values.append(system.strip())
     values.append(limit)
     with connection() as conn:
         rows = conn.execute(
             f"""
-            SELECT COALESCE(o.market_id, y.market_id) AS "marketId",
-                   COALESCE(o.system_name, y.system_name) AS system,
-                   COALESCE(o.station_name, y.station_name) AS station,
+            SELECT COALESCE(mo.market_id, so.market_id) AS "marketId",
+                   COALESCE(o.system_name, y.system_name, st.system_name) AS system,
+                   COALESCE(o.station_name, y.station_name, st.station_name) AS station,
                    st.station_type AS "stationType",
                    st.landing_pad_size AS "landingPadSize",
                    st.distance_to_arrival_ls AS "distanceToArrivalLs",
                    st.services, sy.x, sy.y, sy.z,
-                   {module_column},
-                   o.observed_at AS "outfittingObservedAt",
-                   y.observed_at AS "shipyardObservedAt"
-            FROM station_outfitting o
-            FULL OUTER JOIN station_shipyards y ON y.market_id = o.market_id
-            {module_join}
+                   CASE WHEN mo.module_symbol IS NULL THEN NULL::jsonb ELSE
+                     jsonb_strip_nulls(jsonb_build_object(
+                       'name', mo.module_symbol, 'id', mo.module_id,
+                       'buyPrice', mo.buy_price,
+                       'buyMercCoinsPrice', mo.buy_merc_coins_price,
+                       'priceObservedAt', mo.price_observed_at,
+                       'priceSource', mo.price_source
+                     )) END AS "moduleOffer",
+                   CASE WHEN so.ship_symbol IS NULL THEN NULL::jsonb ELSE
+                     jsonb_strip_nulls(jsonb_build_object(
+                       'name', so.ship_symbol, 'id', so.ship_id,
+                       'buyPrice', so.buy_price,
+                       'priceObservedAt', so.price_observed_at,
+                       'priceSource', so.price_source
+                     )) END AS "shipOffer",
+                   mo.observed_at AS "outfittingObservedAt",
+                   so.observed_at AS "shipyardObservedAt"
+            {offer_tables}
+            LEFT JOIN station_outfitting o ON o.market_id = mo.market_id
+            LEFT JOIN station_shipyards y ON y.market_id = so.market_id
             LEFT JOIN stations st
-              ON st.market_id = COALESCE(o.market_id, y.market_id)
+              ON st.market_id = COALESCE(mo.market_id, so.market_id)
             LEFT JOIN systems sy
-              ON LOWER(sy.name) = LOWER(COALESCE(o.system_name, y.system_name))
+              ON LOWER(sy.name) = LOWER(
+                   COALESCE(o.system_name, y.system_name, st.system_name)
+                 )
             WHERE {' AND '.join(clauses)}
             ORDER BY GREATEST(
-                COALESCE(o.observed_at, '-infinity'::timestamptz),
-                COALESCE(y.observed_at, '-infinity'::timestamptz)
+                COALESCE(mo.observed_at, '-infinity'::timestamptz),
+                COALESCE(so.observed_at, '-infinity'::timestamptz)
             ) DESC
             LIMIT %s
             """,
@@ -454,6 +468,115 @@ def search_station_offers(
             "ship": normalized_ship or None,
         },
         "results": rows,
+    }
+
+
+@app.get("/v1/catalog/modules/suggest")
+def suggest_modules(
+    q: Annotated[str, Query(min_length=1, max_length=100)],
+    limit: Annotated[int, Query(ge=1, le=100)] = 25,
+) -> dict:
+    term = q.strip().casefold()
+    with connection() as conn:
+        rows = conn.execute(
+            """
+            SELECT c.symbol, c.display_name AS "displayName",
+                   c.module_class AS "class", c.rating,
+                   c.size_rating AS "sizeRating",
+                   c.power_draw_mw AS "powerDrawMw", c.source,
+                   COUNT(o.market_id) AS "knownStations",
+                   COUNT(o.buy_price) AS "pricedStations",
+                   MIN(o.buy_price) AS "lowestObservedPrice"
+            FROM module_catalog c
+            LEFT JOIN station_module_offers o
+              ON o.module_symbol = c.symbol
+            WHERE c.symbol LIKE %s OR LOWER(c.display_name) LIKE %s
+            GROUP BY c.symbol, c.display_name, c.module_class, c.rating,
+                     c.size_rating, c.power_draw_mw, c.source
+            ORDER BY CASE WHEN c.symbol LIKE %s
+                           OR LOWER(c.display_name) LIKE %s THEN 0 ELSE 1 END,
+                     c.display_name, c.size_rating, c.symbol
+            LIMIT %s
+            """,
+            (f"%{term}%", f"%{term}%", f"{term}%", f"{term}%", limit),
+        ).fetchall()
+    return {"generatedAt": _now(), "query": term, "results": rows}
+
+
+@app.get("/v1/catalog/ships/suggest")
+def suggest_ships(
+    q: Annotated[str, Query(min_length=1, max_length=100)],
+    limit: Annotated[int, Query(ge=1, le=100)] = 25,
+) -> dict:
+    term = q.strip().casefold()
+    with connection() as conn:
+        rows = conn.execute(
+            """
+            SELECT c.symbol, c.display_name AS "displayName",
+                   c.manufacturer, c.ship_size AS size,
+                   c.maximum_speed AS "maximumSpeed",
+                   c.boost_speed AS boost, c.specifications, c.source,
+                   COUNT(o.market_id) AS "knownStations",
+                   COUNT(o.buy_price) AS "pricedStations",
+                   MIN(o.buy_price) AS "lowestObservedPrice"
+            FROM ship_catalog c
+            LEFT JOIN station_ship_offers o ON o.ship_symbol = c.symbol
+            WHERE c.symbol LIKE %s OR LOWER(c.display_name) LIKE %s
+            GROUP BY c.symbol, c.display_name, c.manufacturer, c.ship_size,
+                     c.maximum_speed, c.boost_speed, c.specifications, c.source
+            ORDER BY CASE WHEN c.symbol LIKE %s
+                           OR LOWER(c.display_name) LIKE %s THEN 0 ELSE 1 END,
+                     c.display_name, c.symbol
+            LIMIT %s
+            """,
+            (f"%{term}%", f"%{term}%", f"{term}%", f"{term}%", limit),
+        ).fetchall()
+    return {"generatedAt": _now(), "query": term, "results": rows}
+
+
+@app.post("/v1/station-offers/observations")
+def receive_station_offer_observations(
+    request: Request, payload: dict,
+) -> dict:
+    """Accept anonymous, exact prices observed in local station snapshots."""
+    observations = payload.get("observations")
+    if not isinstance(observations, list) or len(observations) > 20:
+        raise HTTPException(
+            status_code=422,
+            detail="observations must be a list containing at most 20 items",
+        )
+    forwarded = request.headers.get("x-forwarded-for", "").split(",", 1)[0]
+    remote = forwarded.strip() or (
+        request.client.host if request.client else "unknown"
+    )
+    now = time.monotonic()
+    with _station_offer_rate_lock:
+        if len(_station_offer_rate_buckets) > 4096:
+            _station_offer_rate_buckets.clear()
+        recent = [
+            stamp for stamp in _station_offer_rate_buckets.get(remote, [])
+            if now - stamp < 60.0
+        ]
+        if len(recent) >= 12:
+            raise HTTPException(
+                status_code=429,
+                detail="station offer observation request budget exceeded",
+            )
+        recent.append(now)
+        _station_offer_rate_buckets[remote] = recent
+    received_at = _now()
+    projected = project_station_offer_observations(payload, received_at)
+    if observations and not projected:
+        raise HTTPException(
+            status_code=422,
+            detail="no valid station offer observations in request",
+        )
+    with connection() as conn:
+        accepted = upsert_station_offer_batch(conn, projected)
+    return {
+        "receivedAt": received_at,
+        "accepted": accepted,
+        "rejected": len(observations) - accepted,
     }
 
 
@@ -906,4 +1029,3 @@ def search_sites(
             values,
         ).fetchall()
     return {"generatedAt": _now(), "results": rows}
-

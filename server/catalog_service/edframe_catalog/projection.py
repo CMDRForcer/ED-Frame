@@ -254,6 +254,96 @@ def project_station_offers(
     }]
 
 
+def project_station_offer_observations(
+    payload: dict[str, Any], received_at: str,
+) -> list[dict[str, Any]]:
+    """Project privacy-minimised station prices observed by ED-Frame clients."""
+    raw_observations = payload.get("observations")
+    if not isinstance(raw_observations, list):
+        return []
+    projected = []
+    for observation in raw_observations:
+        if not isinstance(observation, dict):
+            continue
+        kind = str(observation.get("kind") or "").strip().upper()
+        market_id = _integer(observation.get("marketId"))
+        system = _text(observation.get("system"))
+        station = _text(observation.get("station"))
+        observed_at = _text(observation.get("observedAt"))
+        items_key = "modules" if kind == "OUTFITTING" else "ships"
+        raw_items = observation.get(items_key)
+        if (
+            kind not in {"OUTFITTING", "SHIPYARD"}
+            or market_id is None or market_id <= 0
+            or not system or not station or not observed_at
+            or not isinstance(raw_items, list) or not raw_items
+        ):
+            continue
+        items: dict[str, dict[str, Any]] = {}
+        for raw_item in raw_items:
+            if not isinstance(raw_item, dict):
+                continue
+            name = _text(
+                raw_item.get("name") or raw_item.get("Name")
+                or raw_item.get("ShipType")
+            )
+            item_id = _integer(raw_item.get("id"))
+            buy_price = _integer(
+                raw_item.get("buyPrice", raw_item.get("BuyPrice"))
+                if kind == "OUTFITTING" else
+                raw_item.get("buyPrice", raw_item.get("ShipPrice"))
+            )
+            if (
+                not name or item_id is None or item_id < 0
+                or buy_price is None or buy_price < 0
+            ):
+                continue
+            key = name.casefold()
+            item = {
+                "name": key,
+                "id": item_id,
+                "buyPrice": buy_price,
+                "priceObservedAt": observed_at,
+                "priceSource": (
+                    "ED-Frame Journal · Outfitting.json"
+                    if kind == "OUTFITTING" else
+                    "ED-Frame Journal · Shipyard.json"
+                ),
+            }
+            if kind == "OUTFITTING":
+                merc_price = _integer(raw_item.get("buyMercCoinsPrice", 0))
+                if merc_price is None or merc_price < 0:
+                    continue
+                item["buyMercCoinsPrice"] = merc_price
+            items[key] = item
+        if not items:
+            continue
+        source = (
+            "ED-Frame Journal · Outfitting.json"
+            if kind == "OUTFITTING" else
+            "ED-Frame Journal · Shipyard.json"
+        )
+        projected.append({
+            "kind": kind,
+            "market_id": market_id,
+            "system_name": system,
+            "station_name": station,
+            "items": json.dumps([items[key] for key in sorted(items)]),
+            "horizons": (
+                bool(observation["horizons"])
+                if isinstance(observation.get("horizons"), bool) else None
+            ),
+            "odyssey": (
+                bool(observation["odyssey"])
+                if isinstance(observation.get("odyssey"), bool) else None
+            ),
+            "observed_at": observed_at,
+            "received_at": received_at,
+            "source": source,
+        })
+    return projected
+
+
 def project_system(payload: dict[str, Any]) -> dict[str, Any] | None:
     if schema_name(payload) != "journal/1":
         return None
@@ -585,4 +675,3 @@ def project_state_signals(
             "observation": json.dumps(observation),
         })
     return result
-

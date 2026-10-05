@@ -133,6 +133,12 @@ from ed_companion.navigation.mining_commodities import (
     mining_commodity_id,
     mining_commodities_for_method,
 )
+from ed_companion.navigation.mining_market import (
+    project_local_outfitting_observation,
+    project_local_shipyard_observation,
+    send_edframe_station_offer_observations,
+    station_offer_observation_key,
+)
 from ed_companion.navigation.trader_type_cache import normalize_timestamp
 from ed_companion.navigation.trader_search import (
     fetch_tech_broker_catalog_updates,
@@ -990,6 +996,7 @@ class EddnMixin:
         # Local market learning is private and must work independently of the
         # optional community-upload profile and consent below.
         self._scan_local_mining_market_file()
+        self._scan_local_shipyard_price_file()
         if not self._sync_eddn_profile():
             return
         if not eddn_upload_allowed(self._eddn_config):
@@ -1149,6 +1156,113 @@ class EddnMixin:
             LOGGER.warning(
                 "Local mining market snapshot was not retained: %s", exc
             )
+
+
+    def _scan_local_shipyard_price_file(self):
+        """Retain exact local module/ship prices and share only by opt-in."""
+        observations = []
+        for kind, filename, projector, items_key in (
+            ("outfitting", "Outfitting.json",
+             project_local_outfitting_observation, "modules"),
+            ("shipyard", "Shipyard.json",
+             project_local_shipyard_observation, "ships"),
+        ):
+            path = journal_dir() / filename
+            try:
+                stat = path.stat()
+                fingerprint = f"{stat.st_mtime_ns}:{stat.st_size}"
+                snapshot = json.loads(path.read_text(
+                    encoding="utf-8-sig", errors="strict"
+                ))
+                prepared = prepare_station_snapshot(
+                    kind, snapshot, getattr(self, "_eddn_context", {})
+                )
+                message = (
+                    prepared.get("message")
+                    if isinstance(prepared, dict) else None
+                )
+                observation = projector(snapshot, message)
+                if not observation:
+                    continue
+                observations.append(observation)
+                fingerprint_name = f"_local_{kind}_snapshot_fingerprint"
+                if getattr(self, fingerprint_name, "") == fingerprint:
+                    continue
+                store = getattr(self, "_mining_market_store", None)
+                if store is not None:
+                    store.ingest_station_offers([{
+                        "kind": observation["kind"],
+                        "marketId": observation["marketId"],
+                        "system": observation["system"],
+                        "station": observation["station"],
+                        "items": observation[items_key],
+                        "observedAt": observation["observedAt"],
+                        "receivedAt": datetime.now(timezone.utc).isoformat(
+                            timespec="seconds"
+                        ),
+                        "source": f"ED-Frame Journal · {filename}",
+                    }])
+                setattr(self, fingerprint_name, fingerprint)
+            except (OSError, UnicodeError, ValueError, TypeError) as exc:
+                LOGGER.debug("Local %s prices are not available yet: %s",
+                             kind, exc)
+            except sqlite3.DatabaseError as exc:
+                LOGGER.warning("Local %s prices were not retained: %s",
+                               kind, exc)
+        if not observations or not getattr(
+            self, "_edframe_station_price_sharing_enabled", False
+        ):
+            return
+        key = station_offer_observation_key(observations)
+        if key == getattr(self, "_edframe_station_price_last_key", ""):
+            self._edframe_station_price_upload_status = (
+                "Up to date · latest module and ship prices already shared"
+            )
+            return
+        if getattr(self, "_edframe_station_price_upload_busy", False):
+            self._pending_edframe_station_price_observation = (
+                key, observations
+            )
+            return
+        if time.monotonic() < getattr(
+            self, "_edframe_station_price_next_retry_at", 0.0
+        ):
+            return
+        self._start_edframe_station_price_upload(key, observations)
+
+
+    def _start_edframe_station_price_upload(self, key, observations):
+        self._edframe_station_price_upload_busy = True
+        self._active_edframe_station_price_upload = str(key)
+        self._edframe_station_price_upload_status = (
+            "Sharing anonymous observed module and ship prices…"
+        )
+        self.connectionChanged.emit()
+
+        def worker():
+            result = {"key": str(key)}
+            try:
+                response = send_edframe_station_offer_observations(
+                    observations, requests.post
+                )
+                result.update({
+                    "success": True, "response": response,
+                    "sent": len(observations),
+                })
+            except Exception as exc:
+                result.update({
+                    "success": False,
+                    "error": f"{type(exc).__name__}: {exc}",
+                })
+            self.edFrameStationPriceUploadFinished.emit(result)
+
+        if not self._start_network_worker(worker, "edframe-station-price-upload"):
+            self._edframe_station_price_upload_busy = False
+            self._active_edframe_station_price_upload = None
+            self._edframe_station_price_upload_status = (
+                "Paused during shutdown · observed prices retained locally"
+            )
+            self.connectionChanged.emit()
 
 
     def _scan_eddn_station_files(self):

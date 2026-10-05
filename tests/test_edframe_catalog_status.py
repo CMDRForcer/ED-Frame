@@ -200,6 +200,8 @@ class EdFrameCatalogStatusTests(unittest.TestCase):
                     "module_offers": 100,
                     "priced_module_offers": 75,
                     "ship_offers": 20,
+                    "catalog_modules": 961,
+                    "catalog_ships": 48,
                 },
                 "completeness": {
                     "marketDetailPercent": 99.5,
@@ -234,6 +236,8 @@ class EdFrameCatalogStatusTests(unittest.TestCase):
             controller._edframe_catalog_stats["pricedModuleOffers"], 75
         )
         self.assertEqual(controller._edframe_catalog_stats["shipOffers"], 20)
+        self.assertEqual(controller._edframe_catalog_stats["catalogModules"], 961)
+        self.assertEqual(controller._edframe_catalog_stats["catalogShips"], 48)
         self.assertIn("20 stations", controller._edframe_catalog_status)
 
     def test_old_server_does_not_report_missing_station_catalog_as_zero(self):

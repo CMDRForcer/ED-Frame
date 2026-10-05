@@ -4,6 +4,7 @@ import unittest
 from edframe_catalog.projection import (
     project_markets,
     project_station_offers,
+    project_station_offer_observations,
     project_stations,
     project_system,
     project_state_bgs_snapshot,
@@ -258,6 +259,51 @@ class ProjectionTests(unittest.TestCase):
         self.assertEqual(
             project_station_offers(payload, "2026-10-03T08:00:01Z"), []
         )
+
+    def test_edframe_shipyard_observation_retains_exact_prices_anonymously(self):
+        rows = project_station_offer_observations({"observations": [{
+            "kind": "SHIPYARD", "marketId": 42,
+            "system": "Cubeo", "station": "Chelomey Orbital",
+            "observedAt": "2026-10-03T08:00:00Z",
+            "ships": [{
+                "id": 128049363, "name": "Anaconda", "buyPrice": 146969451,
+            }],
+            "commander": "must not be projected",
+        }]}, "2026-10-03T08:00:01Z")
+
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]["kind"], "SHIPYARD")
+        self.assertEqual(rows[0]["source"], "ED-Frame Journal · Shipyard.json")
+        self.assertEqual(json.loads(rows[0]["items"]), [{
+            "name": "anaconda", "id": 128049363, "buyPrice": 146969451,
+            "priceObservedAt": "2026-10-03T08:00:00Z",
+            "priceSource": "ED-Frame Journal · Shipyard.json",
+        }])
+        self.assertNotIn("commander", rows[0]["items"].casefold())
+
+    def test_edframe_outfitting_observation_retains_exact_prices_anonymously(self):
+        rows = project_station_offer_observations({"observations": [{
+            "kind": "OUTFITTING", "marketId": 42,
+            "system": "Cubeo", "station": "Chelomey Orbital",
+            "observedAt": "2026-10-03T08:00:00Z",
+            "modules": [{
+                "id": 128049511, "name": "Hpt_AdvancedTorpPylon_Fixed_Large",
+                "buyPrice": 157960, "buyMercCoinsPrice": 0,
+            }],
+            "commander": "must not be projected",
+        }]}, "2026-10-03T08:00:01Z")
+
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]["kind"], "OUTFITTING")
+        self.assertEqual(rows[0]["source"], "ED-Frame Journal · Outfitting.json")
+        self.assertEqual(json.loads(rows[0]["items"]), [{
+            "name": "hpt_advancedtorppylon_fixed_large",
+            "id": 128049511, "buyPrice": 157960,
+            "priceObservedAt": "2026-10-03T08:00:00Z",
+            "priceSource": "ED-Frame Journal · Outfitting.json",
+            "buyMercCoinsPrice": 0,
+        }])
+        self.assertNotIn("commander", rows[0]["items"].casefold())
 
     def test_system_projection_keeps_public_location_only(self):
         row = project_system({

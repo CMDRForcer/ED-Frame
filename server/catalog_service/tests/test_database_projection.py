@@ -1,7 +1,8 @@
 import unittest
 
 from edframe_catalog.database import (
-    upsert_batch, upsert_state_find_batch, upsert_station_offer_batch,
+    seed_reference_catalog, upsert_batch, upsert_state_find_batch,
+    upsert_station_offer_batch,
     upsert_yield_observations,
 )
 
@@ -132,8 +133,27 @@ class DatabaseProjectionTests(unittest.TestCase):
         self.assertIn("modules", conn.calls[0][0])
         self.assertIn("jsonb_array_elements", conn.calls[0][0])
         self.assertIn("EDDN outfitting/2", conn.calls[0][0])
-        self.assertIn("station_shipyards", conn.calls[1][0])
-        self.assertIn("ships", conn.calls[1][0])
+        self.assertIn("station_module_offers", conn.calls[1][0])
+        self.assertIn("station_shipyards", conn.calls[2][0])
+        self.assertIn("ships", conn.calls[2][0])
+        self.assertIn("EDDN shipyard/2", conn.calls[2][0])
+        self.assertIn("jsonb_array_elements", conn.calls[2][0])
+        self.assertIn("station_ship_offers", conn.calls[3][0])
+
+    def test_reference_catalog_seeds_module_quality_and_ship_facts(self):
+        conn = RecordingConnection()
+        seed_reference_catalog(conn)
+        self.assertEqual(len(conn.calls), 2)
+        module_sql, module_values = conn.calls[0]
+        ship_sql, ship_values = conn.calls[1]
+        self.assertIn("module_catalog", module_sql)
+        self.assertIn("ship_catalog", ship_sql)
+        modules = __import__("json").loads(module_values[0])
+        ships = __import__("json").loads(ship_values[0])
+        beam = next(row for row in modules if row["symbol"] == "hpt_beamlaser_fixed_small")
+        self.assertEqual((beam["display_name"], beam["module_class"], beam["rating"]),
+                         ("BEAM LASER", 1, "E"))
+        self.assertTrue(any(row["display_name"] == "Anaconda" for row in ships))
 
 
 if __name__ == "__main__":

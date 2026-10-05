@@ -19,6 +19,14 @@ anonymous public catalog facts ED-Frame can reuse:
   inventories, keyed by Market ID and atomically replaced only by an equally
   new or newer observation. Version 3 retains the observed `BuyPrice` and
   `BuyMercCoinsPrice`; version 2 remains a compatible availability fallback;
+- opt-in, anonymous module and ship purchase prices from ED-Frame
+  `Outfitting.json` and `Shipyard.json`
+  snapshots. These retain item ID, exact observed price, source and observation
+  time; later availability-only EDDN messages preserve matching prices;
+- normalized station-module and station-ship offer tables for indexed Finder
+  lookups, alongside the lossless complete-inventory JSON snapshots;
+- versioned public reference catalogs for module display name, class/rating and
+  power draw plus ship manufacturer, size and loadout geometry;
 - current public BGS snapshots and supported FSS signal observations used by
   State Finds. BGS snapshots are retained for 24 hours; signals retain their
   reported lifetime and are never extended by the server.
@@ -31,8 +39,9 @@ idempotent and do not clear existing tables or rows.
 It does not accept or store Commander names, FIDs, private groups, cargo,
 Journal files or paths, builds, wishlists, credentials or tokens. PostgreSQL is
 reachable only by the private Compose network. The public surface is read-only
-except for the bounded, rate-limited yield-observation endpoint; sharing through
-that endpoint is disabled by default in ED-Frame and requires explicit consent.
+except for bounded, rate-limited yield and station-price observation endpoints.
+Both sharing options are disabled by default in ED-Frame and require explicit
+consent.
 
 ## Production deployment
 
@@ -41,6 +50,9 @@ that endpoint is disabled by default in ED-Frame and requires explicit consent.
 2. Ensure the DNS A/AAAA records point at the host.
 3. Run `docker compose up -d --build`.
 4. Verify `/healthz` and `/v1/status` over HTTPS.
+5. After the first deployment containing normalized offer tables, backfill the
+   retained inventories once:
+   `docker compose exec -T db psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" < ops/backfill-normalized-offers.sql`.
 
 Persistent volumes hold PostgreSQL and Caddy certificates. The collector can be
 restarted or upgraded without clearing the catalog. The database should also be
@@ -60,11 +72,14 @@ removed. Mining evidence and system geography are deliberately retained.
 - `GET /v1/stations/search?system=Cubeo&landing_pad=L`
 - `GET /v1/station-offers/search?module=int_fuelscoop_size8_class5`
 - `GET /v1/station-offers/search?ship=anaconda`
+- `GET /v1/catalog/modules/suggest?q=beam`
+- `GET /v1/catalog/ships/suggest?q=ana`
 - `GET /v1/markets/search?commodity=platinum`
 - `GET /v1/sites/search?commodity=platinum`
 - `GET /v1/sync/markets`
 - `GET /v1/sync/station-offers`
 - `GET /v1/sync/state-finds`
+- `POST /v1/station-offers/observations` (maximum 20 anonymous observations)
 - `POST /v1/yields/observations` (maximum 100 anonymous observations per batch)
 
 Market and site search accept optional `x`, `y`, `z` and `max_distance`
@@ -73,4 +88,3 @@ the same read-only, anonymous contract.
 
 `/v1/status` exposes separate catalog counts plus freshness and completeness
 metrics for market details, station metadata, coordinates and mining evidence.
-

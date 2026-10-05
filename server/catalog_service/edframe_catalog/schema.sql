@@ -73,6 +73,82 @@ CREATE INDEX IF NOT EXISTS station_shipyards_ships_idx
 CREATE INDEX IF NOT EXISTS station_shipyards_sync_idx
     ON station_shipyards (updated_at, market_id);
 
+-- Search-optimised projections of the complete JSON inventories above.  The
+-- JSON rows remain the atomic sync contract; these rows make item lookups and
+-- price/freshness sorting predictable without scanning multi-million-element
+-- JSON arrays for every Finder request.
+CREATE TABLE IF NOT EXISTS station_module_offers (
+    market_id BIGINT NOT NULL,
+    module_symbol TEXT NOT NULL,
+    module_id BIGINT,
+    buy_price BIGINT,
+    buy_merc_coins_price BIGINT,
+    observed_at TIMESTAMPTZ NOT NULL,
+    price_observed_at TIMESTAMPTZ,
+    availability_source TEXT NOT NULL,
+    price_source TEXT,
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    PRIMARY KEY (market_id, module_symbol)
+);
+
+CREATE INDEX IF NOT EXISTS station_module_offers_search_idx
+    ON station_module_offers
+       (module_symbol, observed_at DESC, buy_price NULLS LAST);
+CREATE INDEX IF NOT EXISTS station_module_offers_price_idx
+    ON station_module_offers (module_symbol, price_observed_at DESC)
+    WHERE buy_price IS NOT NULL;
+
+CREATE TABLE IF NOT EXISTS station_ship_offers (
+    market_id BIGINT NOT NULL,
+    ship_symbol TEXT NOT NULL,
+    ship_id BIGINT,
+    buy_price BIGINT,
+    observed_at TIMESTAMPTZ NOT NULL,
+    price_observed_at TIMESTAMPTZ,
+    availability_source TEXT NOT NULL,
+    price_source TEXT,
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    PRIMARY KEY (market_id, ship_symbol)
+);
+
+CREATE INDEX IF NOT EXISTS station_ship_offers_search_idx
+    ON station_ship_offers
+       (ship_symbol, observed_at DESC, buy_price NULLS LAST);
+CREATE INDEX IF NOT EXISTS station_ship_offers_price_idx
+    ON station_ship_offers (ship_symbol, price_observed_at DESC)
+    WHERE buy_price IS NOT NULL;
+
+-- Public reference facts are versioned with ED-Frame and intentionally do not
+-- contain Commander state. Permit/rank ownership remains local to each app.
+CREATE TABLE IF NOT EXISTS module_catalog (
+    symbol TEXT PRIMARY KEY,
+    display_name TEXT NOT NULL,
+    module_class SMALLINT,
+    rating TEXT,
+    size_rating TEXT,
+    power_draw_mw DOUBLE PRECISION,
+    source TEXT NOT NULL,
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS module_catalog_name_idx
+    ON module_catalog (LOWER(display_name), symbol);
+
+CREATE TABLE IF NOT EXISTS ship_catalog (
+    symbol TEXT PRIMARY KEY,
+    display_name TEXT NOT NULL,
+    manufacturer TEXT,
+    ship_size TEXT,
+    maximum_speed INTEGER,
+    boost_speed INTEGER,
+    specifications JSONB NOT NULL DEFAULT '{}'::jsonb,
+    source TEXT NOT NULL,
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS ship_catalog_name_idx
+    ON ship_catalog (LOWER(display_name), symbol);
+
 CREATE TABLE IF NOT EXISTS markets (
     market_id BIGINT NOT NULL,
     commodity TEXT NOT NULL,
@@ -226,4 +302,3 @@ CREATE TABLE IF NOT EXISTS collector_state (
     errors_total BIGINT NOT NULL DEFAULT 0,
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
-

@@ -123,17 +123,47 @@ def _module_offer(value: Any) -> dict[str, Any] | None:
     return result
 
 
+def _ship_offer(value: Any) -> dict[str, Any] | None:
+    if isinstance(value, str):
+        name = value.strip().casefold()
+        return {"name": name} if name else None
+    if not isinstance(value, dict):
+        return None
+    name = str(
+        value.get("name") or value.get("ShipType") or ""
+    ).strip().casefold()
+    if not name:
+        return None
+    result: dict[str, Any] = {"name": name}
+    for source_key, target_key in (
+        ("id", "id"),
+        ("ShipPrice", "buyPrice"),
+        ("buyPrice", "buyPrice"),
+    ):
+        if target_key in result:
+            continue
+        number = _optional_nonnegative(value.get(source_key))
+        if number >= 0:
+            result[target_key] = number
+    for key in ("priceObservedAt", "priceSource"):
+        text = str(value.get(key) or "").strip()
+        if text:
+            result[key] = text
+    return result
+
+
 def _normalize_offer_items(value: Any, kind: str) -> list[Any]:
     if not isinstance(value, list):
         return []
-    if kind != "OUTFITTING":
+    if kind not in {"OUTFITTING", "SHIPYARD"}:
         return sorted({
             str(item).strip().casefold()
             for item in value if isinstance(item, str) and item.strip()
         })
     by_name: dict[str, str | dict[str, Any]] = {}
+    projector = _module_offer if kind == "OUTFITTING" else _ship_offer
     for item in value:
-        offer = _module_offer(item)
+        offer = projector(item)
         if not offer:
             continue
         name = offer["name"]
@@ -141,6 +171,29 @@ def _normalize_offer_items(value: Any, kind: str) -> list[Any]:
         if len(offer) > 1 or current is None:
             by_name[name] = offer if len(offer) > 1 else name
     return [by_name[name] for name in sorted(by_name)]
+
+
+def _preserve_observed_offer_prices(
+    incoming: Any, existing: Any, kind: str,
+) -> list[Any]:
+    """Retain a matching observed price across availability-only refreshes."""
+    incoming_items = _normalize_offer_items(incoming, kind)
+    existing_items = _normalize_offer_items(existing, kind)
+    priced_existing = {
+        item["name"]: item for item in existing_items
+        if isinstance(item, dict) and "buyPrice" in item
+    }
+    merged = []
+    projector = _module_offer if kind == "OUTFITTING" else _ship_offer
+    for item in incoming_items:
+        offer = projector(item)
+        if not offer:
+            continue
+        retained = priced_existing.get(offer["name"])
+        if "buyPrice" not in offer and retained:
+            offer = {**retained, **offer}
+        merged.append(offer if len(offer) > 1 else offer["name"])
+    return merged
 
 
 def _market_key(row: dict[str, Any]) -> str:
@@ -901,7 +954,34 @@ class MarketCatalogStore:
         """
         with self._lock, closing(self._connect()) as connection:
             connection.execute("BEGIN IMMEDIATE")
-            connection.executemany(statement, prepared)
+            market_ids = sorted({row[0] for row in prepared})
+            placeholders = ",".join("?" for _ in market_ids)
+            existing_rows = connection.execute(
+                "SELECT market_id, modules_json, ships_json "
+                f"FROM station_offers WHERE market_id IN ({placeholders})",
+                market_ids,
+            ).fetchall()
+            existing_by_market = {
+                int(row["market_id"]): row for row in existing_rows
+            }
+            merged_prepared = []
+            for raw in prepared:
+                values = list(raw)
+                existing = existing_by_market.get(int(values[0]))
+                if existing is not None and values[14] > 0:
+                    values[11] = _json_list(_preserve_observed_offer_prices(
+                        _loaded_list(values[11]),
+                        _loaded_list(existing["modules_json"]),
+                        "OUTFITTING",
+                    ))
+                if existing is not None and values[16] > 0:
+                    values[12] = _json_list(_preserve_observed_offer_prices(
+                        _loaded_list(values[12]),
+                        _loaded_list(existing["ships_json"]),
+                        "SHIPYARD",
+                    ))
+                merged_prepared.append(tuple(values))
+            connection.executemany(statement, merged_prepared)
             connection.commit()
         return len(prepared)
 
@@ -941,10 +1021,11 @@ class MarketCatalogStore:
                 ), None)
                 matches = matched_offer is not None
             else:
-                matches = wanted in {
-                    str(value).strip().casefold() for value in stored_items
-                    if isinstance(value, str)
-                }
+                matched_offer = next((
+                    offer for offer in map(_ship_offer, stored_items)
+                    if offer and offer["name"] == wanted
+                ), None)
+                matches = matched_offer is not None
             if not matches:
                 continue
             result.append({
@@ -960,9 +1041,17 @@ class MarketCatalogStore:
                     else []
                 ),
                 "services": _loaded_list(row["services_json"]),
-                "moduleOffer": matched_offer,
+                "moduleOffer": (
+                    matched_offer if column == "modules_json" else None
+                ),
+                "shipOffer": matched_offer if column == "ships_json" else None,
                 "moduleId": (
-                    matched_offer.get("id") if matched_offer else None
+                    matched_offer.get("id")
+                    if matched_offer and column == "modules_json" else None
+                ),
+                "shipId": (
+                    matched_offer.get("id")
+                    if matched_offer and column == "ships_json" else None
                 ),
                 "buyPrice": (
                     matched_offer.get("buyPrice") if matched_offer else None
