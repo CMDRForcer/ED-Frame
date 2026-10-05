@@ -302,3 +302,23 @@ CREATE TABLE IF NOT EXISTS collector_state (
     errors_total BIGINT NOT NULL DEFAULT 0,
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
+
+-- Small, bounded operational telemetry. One row per schema and UTC hour makes
+-- it possible to distinguish a quiet schema from messages that arrived but did
+-- not contain a fact ED-Frame currently projects. Raw EDDN frames are never
+-- retained.
+CREATE TABLE IF NOT EXISTS collector_schema_metrics_hourly (
+    bucket_start TIMESTAMPTZ NOT NULL,
+    schema TEXT NOT NULL,
+    messages_total BIGINT NOT NULL DEFAULT 0,
+    used_messages_total BIGINT NOT NULL DEFAULT 0,
+    projected_rows_total BIGINT NOT NULL DEFAULT 0,
+    ignored_messages_total BIGINT NOT NULL DEFAULT 0,
+    errors_total BIGINT NOT NULL DEFAULT 0,
+    bytes_total BIGINT NOT NULL DEFAULT 0,
+    last_received_at TIMESTAMPTZ NOT NULL,
+    PRIMARY KEY (bucket_start, schema)
+);
+
+CREATE INDEX IF NOT EXISTS collector_schema_metrics_hourly_received_idx
+    ON collector_schema_metrics_hourly (last_received_at DESC, schema);

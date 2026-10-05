@@ -1,7 +1,7 @@
 import unittest
 
 from edframe_catalog.database import (
-    seed_reference_catalog, upsert_batch, upsert_state_find_batch,
+    record_state, seed_reference_catalog, upsert_batch, upsert_state_find_batch,
     upsert_station_offer_batch,
     upsert_yield_observations,
 )
@@ -16,6 +16,35 @@ class RecordingConnection:
 
 
 class DatabaseProjectionTests(unittest.TestCase):
+    def test_collector_state_records_hourly_schema_usage_and_volume(self):
+        conn = RecordingConnection()
+        record_state(
+            conn,
+            schema="commodity/3",
+            received_at="2026-10-05T12:34:56Z",
+            projected=412,
+            message_bytes=8192,
+        )
+        self.assertEqual(len(conn.calls), 2)
+        hourly_sql, hourly_values = conn.calls[1]
+        self.assertIn("collector_schema_metrics_hourly", hourly_sql)
+        self.assertIn("date_trunc('hour'", hourly_sql)
+        self.assertEqual(hourly_values["used_messages"], 1)
+        self.assertEqual(hourly_values["ignored_messages"], 0)
+        self.assertEqual(hourly_values["projected"], 412)
+        self.assertEqual(hourly_values["message_bytes"], 8192)
+
+        ignored = RecordingConnection()
+        record_state(
+            ignored,
+            schema="navroute/1",
+            received_at="2026-10-05T12:35:00Z",
+            projected=0,
+            message_bytes=1024,
+        )
+        self.assertEqual(ignored.calls[1][1]["used_messages"], 0)
+        self.assertEqual(ignored.calls[1][1]["ignored_messages"], 1)
+
     def test_yield_observations_create_site_sample_and_material_rows(self):
         conn = RecordingConnection()
         projected = upsert_yield_observations(conn, [{

@@ -28,8 +28,13 @@ anonymous public catalog facts ED-Frame can reuse:
 - versioned public reference catalogs for module display name, class/rating and
   power draw plus ship manufacturer, size and loadout geometry;
 - current public BGS snapshots and supported FSS signal observations used by
-  State Finds. BGS snapshots are retained for 24 hours; signals retain their
-  reported lifetime and are never extended by the server.
+  State Finds. The latest snapshot per system is retained durably but served
+  as current only for 24 hours; signals retain their reported lifetime and are
+  never extended by the server.
+- per-schema EDDN telemetry in one-hour buckets: received and used messages,
+  projected rows, ignored messages, errors, compressed relay bytes and last
+  receipt time. Raw relay frames are never retained. `/v1/status` exposes the
+  rolling latest 24 buckets; buckets older than eight days are removed.
 
 Missing source fields remain `null`; the collector does not infer landing-pad
 size or other station properties from names or station types. Sparse newer

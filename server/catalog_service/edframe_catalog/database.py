@@ -719,6 +719,7 @@ def record_state(
     messages: int = 1,
     projected: int = 0,
     errors: int = 0,
+    message_bytes: int = 0,
 ) -> None:
     conn.execute(
         """
@@ -741,5 +742,53 @@ def record_state(
             "messages": messages,
             "projected": projected,
             "errors": errors,
+        },
+    )
+    used_messages = messages if projected > 0 and errors == 0 else 0
+    ignored_messages = messages if projected == 0 and errors == 0 else 0
+    conn.execute(
+        """
+        INSERT INTO collector_schema_metrics_hourly
+            (bucket_start, schema, messages_total, used_messages_total,
+             projected_rows_total, ignored_messages_total, errors_total,
+             bytes_total, last_received_at)
+        VALUES
+            (date_trunc('hour', %(received_at)s::timestamptz), %(schema)s,
+             %(messages)s, %(used_messages)s, %(projected)s,
+             %(ignored_messages)s, %(errors)s, %(message_bytes)s,
+             %(received_at)s)
+        ON CONFLICT (bucket_start, schema) DO UPDATE SET
+            messages_total =
+                collector_schema_metrics_hourly.messages_total
+                + EXCLUDED.messages_total,
+            used_messages_total =
+                collector_schema_metrics_hourly.used_messages_total
+                + EXCLUDED.used_messages_total,
+            projected_rows_total =
+                collector_schema_metrics_hourly.projected_rows_total
+                + EXCLUDED.projected_rows_total,
+            ignored_messages_total =
+                collector_schema_metrics_hourly.ignored_messages_total
+                + EXCLUDED.ignored_messages_total,
+            errors_total =
+                collector_schema_metrics_hourly.errors_total
+                + EXCLUDED.errors_total,
+            bytes_total =
+                collector_schema_metrics_hourly.bytes_total
+                + EXCLUDED.bytes_total,
+            last_received_at = GREATEST(
+                collector_schema_metrics_hourly.last_received_at,
+                EXCLUDED.last_received_at
+            )
+        """,
+        {
+            "received_at": received_at,
+            "schema": str(schema or "unknown"),
+            "messages": max(0, int(messages)),
+            "used_messages": max(0, int(used_messages)),
+            "projected": max(0, int(projected)),
+            "ignored_messages": max(0, int(ignored_messages)),
+            "errors": max(0, int(errors)),
+            "message_bytes": max(0, int(message_bytes)),
         },
     )

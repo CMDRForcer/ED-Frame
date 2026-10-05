@@ -20,12 +20,12 @@ docker compose exec -T db psql \
     --username "$POSTGRES_USER" \
     --dbname "$POSTGRES_DB" \
     --set ON_ERROR_STOP=1 \
-    --command "DELETE FROM state_signals WHERE expires_at <= NOW();"
+    --command "DELETE FROM state_signals WHERE expires_at <= NOW(); DELETE FROM collector_schema_metrics_hourly WHERE bucket_start < NOW() - INTERVAL '8 days';"
 docker compose exec -T db psql \
     --username "$POSTGRES_USER" \
     --dbname "$POSTGRES_DB" \
     --set ON_ERROR_STOP=1 \
-    --command "VACUUM (ANALYZE) markets, station_module_offers, station_ship_offers, state_bgs_snapshots, state_signals;"
+    --command "VACUUM (ANALYZE) markets, station_module_offers, station_ship_offers, state_bgs_snapshots, state_signals, collector_schema_metrics_hourly;"
 
 disk_usage=$(df -P "$SERVICE_DIR" | awk 'NR == 2 {gsub(/%/, "", $5); print $5}')
 case "$disk_usage" in

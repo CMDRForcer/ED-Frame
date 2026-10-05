@@ -62,9 +62,11 @@ def main() -> None:
                 except zmq.Again:
                     continue
                 received_at = utc_now()
+                schema = "invalid"
+                message_bytes = len(raw)
                 try:
                     payload = decode_relay_frame(raw)
-                    schema = schema_name(payload)
+                    schema = schema_name(payload) or "unknown"
                     system = project_system(payload)
                     markets = project_markets(payload, received_at)
                     sites = project_sites(payload, received_at)
@@ -94,6 +96,7 @@ def main() -> None:
                         schema=schema,
                         received_at=received_at,
                         projected=projected,
+                        message_bytes=message_bytes,
                     )
                     conn.commit()
                 except (EddnRelayDecodeError, ValueError, TypeError) as exc:
@@ -104,11 +107,24 @@ def main() -> None:
                         schema="invalid",
                         received_at=received_at,
                         errors=1,
+                        message_bytes=message_bytes,
                     )
                     conn.commit()
                 except Exception:
                     conn.rollback()
                     LOG.exception("collector iteration failed")
+                    try:
+                        record_state(
+                            conn,
+                            schema=schema,
+                            received_at=received_at,
+                            errors=1,
+                            message_bytes=message_bytes,
+                        )
+                        conn.commit()
+                    except Exception:
+                        conn.rollback()
+                        LOG.exception("failed to retain collector error metric")
                     time.sleep(1)
     finally:
         socket.close()

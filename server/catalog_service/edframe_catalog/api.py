@@ -212,6 +212,23 @@ def status() -> dict:
         state = conn.execute(
             "SELECT * FROM collector_state WHERE source = 'EDDN'"
         ).fetchone()
+        schema_metrics = conn.execute(
+            """
+            SELECT schema,
+                   SUM(messages_total)::BIGINT AS messages,
+                   SUM(used_messages_total)::BIGINT AS "usedMessages",
+                   SUM(projected_rows_total)::BIGINT AS "projectedRows",
+                   SUM(ignored_messages_total)::BIGINT AS "ignoredMessages",
+                   SUM(errors_total)::BIGINT AS errors,
+                   SUM(bytes_total)::BIGINT AS bytes,
+                   MAX(last_received_at) AS "lastReceivedAt"
+            FROM collector_schema_metrics_hourly
+            WHERE bucket_start >= date_trunc('hour', NOW())
+                - INTERVAL '23 hours'
+            GROUP BY schema
+            ORDER BY messages DESC, schema
+            """
+        ).fetchall()
         commodities = conn.execute(
             "SELECT COUNT(DISTINCT commodity) AS value FROM markets"
         ).fetchone()
@@ -265,6 +282,31 @@ def status() -> dict:
     market_count = int(counts["markets"])
     site_count = int(counts["sites"])
     station_count = int(counts["stations"])
+    schema_rows = []
+    for source in schema_metrics:
+        row = dict(source)
+        messages = int(row["messages"] or 0)
+        used = int(row["usedMessages"] or 0)
+        ignored = int(row["ignoredMessages"] or 0)
+        errors = int(row["errors"] or 0)
+        if used and (ignored or errors):
+            usage_status = "PARTIAL"
+        elif used:
+            usage_status = "USED"
+        elif errors and errors >= messages:
+            usage_status = "ERROR"
+        else:
+            usage_status = "NOT_PROJECTED"
+        row["usageStatus"] = usage_status
+        row["usedPercent"] = _percent(used, messages)
+        schema_rows.append(row)
+    schema_totals = {
+        key: sum(int(row[key] or 0) for row in schema_rows)
+        for key in (
+            "messages", "usedMessages", "projectedRows",
+            "ignoredMessages", "errors", "bytes",
+        )
+    }
     return {
         "generatedAt": _now(),
         "counts": {
@@ -312,6 +354,13 @@ def status() -> dict:
             ),
         },
         "collector": dict(state) if state else None,
+        "collector24h": {
+            **schema_totals,
+            "usedPercent": _percent(
+                schema_totals["usedMessages"], schema_totals["messages"]
+            ),
+            "schemas": schema_rows,
+        },
     }
 
 
