@@ -60,9 +60,13 @@ exported regularly with `pg_dump`; a provider VM snapshot is not a substitute
 for an application-level database backup.
 
 The files in `ops/` provide a verified daily custom-format `pg_dump` with
-14-day retention and conservative weekly removal of market observations older
-than 90 days. Expired signals and BGS snapshots older than 24 hours are also
-removed. Mining evidence and system geography are deliberately retained.
+14-day retention. Weekly maintenance retains every last-known catalog fact,
+including old markets and current-per-system BGS snapshots. Freshness is a
+query concern and never a deletion rule. Only signals carrying an explicit,
+elapsed expiry are removed. PostgreSQL statistics are refreshed weekly and the
+maintenance unit reports warnings at 70% disk use and a critical failure at
+85%, without deleting durable data. Container logs are bounded to three 20 MB
+files per service. Mining evidence and system geography are retained.
 
 ## API
 
