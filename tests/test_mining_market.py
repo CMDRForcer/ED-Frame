@@ -210,7 +210,7 @@ class MiningMarketTests(unittest.TestCase):
         status = fetch_edframe_catalog_status(get=get)
         self.assertEqual(status["counts"]["markets"], 20)
         self.assertTrue(calls[0][0].endswith("/v1/status"))
-        self.assertEqual(calls[0][1]["timeout"], 30)
+        self.assertEqual(calls[0][1]["timeout"], 60)
 
     def test_central_catalog_health_uses_lightweight_endpoint(self):
         calls = []

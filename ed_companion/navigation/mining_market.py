@@ -72,7 +72,7 @@ def fetch_edframe_catalog_health(*, get: Any, timeout: int = 5) -> dict[str, Any
     return payload
 
 
-def fetch_edframe_catalog_status(*, get: Any, timeout: int = 30) -> dict[str, Any]:
+def fetch_edframe_catalog_status(*, get: Any, timeout: int = 60) -> dict[str, Any]:
     """Return the anonymous central catalog's potentially expensive summary."""
     response = get(f"{EDFRAME_CATALOG_BASE}/v1/status", timeout=timeout)
     response.raise_for_status()
