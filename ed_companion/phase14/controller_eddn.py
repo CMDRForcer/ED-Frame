@@ -136,7 +136,7 @@ from ed_companion.navigation.mining_commodities import (
 from ed_companion.navigation.mining_market import (
     commander_personal_discount_bps,
     project_local_outfitting_observation,
-    project_local_shipyard_observation,
+    project_shipyard_purchase_observation,
     send_edframe_station_offer_observations,
     station_offer_observation_key,
 )
@@ -1000,15 +1000,20 @@ class EddnMixin:
         self._scan_local_shipyard_price_file()
         if not self._sync_eddn_profile():
             return
-        if not eddn_upload_allowed(self._eddn_config):
+        eddn_allowed = eddn_upload_allowed(self._eddn_config)
+        price_sharing_allowed = bool(getattr(
+            self, "_edframe_station_price_sharing_enabled", False
+        ))
+        if not eddn_allowed and not price_sharing_allowed:
             return
-        if not self._eddn_profile_identity:
+        if eddn_allowed and not self._eddn_profile_identity:
             LOGGER.warning("EDDN upload skipped: no active Commander FID")
             return
         if not self._eddn_baseline_established:
             self._baseline_eddn_journal_files()
             self._save_eddn_cursor()
-            self._scan_eddn_station_files()
+            if eddn_allowed:
+                self._scan_eddn_station_files()
             return
         journal_signature = journal_change_signature()
         monitored_names = {
@@ -1057,6 +1062,11 @@ class EddnMixin:
                 self._eddn_context = update_eddn_context(
                     self._eddn_context, event
                 )
+                if event.get("event") == "ShipyardBuy":
+                    self._share_shipyard_purchase(event)
+                if not eddn_allowed:
+                    committed = line_end
+                    continue
                 navroute_fingerprint = ""
                 navroute_reason = ""
                 if event.get("event") == "NavRoute":
@@ -1133,7 +1143,7 @@ class EddnMixin:
             return
         if changed:
             self._save_eddn_cursor()
-        if not saturated:
+        if eddn_allowed and not saturated:
             self._scan_eddn_station_files()
 
 
@@ -1160,19 +1170,16 @@ class EddnMixin:
 
 
     def _scan_local_shipyard_price_file(self):
-        """Retain exact local module/ship prices and share only by opt-in."""
+        """Retain exact module prices; hull prices require ``ShipyardBuy``."""
         observations = []
-        refresh_frontier_shipyard = False
         personal_discount_bps = commander_personal_discount_bps(
             self._state.get("commanderOverview", {})
             if isinstance(getattr(self, "_state", None), dict) else {}
         )
-        for kind, filename, projector, items_key in (
-            ("outfitting", "Outfitting.json",
-             project_local_outfitting_observation, "modules"),
-            ("shipyard", "Shipyard.json",
-             project_local_shipyard_observation, "ships"),
-        ):
+        for kind, filename, projector, items_key in ((
+            "outfitting", "Outfitting.json",
+            project_local_outfitting_observation, "modules",
+        ),):
             path = journal_dir() / filename
             try:
                 stat = path.stat()
@@ -1227,24 +1234,12 @@ class EddnMixin:
                         "source": f"ED-Frame Journal · {filename}",
                     }])
                 setattr(self, fingerprint_name, fingerprint)
-                if kind == "shipyard":
-                    refresh_frontier_shipyard = True
             except (OSError, UnicodeError, ValueError, TypeError) as exc:
                 LOGGER.debug("Local %s prices are not available yet: %s",
                              kind, exc)
             except sqlite3.DatabaseError as exc:
                 LOGGER.warning("Local %s prices were not retained: %s",
                                kind, exc)
-        if (
-            refresh_frontier_shipyard
-            and getattr(self, "_frontier_tokens", None) is not None
-            and bool(getattr(self, "_frontier_config", {}).get("consent"))
-            and not bool(getattr(self, "_frontier_busy", False))
-        ):
-            # Elite occasionally writes an incomplete Shipyard.json.  A
-            # connected, already-consented CAPI session fills that gap once
-            # per changed snapshot without polling Frontier continuously.
-            QTimer.singleShot(1200, self.refreshFrontierProfile)
         if not observations or not getattr(
             self, "_edframe_station_price_sharing_enabled", False
         ):
@@ -1252,7 +1247,7 @@ class EddnMixin:
         key = station_offer_observation_key(observations)
         if key == getattr(self, "_edframe_station_price_last_key", ""):
             self._edframe_station_price_upload_status = (
-                "Up to date · latest module and ship prices already shared"
+                "Up to date · latest module prices already shared"
             )
             return
         if getattr(self, "_edframe_station_price_upload_busy", False):
@@ -1267,11 +1262,49 @@ class EddnMixin:
         self._start_edframe_station_price_upload(key, observations)
 
 
+    def _share_shipyard_purchase(self, event):
+        """Share one opted-in purchase without exposing Commander data."""
+        if not getattr(
+            self, "_edframe_station_price_sharing_enabled", False
+        ):
+            return
+        personal_discount_bps = commander_personal_discount_bps(
+            self._state.get("commanderOverview", {})
+            if isinstance(getattr(self, "_state", None), dict) else {}
+        )
+        observation = project_shipyard_purchase_observation(
+            event, getattr(self, "_eddn_context", {}),
+            personal_discount_bps=personal_discount_bps,
+        )
+        if not observation:
+            LOGGER.warning(
+                "ShipyardBuy was not shared because station context was incomplete"
+            )
+            return
+        observations = [observation]
+        key = station_offer_observation_key(observations)
+        if key == getattr(self, "_edframe_station_price_last_key", ""):
+            return
+        if getattr(self, "_edframe_station_price_upload_busy", False):
+            self._pending_edframe_station_price_observation = (
+                key, observations
+            )
+            return
+        if time.monotonic() < getattr(
+            self, "_edframe_station_price_next_retry_at", 0.0
+        ):
+            self._pending_edframe_station_price_observation = (
+                key, observations
+            )
+            return
+        self._start_edframe_station_price_upload(key, observations)
+
+
     def _start_edframe_station_price_upload(self, key, observations):
         self._edframe_station_price_upload_busy = True
         self._active_edframe_station_price_upload = str(key)
         self._edframe_station_price_upload_status = (
-            "Sharing anonymous observed module and ship prices…"
+            "Sharing anonymous module prices or confirmed ship purchase…"
         )
         self.connectionChanged.emit()
 

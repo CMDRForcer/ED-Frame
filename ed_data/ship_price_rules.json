@@ -1,0 +1,21 @@
+{
+  "schemaVersion": 1,
+  "capturedAt": "2026-10-06",
+  "description": "Deterministic public station adjustments applied to fixed global ship reference prices. Dynamic Powerplay discounts are deliberately excluded until system state and Commander eligibility can be proven.",
+  "rules": [
+    {
+      "id": "jameson-memorial",
+      "system": "Shinrarta Dezhra",
+      "station": "Jameson Memorial",
+      "priceAdjustmentBps": -1000,
+      "label": "10% Founders World discount"
+    },
+    {
+      "id": "i-sola-prospect",
+      "system": "Brestla",
+      "station": "i Sola Prospect",
+      "priceAdjustmentBps": 2000,
+      "label": "20% i Sola Prospect premium"
+    }
+  ]
+}

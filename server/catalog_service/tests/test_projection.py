@@ -286,6 +286,27 @@ class ProjectionTests(unittest.TestCase):
         }])
         self.assertNotIn("commander", rows[0]["items"].casefold())
 
+    def test_shipyard_buy_is_a_partial_exact_price_without_ship_id(self):
+        rows = project_station_offer_observations({"observations": [{
+            "kind": "SHIP_PURCHASE", "marketId": 128666762,
+            "system": "Shinrarta Dezhra", "station": "Jameson Memorial",
+            "observedAt": "2026-10-06T20:00:00Z",
+            "ships": [{
+                "name": "mandalay", "displayName": "Mandalay",
+                "buyPrice": 15875298,
+            }],
+        }]}, "2026-10-06T20:00:01Z")
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]["kind"], "SHIPYARD")
+        self.assertTrue(rows[0]["partial_inventory"])
+        self.assertEqual(rows[0]["source"], "ED-Frame Journal · ShipyardBuy")
+        item = json.loads(rows[0]["items"])[0]
+        self.assertIsNone(item["id"])
+        self.assertEqual(item["buyPrice"], 15875298)
+        self.assertEqual(
+            item["priceSource"], "ED-Frame Journal · ShipyardBuy",
+        )
+
     def test_edframe_shipyard_rejects_active_ship_trade_in_value(self):
         rows = project_station_offer_observations({"observations": [{
             "kind": "SHIPYARD", "marketId": 4209887491,

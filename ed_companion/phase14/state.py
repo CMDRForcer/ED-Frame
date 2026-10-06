@@ -634,6 +634,11 @@ def build_state(
         (str(row.get("type") or "") for row in fleet_state.get("ships", [])
          if row.get("label") == ship), "",
     )
+    active_ship_type = next(
+        (str(row.get("type") or "") for row in fleet_state.get("ships", [])
+         if str(row.get("id") or "") == str(fleet_state.get("active_id") or "")),
+        "",
+    )
     active_monitor_plans = []
     for task in tasks or []:
         if not isinstance(task, list) or not task or not isinstance(task[0], dict):
@@ -686,6 +691,26 @@ def build_state(
     pending_plans_by_slot = pending_power_plan_targets(tasks)
     for row in engineering_ship_slots:
         row.update(pending_plans_by_slot.get(str(row.get("slot") or ""), {}))
+    active_ship_data = next(
+        (
+            row for row in (ship_catalog if isinstance(ship_catalog, list) else [])
+            if isinstance(row, dict) and (
+                normalize(row.get("symbol") or "") == normalize(active_ship_type)
+                or normalize(row.get("name") or "") == normalize(active_ship_type)
+            )
+        ),
+        {},
+    )
+    active_ship_slots = (
+        ship_slot_layout(
+            active_ship_data,
+            [dict(row) for row in loadout_slots_by_ship.get(
+                str(fleet_state.get("active_id") or ""), []
+            )],
+            blueprint_catalog(reference_data_dir(package_root)),
+        )
+        if active_ship_data else []
+    )
     selected_loadout = next(
         (
             event for event in reversed(ship_events)
@@ -1304,8 +1329,10 @@ def build_state(
         ),
         "ships": ships,
         "activeShip": active_ship,
+        "activeShipType": active_ship_type,
         "activeShipId": str(fleet_state.get("active_id") or ""),
         "activeShipKnown": active_ship in ships,
+        "activeShipSlots": active_ship_slots,
         "selectedShipId": selected_ship_id,
         "selectedShipType": selected_ship_type,
         "selectedShipStats": selected_ship_stats,

@@ -172,7 +172,7 @@ class DatabaseProjectionTests(unittest.TestCase):
         self.assertIn("automatic ship discovery", conn.calls[4][0])
         self.assertIn("ON CONFLICT (symbol) DO NOTHING", conn.calls[4][0])
 
-    def test_direct_shipyard_price_refreshes_global_reference_model(self):
+    def test_direct_shipyard_price_does_not_change_fixed_reference_model(self):
         conn = RecordingConnection()
         projected = upsert_station_offer_batch(conn, [{
             "kind": "SHIPYARD", "market_id": 42,
@@ -184,11 +184,30 @@ class DatabaseProjectionTests(unittest.TestCase):
             "source": "ED-Frame Journal · Shipyard.json",
         }])
         self.assertEqual(projected, 1)
-        self.assertEqual(len(conn.calls), 4)
+        self.assertEqual(len(conn.calls), 3)
         self.assertIn("station_ship_offers", conn.calls[1][0])
         self.assertIn("INSERT INTO ship_catalog", conn.calls[2][0])
-        self.assertIn("UPDATE ship_catalog", conn.calls[3][0])
-        self.assertEqual(conn.calls[3][1]["market_id"], 42)
+
+    def test_purchase_updates_one_ship_without_replacing_inventory(self):
+        conn = RecordingConnection()
+        projected = upsert_station_offer_batch(conn, [{
+            "kind": "SHIPYARD", "market_id": 42,
+            "system_name": "Shinrarta Dezhra",
+            "station_name": "Jameson Memorial",
+            "items": '[{"name":"mandalay","buyPrice":15875298}]',
+            "horizons": True, "odyssey": True,
+            "observed_at": "2026-10-06T20:00:00Z",
+            "received_at": "2026-10-06T20:00:01Z",
+            "source": "ED-Frame Journal · ShipyardBuy",
+            "station_type": "Orbis", "fleet_carrier": False,
+            "partial_inventory": True,
+        }])
+        self.assertEqual(projected, 1)
+        self.assertEqual(len(conn.calls), 2)
+        self.assertIn("INSERT INTO stations", conn.calls[0][0])
+        self.assertIn("station_ship_offers", conn.calls[1][0])
+        self.assertNotIn("DELETE FROM station_ship_offers", conn.calls[1][0])
+        self.assertNotIn("station_shipyards", conn.calls[1][0])
 
     def test_direct_carrier_metadata_is_saved_before_price_reference(self):
         conn = RecordingConnection()
@@ -207,7 +226,7 @@ class DatabaseProjectionTests(unittest.TestCase):
         self.assertIn("station_shipyards", conn.calls[1][0])
         self.assertIn("station_ship_offers", conn.calls[2][0])
         self.assertIn("INSERT INTO ship_catalog", conn.calls[3][0])
-        self.assertIn("UPDATE ship_catalog", conn.calls[4][0])
+        self.assertEqual(len(conn.calls), 4)
 
     def test_reference_catalog_seeds_module_quality_and_ship_facts(self):
         conn = RecordingConnection()

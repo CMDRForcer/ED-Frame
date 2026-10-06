@@ -130,6 +130,7 @@ from ed_companion.navigation.mining_commodities import (
 from ed_companion.navigation.mining_market_store import MarketCatalogStore
 from ed_companion.navigation.shipyard_finder import (
     build_module_catalog,
+    build_module_families,
     build_permit_rules,
     build_ship_catalog,
 )
@@ -524,9 +525,9 @@ class CockpitController(
         )
         self._edframe_station_price_upload_busy = False
         self._edframe_station_price_upload_status = (
-            "Ready · anonymous module and ship price sharing enabled"
+            "Ready · anonymous module prices and confirmed ship purchases"
             if self._edframe_station_price_sharing_enabled
-            else "Off · observed module and ship prices remain local"
+            else "Off · module prices and ship purchases remain local"
         )
         self._edframe_station_price_last_key = str(
             ui_config.get("edframe_station_price_last_key") or ""
@@ -846,9 +847,15 @@ class CockpitController(
         self._ship_reference_prices = read_json(
             self._reference_data_dir / "ship_reference_prices.json", {}
         )
+        self._ship_price_rules = read_json(
+            self._reference_data_dir / "ship_price_rules.json", {}
+        )
         self._shipyard_module_catalog = build_module_catalog(read_json(
             self._reference_data_dir / "module_display.json", {}
         ))
+        self._shipyard_module_families = build_module_families(
+            self._shipyard_module_catalog
+        )
         self._shipyard_ship_catalog = build_ship_catalog(
             self._ship_catalog, self._ship_reference_prices,
         )

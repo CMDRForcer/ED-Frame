@@ -15,12 +15,23 @@ Item {
                                   ? "" : String(cockpit.system || "")
     property int rangeLy: 100
     property string padFilter: "ANY"
-    property string accessFilter: "SAFE + UNKNOWN"
+    property string accessFilter: "ALL · SHOW LOCKED"
+    property string moduleGroup: "HARDPOINTS"
+    property string moduleDepartment: "LASERS"
+    property string moduleFamilyKey: ""
+    property string moduleClassFilter: "ANY"
+    property string moduleRatingFilter: "ANY"
+    property string moduleMountFilter: "ANY"
+    property bool fitCurrentShip: true
     readonly property var suggestions: cockpit.shipyardFinderSuggestions || []
     readonly property var ships: cockpit.shipyardShipCatalog || []
+    readonly property var modules: cockpit.shipyardModuleCatalog || []
+    readonly property var moduleFamilies: cockpit.shipyardModuleFamilies || []
     readonly property var results: cockpit.shipyardFinderResults || []
     readonly property var stats: cockpit.edFrameCatalogStats || ({})
     readonly property var overview: cockpit.commanderOverview || ({})
+    readonly property string currentShipName: String(cockpit.shipyardCurrentShip || "")
+    readonly property bool currentShipFitKnown: Boolean(cockpit.shipyardCurrentShipFitKnown)
     readonly property color cyan: appWindow.cyan
     readonly property color orange: appWindow.orange
     readonly property color green: appWindow.green
@@ -69,6 +80,19 @@ Item {
         if (tone === "LOCKED") return appWindow.red || "#ff586f"
         return orange
     }
+    function purchaseColor(row) {
+        var tone = String((row || {}).purchaseTone || "OPEN")
+        if (tone === "CONFIRMED" || tone === "OPEN") return green
+        if (tone === "LOCKED") return appWindow.red || "#ff586f"
+        return orange
+    }
+    function priceColor(row) {
+        var status = String((row || {}).priceStatus || "UNKNOWN")
+        if (status === "OBSERVED" || status === "PURCHASE CONFIRMED") return green
+        if (status === "ESTIMATED" || status === "DISCOUNTED" || status === "STATION RULE") return orange
+        if (status === "REFERENCE") return cyan
+        return muted
+    }
     function schematicSource(row) {
         var path = String((row || {}).schematicSource || "")
         return path ? Qt.resolvedUrl("../../" + path) : ""
@@ -76,16 +100,109 @@ Item {
     function chooseItem(row) {
         selectedItem = row || ({})
         selectedSymbol = String((row || {}).symbol || "")
+        if (String((row || {}).kind || "") === "MODULES") {
+            moduleGroup = String((row || {}).moduleGroup || moduleGroup)
+            moduleDepartment = String((row || {}).moduleDepartment || moduleDepartment)
+            moduleFamilyKey = String((row || {}).moduleFamilyKey || moduleFamilyKey)
+            Qt.callLater(function() { moduleVariantGrid.positionViewAtBeginning() })
+        }
         searchField.text = String((row || {}).displayName || selectedSymbol)
         suggestionPopup.close()
+    }
+    function moduleFamilyRows() {
+        var term = searchField ? String(searchField.text || "").trim().toLowerCase() : ""
+        return moduleFamilies.filter(function(row) {
+            if (String(row.moduleGroup || "") !== moduleGroup) return false
+            if (moduleDepartment !== "ALL"
+                    && String(row.moduleDepartment || "SUPPORT") !== moduleDepartment) return false
+            if (fitCurrentShip
+                    && String(row.currentShipFitStatus || "UNKNOWN") === "INCOMPATIBLE") return false
+            if (!term) return true
+            return String(row.moduleFamily || "").toLowerCase().indexOf(term) >= 0
+        })
+    }
+    function moduleVariantRows() {
+        return modules.filter(function(row) {
+            if (String(row.moduleGroup || "") !== moduleGroup) return false
+            if (String(row.moduleFamilyKey || "") !== moduleFamilyKey) return false
+            if (fitCurrentShip
+                    && String(row.currentShipFitStatus || "UNKNOWN") === "INCOMPATIBLE") return false
+            if (moduleClassFilter !== "ANY"
+                    && String(row.moduleClass || "") !== moduleClassFilter) return false
+            if (moduleRatingFilter !== "ANY"
+                    && String(row.moduleRating || "") !== moduleRatingFilter) return false
+            if (moduleMountFilter !== "ANY"
+                    && String(row.mount || "") !== moduleMountFilter) return false
+            return true
+        })
+    }
+    function moduleDepartments(group) {
+        if (group === "HARDPOINTS")
+            return ["LASERS", "KINETIC", "EXPLOSIVE", "EXPERIMENTAL", "MINING"]
+        if (group === "UTILITY")
+            return ["DEFENCE", "SCANNERS", "SUPPORT"]
+        if (group === "CORE")
+            return ["POWER", "PROPULSION", "NAVIGATION", "SUPPORT"]
+        return ["CARGO", "PROTECTION", "LIMPETS", "PASSENGER", "EXPLORATION", "SUPPORT"]
+    }
+    function defaultModuleDepartment(group) {
+        var rows = moduleDepartments(group)
+        return rows.length ? String(rows[0]) : "ALL"
+    }
+    function selectModuleGroup(group) {
+        moduleGroup = String(group || "HARDPOINTS")
+        moduleDepartment = defaultModuleDepartment(moduleGroup)
+        moduleFamilyKey = ""
+        moduleClassFilter = "ANY"
+        moduleRatingFilter = "ANY"
+        moduleMountFilter = "ANY"
+        selectedSymbol = ""
+        selectedItem = ({})
+        searchField.text = ""
+        cockpit.clearShipyardFinder()
+        Qt.callLater(function() { moduleFamilyGrid.positionViewAtBeginning() })
+    }
+    function selectModuleDepartment(department) {
+        moduleDepartment = String(department || "ALL")
+        moduleFamilyKey = ""
+        selectedSymbol = ""
+        selectedItem = ({})
+        searchField.text = ""
+        cockpit.clearShipyardFinder()
+        Qt.callLater(function() { moduleFamilyGrid.positionViewAtBeginning() })
+    }
+    function selectModuleFamily(row) {
+        moduleFamilyKey = String((row || {}).moduleFamilyKey || "")
+        selectedSymbol = ""
+        selectedItem = ({})
+        searchField.text = String((row || {}).moduleFamily || "")
+        cockpit.clearShipyardFinder()
+        Qt.callLater(function() { moduleVariantGrid.positionViewAtBeginning() })
+    }
+    function backToModuleFamilies() {
+        moduleFamilyKey = ""
+        selectedSymbol = ""
+        selectedItem = ({})
+        searchField.text = ""
+        cockpit.clearShipyardFinder()
     }
     function resetMode(nextMode) {
         mode = nextMode
         selectedSymbol = ""
         selectedItem = ({})
         searchField.text = ""
+        if (nextMode === "MODULES") {
+            moduleGroup = "HARDPOINTS"
+            moduleDepartment = "LASERS"
+            moduleFamilyKey = ""
+            moduleClassFilter = "ANY"
+            moduleRatingFilter = "ANY"
+            moduleMountFilter = "ANY"
+        }
         cockpit.clearShipyardFinder()
         cockpit.requestShipyardSuggestions(nextMode, "")
+        if (nextMode === "SHIPS")
+            Qt.callLater(function() { visualCatalog.positionViewAtBeginning() })
     }
     function runSearch() {
         cockpit.searchShipyardOffers(
@@ -234,7 +351,7 @@ Item {
                             id: suggestionPopup
                             y: searchField.height + 4
                             width: searchField.width
-                            height: Math.min(330, suggestionList.contentHeight + 12)
+                            height: Math.min(430, suggestionList.contentHeight + 12)
                             padding: 6; modal: false
                             closePolicy: Popup.CloseOnEscape | Popup.CloseOnPressOutsideParent
                             background: Rectangle {
@@ -244,6 +361,8 @@ Item {
                             contentItem: ListView {
                                 id: suggestionList
                                 clip: true; model: finder.suggestions
+                                boundsBehavior: Flickable.StopAtBounds
+                                ScrollBar.vertical: CockpitScrollBar {}
                                 delegate: ItemDelegate {
                                     required property var modelData
                                     width: suggestionList.width; height: 58
@@ -256,6 +375,18 @@ Item {
                                             Layout.fillHeight: true
                                             source: finder.schematicSource(modelData)
                                             tone: cyan; accent: orange; compact: true
+                                        }
+                                        Rectangle {
+                                            visible: finder.mode === "MODULES"
+                                            Layout.preferredWidth: visible ? 62 : 0
+                                            Layout.fillHeight: true
+                                            radius: 5; color: inputBackground
+                                            border.width: 1; border.color: cyan
+                                            Label {
+                                                anchors.centerIn: parent
+                                                text: String(modelData.sizeRating || "—")
+                                                color: orange; font.pixelSize: 15; font.bold: true
+                                            }
                                         }
                                         ColumnLayout {
                                             Layout.fillWidth: true; spacing: 2
@@ -323,7 +454,7 @@ Item {
                     Label { text: appWindow.t("shipyard.access_filter", "ACCESS"); color: muted; font.pixelSize: 9; font.bold: true }
                     CockpitComboBox {
                         Layout.fillWidth: true
-                        model: ["SAFE + UNKNOWN", "CONFIRMED ONLY"]
+                        model: ["ALL · SHOW LOCKED", "ACCESSIBLE ONLY"]
                         onActivated: finder.accessFilter = String(currentText)
                     }
                 }
@@ -341,7 +472,7 @@ Item {
 
         ShadowCard {
             Layout.fillWidth: true
-            Layout.preferredHeight: 206
+            Layout.preferredHeight: finder.mode === "MODULES" ? 282 : 206
             accent: cyan
             ColumnLayout {
                 anchors.fill: parent; anchors.margins: 12; spacing: 7
@@ -350,7 +481,9 @@ Item {
                     Label {
                         text: finder.mode === "SHIPS"
                             ? appWindow.tf("shipyard.ship_catalog", "SHIP CATALOG · %1 HULLS", [finder.ships.length])
-                            : appWindow.t("shipyard.module_catalog", "MODULE CATALOG · SELECT A RESULT")
+                            : finder.moduleFamilyKey === ""
+                              ? appWindow.t("shipyard.shop_categories", "OUTFITTING · SHOP CATEGORIES")
+                              : appWindow.t("shipyard.shop_variants", "OUTFITTING · SELECT CLASS / RATING / MOUNT")
                         color: cyan; font.pixelSize: 9; font.bold: true
                     }
                     Item { Layout.fillWidth: true }
@@ -359,22 +492,300 @@ Item {
                         color: muted; font.pixelSize: 8; font.bold: true
                     }
                 }
+                RowLayout {
+                    visible: finder.mode === "MODULES"
+                    Layout.fillWidth: true; Layout.fillHeight: true; spacing: 9
+
+                    Rectangle {
+                        Layout.preferredWidth: 238; Layout.fillHeight: true
+                        radius: 8; color: inputBackground
+                        border.width: 1; border.color: borderTone; clip: true
+                        ColumnLayout {
+                            anchors.fill: parent; anchors.margins: 8; spacing: 4
+                            FinderButton {
+                                Layout.fillWidth: true; Layout.preferredHeight: 30
+                                text: finder.fitCurrentShip
+                                    ? appWindow.tf("shipyard.follow_current", "FOLLOW CURRENT · %1",
+                                                   [finder.currentShipName || "SHIP UNKNOWN"])
+                                    : appWindow.t("shipyard.show_all_modules", "SHOW ALL MODULES")
+                                selected: finder.fitCurrentShip; tone: finder.currentShipFitKnown ? green : orange
+                                onClicked: {
+                                    finder.fitCurrentShip = !finder.fitCurrentShip
+                                    moduleFamilyGrid.positionViewAtBeginning()
+                                    moduleVariantGrid.positionViewAtBeginning()
+                                }
+                                ToolTip.visible: hovered
+                                ToolTip.text: finder.currentShipFitKnown
+                                    ? appWindow.t("shipyard.follow_current_help", "Automatically follows the active Journal ship and hides modules that cannot fit its physical slots.")
+                                    : appWindow.t("shipyard.follow_current_unknown", "Current ship slots are unknown. No modules are hidden.")
+                            }
+                            Label {
+                                Layout.fillWidth: true
+                                text: finder.currentShipFitKnown
+                                    ? appWindow.t("shipyard.slots_verified", "JOURNAL SLOTS VERIFIED")
+                                    : appWindow.t("shipyard.slots_unknown", "SLOTS UNKNOWN · NOTHING HIDDEN")
+                                color: finder.currentShipFitKnown ? green : orange
+                                font.pixelSize: 7; font.bold: true; elide: Text.ElideRight
+                            }
+                            GridLayout {
+                                Layout.fillWidth: true; columns: 2; columnSpacing: 5; rowSpacing: 5
+                                Repeater {
+                                    model: [
+                                        {key: "HARDPOINTS", label: "HARDPOINTS"},
+                                        {key: "UTILITY", label: "UTILITY"},
+                                        {key: "CORE", label: "CORE"},
+                                        {key: "OPTIONAL", label: "OPTIONAL"}
+                                    ]
+                                    delegate: FinderButton {
+                                        required property var modelData
+                                        Layout.fillWidth: true; Layout.preferredHeight: 27
+                                        text: String(modelData.label)
+                                        selected: finder.moduleGroup === String(modelData.key)
+                                        tone: cyan
+                                        onClicked: finder.selectModuleGroup(modelData.key)
+                                    }
+                                }
+                            }
+                            Rectangle { Layout.fillWidth: true; Layout.preferredHeight: 1; color: borderTone }
+                            Label {
+                                text: appWindow.t("shipyard.departments", "DEPARTMENTS")
+                                color: cyan; font.pixelSize: 8; font.bold: true
+                            }
+                            GridLayout {
+                                Layout.fillWidth: true
+                                columns: 2; columnSpacing: 4; rowSpacing: 4
+                                Repeater {
+                                    model: finder.moduleDepartments(finder.moduleGroup)
+                                    delegate: FinderButton {
+                                        required property var modelData
+                                        Layout.fillWidth: true; Layout.preferredHeight: 25
+                                        text: String(modelData)
+                                        selected: finder.moduleDepartment === String(modelData)
+                                        tone: orange
+                                        onClicked: finder.selectModuleDepartment(modelData)
+                                    }
+                                }
+                            }
+                            Item { Layout.fillHeight: true }
+                        }
+                    }
+
+                    ColumnLayout {
+                        Layout.fillWidth: true; Layout.fillHeight: true; spacing: 7
+                        RowLayout {
+                            Layout.fillWidth: true; spacing: 7
+                            FinderButton {
+                                visible: finder.moduleFamilyKey !== ""
+                                Layout.preferredWidth: 84
+                                text: appWindow.t("common.back", "‹ BACK")
+                                tone: orange
+                                onClicked: finder.backToModuleFamilies()
+                            }
+                            ColumnLayout {
+                                Layout.fillWidth: true; spacing: 1
+                                Label {
+                                    Layout.fillWidth: true
+                                    text: finder.moduleFamilyKey === ""
+                                        ? finder.moduleGroup + " › " + finder.moduleDepartment
+                                        : finder.moduleGroup + " › " + finder.moduleDepartment
+                                          + " › " + String(finder.selectedItem.moduleFamily || searchField.text || "")
+                                    color: orange; font.pixelSize: 10; font.bold: true
+                                    elide: Text.ElideRight
+                                }
+                                Label {
+                                    Layout.fillWidth: true
+                                    text: finder.moduleFamilyKey === ""
+                                        ? appWindow.tf("shipyard.family_count", "%1 MODULE FAMILIES", [finder.moduleFamilyRows().length])
+                                        : appWindow.tf("shipyard.variant_count", "%1 COMPATIBLE VARIANTS", [finder.moduleVariantRows().length])
+                                    color: muted; font.pixelSize: 7; font.bold: true
+                                }
+                            }
+                            CockpitComboBox {
+                                visible: finder.moduleFamilyKey !== ""
+                                Layout.preferredWidth: 105
+                                model: ["ANY", "0", "1", "2", "3", "4", "5", "6", "7", "8"]
+                                currentIndex: Math.max(0, model.indexOf(finder.moduleClassFilter))
+                                onActivated: {
+                                    finder.moduleClassFilter = String(currentText)
+                                    moduleVariantGrid.positionViewAtBeginning()
+                                }
+                            }
+                            CockpitComboBox {
+                                visible: finder.moduleFamilyKey !== ""
+                                Layout.preferredWidth: 105
+                                model: ["ANY", "A", "B", "C", "D", "E", "F", "G", "H", "I"]
+                                currentIndex: Math.max(0, model.indexOf(finder.moduleRatingFilter))
+                                onActivated: {
+                                    finder.moduleRatingFilter = String(currentText)
+                                    moduleVariantGrid.positionViewAtBeginning()
+                                }
+                            }
+                            CockpitComboBox {
+                                visible: finder.moduleFamilyKey !== ""
+                                Layout.preferredWidth: 132
+                                model: ["ANY", "FIXED", "GIMBALLED", "TURRETED"]
+                                currentIndex: Math.max(0, model.indexOf(finder.moduleMountFilter))
+                                onActivated: {
+                                    finder.moduleMountFilter = String(currentText)
+                                    moduleVariantGrid.positionViewAtBeginning()
+                                }
+                            }
+                        }
+                        GridView {
+                            id: moduleFamilyGrid
+                            visible: finder.moduleFamilyKey === ""
+                            Layout.fillWidth: true; Layout.fillHeight: true
+                            clip: true; boundsBehavior: Flickable.StopAtBounds
+                            cellWidth: Math.max(205, width / 4)
+                            cellHeight: 76
+                            model: finder.moduleFamilyRows()
+                            ScrollBar.vertical: CockpitScrollBar {}
+                            delegate: Rectangle {
+                                required property var modelData
+                                width: moduleFamilyGrid.cellWidth - 8
+                                height: moduleFamilyGrid.cellHeight - 7
+                                radius: 8; color: panelRaised
+                                border.width: 1; border.color: familyMouse.containsMouse ? orange : borderTone
+                                Rectangle {
+                                    anchors.left: parent.left; anchors.top: parent.top; anchors.bottom: parent.bottom
+                                    width: 4; radius: 2; color: cyan
+                                }
+                                RowLayout {
+                                    anchors.fill: parent; anchors.margins: 9; spacing: 9
+                                    Rectangle {
+                                        Layout.preferredWidth: 42; Layout.fillHeight: true
+                                        radius: 5; color: inputBackground
+                                        border.width: 1; border.color: cyan
+                                        Label {
+                                            anchors.centerIn: parent
+                                            text: String(modelData.moduleFamily || "?").slice(0, 2)
+                                            color: cyan; font.pixelSize: 13; font.bold: true
+                                        }
+                                    }
+                                    ColumnLayout {
+                                        Layout.fillWidth: true; spacing: 2
+                                        Label {
+                                            Layout.fillWidth: true
+                                            text: String(modelData.moduleFamily || "MODULE")
+                                            color: textPrimary; font.pixelSize: 10; font.bold: true
+                                            elide: Text.ElideRight
+                                        }
+                                        Label {
+                                            Layout.fillWidth: true
+                                            text: [modelData.classLabel || "",
+                                                   appWindow.tf("shipyard.module_variants", "%1 VARIANTS", [Number(modelData.variantCount || 0)])]
+                                                  .filter(Boolean).join(" · ")
+                                            color: orange; font.pixelSize: 8; font.bold: true
+                                            elide: Text.ElideRight
+                                        }
+                                        Label {
+                                            Layout.fillWidth: true
+                                            text: finder.fitCurrentShip && finder.currentShipFitKnown
+                                                ? appWindow.tf("shipyard.compatible_variants", "%1 FIT CURRENT SHIP",
+                                                               [Number(modelData.compatibleVariantCount || 0)])
+                                                : String(modelData.mountLabel || modelData.moduleGroupLabel || "")
+                                            color: finder.fitCurrentShip ? green : muted; font.pixelSize: 7
+                                            elide: Text.ElideRight
+                                        }
+                                    }
+                                }
+                                MouseArea {
+                                    id: familyMouse
+                                    anchors.fill: parent; hoverEnabled: true
+                                    onClicked: finder.selectModuleFamily(modelData)
+                                }
+                            }
+                        }
+                        GridView {
+                            id: moduleVariantGrid
+                            visible: finder.moduleFamilyKey !== ""
+                            Layout.fillWidth: true; Layout.fillHeight: true
+                            clip: true; boundsBehavior: Flickable.StopAtBounds
+                            cellWidth: Math.max(168, width / 6)
+                            cellHeight: 82
+                            model: finder.moduleVariantRows()
+                            ScrollBar.vertical: CockpitScrollBar {}
+                            delegate: Rectangle {
+                                required property var modelData
+                                width: moduleVariantGrid.cellWidth - 8
+                                height: moduleVariantGrid.cellHeight - 7
+                                radius: 8; color: panelRaised
+                                border.width: String(modelData.symbol || "") === finder.selectedSymbol ? 2 : 1
+                                border.color: String(modelData.symbol || "") === finder.selectedSymbol
+                                              ? orange : variantMouse.containsMouse ? cyan : borderTone
+                                ToolTip.visible: variantMouse.containsMouse
+                                ToolTip.text: String(modelData.currentShipFitReason || "")
+                                RowLayout {
+                                    anchors.fill: parent; anchors.margins: 8; spacing: 8
+                                    Rectangle {
+                                        Layout.preferredWidth: 52; Layout.fillHeight: true
+                                        radius: 5; color: inputBackground
+                                        border.width: 1; border.color: cyan
+                                        Label {
+                                            anchors.centerIn: parent
+                                            text: String(modelData.sizeRating || "—")
+                                            color: orange; font.pixelSize: 17; font.bold: true
+                                        }
+                                    }
+                                    ColumnLayout {
+                                        Layout.fillWidth: true; spacing: 2
+                                        Label {
+                                            Layout.fillWidth: true
+                                            text: String(modelData.displayName || modelData.symbol || "")
+                                            color: textPrimary; font.pixelSize: 9; font.bold: true
+                                            elide: Text.ElideRight
+                                        }
+                                        Label {
+                                            Layout.fillWidth: true
+                                            text: [modelData.mount || "",
+                                                   modelData.moduleGroupLabel || ""].filter(Boolean).join(" · ")
+                                            color: muted; font.pixelSize: 7
+                                            elide: Text.ElideRight
+                                        }
+                                    }
+                                }
+                                MouseArea {
+                                    id: variantMouse
+                                    anchors.fill: parent; hoverEnabled: true
+                                    onClicked: finder.chooseItem(modelData)
+                                }
+                            }
+                        }
+                    }
+                }
                 ListView {
                     id: visualCatalog
+                    visible: finder.mode === "SHIPS"
                     Layout.fillWidth: true; Layout.fillHeight: true
                     orientation: ListView.Horizontal; spacing: 8; clip: true
                     boundsBehavior: Flickable.StopAtBounds
-                    model: finder.mode === "SHIPS" ? finder.ships : finder.suggestions
+                    model: finder.ships
                     ScrollBar.horizontal: CockpitScrollBar {}
                     delegate: Rectangle {
+                        id: catalogTile
                         required property var modelData
-                        width: finder.mode === "SHIPS" ? 232 : 210
+                        readonly property bool rankLocked:
+                            String(modelData.purchaseTone || "") === "LOCKED"
+                        width: finder.mode === "SHIPS" ? 232 : 188
                         height: visualCatalog.height - 9
                         radius: 10
-                        color: "transparent"
-                        MouseArea { anchors.fill: parent; onClicked: finder.chooseItem(modelData) }
+                        color: panelRaised
+                        border.width: catalogTile.rankLocked ? 2 : 1
+                        border.color: catalogTile.rankLocked
+                                      ? (appWindow.red || "#ff586f")
+                                      : String(modelData.symbol || "") === finder.selectedSymbol
+                                        ? orange : borderTone
+                        ToolTip.visible: catalogMouse.containsMouse
+                                             && String(modelData.purchaseReason || "") !== ""
+                        ToolTip.text: String(modelData.purchaseReason || "")
+                        ToolTip.delay: 350
+                        MouseArea {
+                            id: catalogMouse
+                            anchors.fill: parent; hoverEnabled: true; z: 5
+                            onClicked: finder.chooseItem(modelData)
+                        }
                         ColumnLayout {
-                            anchors.fill: parent; spacing: 5
+                            anchors.fill: parent; anchors.margins: 3; spacing: 5
                             ShipSchematic {
                                 visible: finder.mode === "SHIPS"
                                 Layout.fillWidth: true; Layout.fillHeight: true
@@ -382,15 +793,35 @@ Item {
                                 tone: cyan; accent: orange
                                 selected: String(modelData.symbol || "") === finder.selectedSymbol
                             }
-                            ModuleSchematic {
+                            Rectangle {
                                 visible: finder.mode === "MODULES"
                                 Layout.fillWidth: true; Layout.fillHeight: true
-                                lineColor: cyan; accentColor: orange
-                                surfaceColor: inputBackground
+                                radius: 7; color: inputBackground
+                                border.width: 1
+                                border.color: String(modelData.symbol || "") === finder.selectedSymbol
+                                              ? orange : cyan
+                                ColumnLayout {
+                                    anchors.fill: parent; anchors.margins: 8; spacing: 2
+                                    Item { Layout.fillHeight: true }
+                                    Label {
+                                        Layout.alignment: Qt.AlignHCenter
+                                        text: String(modelData.sizeRating || "—")
+                                        color: orange; font.pixelSize: 24
+                                        font.bold: true
+                                    }
+                                    Label {
+                                        Layout.fillWidth: true
+                                        text: String(modelData.mount || modelData.moduleGroupLabel || "")
+                                        color: muted; font.pixelSize: 8; font.bold: true
+                                        horizontalAlignment: Text.AlignHCenter
+                                        elide: Text.ElideRight
+                                    }
+                                    Item { Layout.fillHeight: true }
+                                }
                             }
                             Label {
                                 Layout.fillWidth: true
-                                text: String(modelData.displayName || modelData.symbol || "")
+                                text: String(modelData.displayName || modelData.moduleFamily || modelData.symbol || "")
                                 color: String(modelData.symbol || "") === finder.selectedSymbol ? orange : textPrimary
                                 font.pixelSize: 10; font.bold: true
                                 horizontalAlignment: Text.AlignHCenter; elide: Text.ElideRight
@@ -407,10 +838,18 @@ Item {
                                 Layout.fillWidth: true
                                 visible: finder.mode === "SHIPS"
                                 text: Number(modelData.referencePrice || 0) > 0
-                                    ? finder.formatNumber(modelData.referencePrice) + " CR"
+                                    ? "REFERENCE · " + finder.formatNumber(modelData.referencePrice) + " CR"
                                     : appWindow.t("shipyard.price_unknown", "PRICE UNKNOWN")
                                 color: Number(modelData.referencePrice || 0) > 0 ? orange : muted
                                 font.pixelSize: 9; font.bold: true
+                                horizontalAlignment: Text.AlignHCenter; elide: Text.ElideRight
+                            }
+                            Label {
+                                Layout.fillWidth: true
+                                visible: finder.mode === "SHIPS"
+                                text: String(modelData.purchaseStatus || "OPEN")
+                                color: finder.purchaseColor(modelData)
+                                font.pixelSize: 8; font.bold: true
                                 horizontalAlignment: Text.AlignHCenter; elide: Text.ElideRight
                             }
                         }
@@ -438,7 +877,7 @@ Item {
                     ShadowCard {
                         Layout.fillWidth: true
                         Layout.preferredWidth: 0.82
-                        Layout.preferredHeight: 420
+                        Layout.preferredHeight: finder.mode === "SHIPS" ? 510 : 470
                         accent: cyan
                         ColumnLayout {
                             anchors.fill: parent; anchors.margins: 15; spacing: 8
@@ -449,7 +888,7 @@ Item {
                                 color: cyan; font.pixelSize: 9; font.bold: true
                             }
                             Rectangle {
-                                Layout.fillWidth: true; Layout.preferredHeight: 215
+                                Layout.fillWidth: true; Layout.preferredHeight: 178
                                 radius: 8; color: inputBackground
                                 border.width: 1; border.color: borderTone; clip: true
                                 ShipSchematic {
@@ -458,11 +897,31 @@ Item {
                                     source: finder.schematicSource(finder.selectedItem)
                                     tone: cyan; accent: orange; selected: true
                                 }
-                                ModuleSchematic {
+                                ColumnLayout {
                                     visible: finder.mode === "MODULES"
                                     anchors.fill: parent
-                                    lineColor: cyan; accentColor: orange
-                                    surfaceColor: inputBackground
+                                    anchors.margins: 18; spacing: 5
+                                    Item { Layout.fillHeight: true }
+                                    Label {
+                                        Layout.alignment: Qt.AlignHCenter
+                                        text: String(finder.selectedItem.sizeRating || "—")
+                                        color: orange; font.pixelSize: 42; font.bold: true
+                                    }
+                                    Label {
+                                        Layout.fillWidth: true
+                                        text: String(finder.selectedItem.moduleGroupLabel || "SELECT A SHOP CATEGORY")
+                                        color: cyan; font.pixelSize: 11; font.bold: true
+                                        horizontalAlignment: Text.AlignHCenter
+                                    }
+                                    Label {
+                                        Layout.fillWidth: true
+                                        text: [finder.selectedItem.moduleFamily || "",
+                                               finder.selectedItem.mount || ""].filter(Boolean).join(" · ")
+                                        color: textSecondary; font.pixelSize: 10
+                                        horizontalAlignment: Text.AlignHCenter
+                                        elide: Text.ElideRight
+                                    }
+                                    Item { Layout.fillHeight: true }
                                 }
                                 Label {
                                     anchors.centerIn: parent
@@ -476,6 +935,24 @@ Item {
                                 text: String(finder.selectedItem.displayName || appWindow.t("shipyard.no_selection", "NO ITEM SELECTED"))
                                 color: textPrimary; font.pixelSize: 19; font.bold: true
                                 wrapMode: Text.Wrap
+                            }
+                            Rectangle {
+                                visible: finder.mode === "SHIPS" && finder.selectedSymbol !== ""
+                                Layout.fillWidth: true; Layout.preferredHeight: 38
+                                radius: 6
+                                color: String(finder.selectedItem.purchaseTone || "") === "LOCKED"
+                                       ? Qt.rgba(1.0, 0.20, 0.30, 0.13)
+                                       : Qt.rgba(0.20, 0.85, 0.55, 0.08)
+                                border.width: 1
+                                border.color: finder.purchaseColor(finder.selectedItem)
+                                Label {
+                                    anchors.fill: parent; anchors.margins: 7
+                                    text: String(finder.selectedItem.purchaseStatus || "OPEN")
+                                          + " · " + String(finder.selectedItem.purchaseReason || "")
+                                    color: finder.purchaseColor(finder.selectedItem)
+                                    font.pixelSize: 8; font.bold: true
+                                    wrapMode: Text.Wrap; verticalAlignment: Text.AlignVCenter
+                                }
                             }
                             GridLayout {
                                 Layout.fillWidth: true; columns: 2; columnSpacing: 7; rowSpacing: 7
@@ -494,6 +971,7 @@ Item {
                                     ] : [
                                         appWindow.t("shipyard.class_rating", "CLASS / RATING") + "\n" + String(finder.selectedItem.sizeRating || "—"),
                                         appWindow.t("shipyard.mount", "MOUNT") + "\n" + String(finder.selectedItem.mount || "—"),
+                                        appWindow.t("shipyard.schematic_type", "MODULE TYPE") + "\n" + String(finder.selectedItem.schematicKind || "—").replace("_", " "),
                                         appWindow.t("shipyard.availability", "AVAILABILITY") + "\n" + String(finder.results.length ? "OBSERVED" : "—"),
                                         appWindow.t("shipyard.best_price", "BEST PRICE") + "\n" + String(finder.results.length ? finder.priceLabel(finder.results[0]) : "—")
                                     ]
@@ -516,14 +994,14 @@ Item {
                     ShadowCard {
                         Layout.fillWidth: true
                         Layout.preferredWidth: 1.55
-                        Layout.preferredHeight: 420
+                        Layout.preferredHeight: finder.mode === "SHIPS" ? 510 : 470
                         accent: finder.results.length ? green : orange
                         ColumnLayout {
                             anchors.fill: parent; anchors.margins: 14; spacing: 8
                             RowLayout {
                                 Layout.fillWidth: true
                                 Label {
-                                    text: appWindow.t("shipyard.best_stations", "BEST VERIFIED STATIONS")
+                                    text: appWindow.t("shipyard.best_stations", "MATCHED STATIONS · ACCESS EXPLAINED")
                                     color: orange; font.pixelSize: 9; font.bold: true
                                 }
                                 Item { Layout.fillWidth: true }
@@ -553,10 +1031,13 @@ Item {
                                 ScrollBar.vertical: CockpitScrollBar {}
                                 delegate: Rectangle {
                                     required property var modelData
-                                    width: resultList.width; height: 68; radius: 8
-                                    color: panelRaised
-                                    border.width: index === 0 ? 2 : 1
-                                    border.color: index === 0 ? orange : borderTone
+                                    width: resultList.width; height: 84; radius: 8
+                                    color: String(modelData.accessTone || "") === "LOCKED"
+                                           ? Qt.rgba(1.0, 0.20, 0.30, 0.09) : panelRaised
+                                    border.width: index === 0 || String(modelData.accessTone || "") === "LOCKED" ? 2 : 1
+                                    border.color: String(modelData.accessTone || "") === "LOCKED"
+                                                  ? (appWindow.red || "#ff586f")
+                                                  : index === 0 ? orange : borderTone
                                     RowLayout {
                                         anchors.fill: parent; anchors.margins: 10; spacing: 10
                                         ColumnLayout {
@@ -573,6 +1054,14 @@ Item {
                                                     + String(modelData.stationType || "UNKNOWN") + " · PAD "
                                                     + String(modelData.landingPadSize || "UNKNOWN")
                                                 color: muted; font.pixelSize: 8; elide: Text.ElideRight
+                                            }
+                                            Label {
+                                                Layout.fillWidth: true
+                                                text: String(modelData.recommendationReason || modelData.reason || "")
+                                                color: String(modelData.accessTone || "") === "LOCKED"
+                                                       ? finder.accessColor(modelData) : textSecondary
+                                                font.pixelSize: 8; font.bold: true
+                                                elide: Text.ElideRight
                                             }
                                             Label {
                                                 Layout.fillWidth: true
@@ -594,8 +1083,9 @@ Item {
                                         }
                                         ColumnLayout {
                                             Layout.preferredWidth: 105; spacing: 2
-                                            Label { text: finder.priceLabel(modelData); color: modelData.priceStatus === "OBSERVED" ? green : orange; font.pixelSize: 9; font.bold: true }
-                                            Label { text: String(modelData.priceStatus || "UNKNOWN"); color: muted; font.pixelSize: 8 }
+                                            Label { text: finder.priceLabel(modelData); color: finder.priceColor(modelData); font.pixelSize: 9; font.bold: true }
+                                            Label { text: String(modelData.priceStatus || "UNKNOWN"); color: finder.priceColor(modelData); font.pixelSize: 8; font.bold: true }
+                                            Label { text: String(modelData.dataAgeLabel || "AGE UNKNOWN"); color: muted; font.pixelSize: 7 }
                                         }
                                         FinderButton {
                                             Layout.preferredWidth: 76
@@ -626,7 +1116,7 @@ Item {
                         model: [
                             {title: appWindow.t("shipyard.source_server", "ED-FRAME SERVER"), detail: cockpit.edFrameCatalogOnline ? appWindow.t("shipyard.source_live", "ONLINE · LIVE CATALOG") : appWindow.t("shipyard.source_offline", "OFFLINE · LOCAL FALLBACK"), tone: cockpit.edFrameCatalogOnline ? finder.green : finder.orange},
                             {title: appWindow.t("shipyard.source_journal", "JOURNAL ACCESS"), detail: appWindow.tf("shipyard.journal_access_detail", "%1 PERMITS · %2 VISITED SYSTEMS", [String((finder.overview.permits || []).length), String((finder.overview.visitedSystems || []).length)]), tone: finder.cyan},
-                            {title: appWindow.t("shipyard.source_price", "STATION PRICE"), detail: appWindow.t("shipyard.price_levels", "OBSERVED · ESTIMATED · UNKNOWN · REFERENCE SEPARATE"), tone: finder.orange}
+                            {title: appWindow.t("shipyard.source_price", "SHIP PRICE"), detail: appWindow.t("shipyard.price_levels", "FIXED REFERENCE · STATION RULE · PURCHASE CONFIRMED"), tone: finder.orange}
                         ]
                         delegate: Rectangle {
                             required property var modelData

@@ -7,7 +7,165 @@ separate from price confidence and unknown coordinates/prices stay unknown.
 from __future__ import annotations
 
 import math
+import re
+from datetime import datetime, timezone
 from typing import Any, Iterable
+
+
+# Frontier naval ranks are zero-based in the Journal Rank event.  Only hulls
+# with a documented naval-rank purchase gate belong here; normal availability
+# and temporary early-access entitlements must not be guessed.
+SHIP_RANK_REQUIREMENTS: dict[str, dict[str, Any]] = {
+    "federation_dropship": {
+        "field": "Federation", "minimum": 3, "rankName": "Midshipman",
+    },
+    "federation_dropship_mkii": {
+        "field": "Federation", "minimum": 5,
+        "rankName": "Chief Petty Officer",
+    },
+    "federation_gunship": {
+        "field": "Federation", "minimum": 7, "rankName": "Ensign",
+    },
+    "federation_corvette": {
+        "field": "Federation", "minimum": 12,
+        "rankName": "Rear Admiral",
+    },
+    "empire_courier": {
+        "field": "Empire", "minimum": 3, "rankName": "Master",
+    },
+    "empire_trader": {
+        "field": "Empire", "minimum": 7, "rankName": "Baron",
+    },
+    "cutter": {
+        "field": "Empire", "minimum": 12, "rankName": "Duke",
+    },
+}
+
+
+MODULE_GROUP_LABELS = {
+    "HARDPOINTS": "HARDPOINTS",
+    "UTILITY": "UTILITY MOUNTS",
+    "CORE": "CORE INTERNAL",
+    "OPTIONAL": "OPTIONAL INTERNAL",
+}
+
+_CORE_INTERNAL_SYMBOLS = (
+    "_powerplant_", "_guardianpowerplant_",
+    "_engine_", "_hyperdrive_", "_lifesupport_",
+    "_powerdistributor_", "_guardianpowerdistributor_",
+    "_sensors_", "_radar_", "_fueltank_", "_armour_",
+)
+
+MODULE_DEPARTMENT_ORDER = {
+    "HARDPOINTS": ("LASERS", "KINETIC", "EXPLOSIVE", "EXPERIMENTAL", "MINING"),
+    "UTILITY": ("DEFENCE", "SCANNERS", "SUPPORT"),
+    "CORE": ("POWER", "PROPULSION", "NAVIGATION", "SUPPORT"),
+    "OPTIONAL": ("CARGO", "PROTECTION", "LIMPETS", "PASSENGER", "EXPLORATION", "SUPPORT"),
+}
+
+
+def _module_group(symbol: str, module_class: str) -> str:
+    value = str(symbol or "").casefold()
+    if value.startswith("hpt_"):
+        return "UTILITY" if str(module_class or "") == "0" else "HARDPOINTS"
+    if any(marker in value for marker in _CORE_INTERNAL_SYMBOLS):
+        return "CORE"
+    return "OPTIONAL"
+
+
+def _family_key(name: str) -> str:
+    return re.sub(r"[^a-z0-9]+", "-", str(name or "").casefold()).strip("-")
+
+
+def _module_department(symbol: str, name: str, group: str) -> str:
+    value = f"{symbol} {name}".casefold()
+    if group == "HARDPOINTS":
+        if any(marker in value for marker in (
+            "mining", "abrasion", "seismic", "subsurface", "pulse wave",
+        )):
+            return "MINING"
+        if "laser" in value:
+            return "LASERS"
+        if any(marker in value for marker in (
+            "multicannon", "multi-cannon", "cannon", "fragment", "slugshot",
+        )):
+            return "KINETIC"
+        if any(marker in value for marker in (
+            "missile", "rocket", "torpedo", "mine", "flak",
+        )):
+            return "EXPLOSIVE"
+        return "EXPERIMENTAL"
+    if group == "UTILITY":
+        if any(marker in value for marker in (
+            "chaff", "heatsink", "heat sink", "pointdefence", "point defence",
+            "ecm", "shieldbooster", "shield booster",
+        )):
+            return "DEFENCE"
+        if any(marker in value for marker in ("scanner", "warrant", "wake")):
+            return "SCANNERS"
+        return "SUPPORT"
+    if group == "CORE":
+        if any(marker in value for marker in ("powerplant", "power plant", "powerdistributor", "power distributor")):
+            return "POWER"
+        if any(marker in value for marker in ("engine", "thruster")):
+            return "PROPULSION"
+        if any(marker in value for marker in ("hyperdrive", "frame shift", "sensor", "radar")):
+            return "NAVIGATION"
+        return "SUPPORT"
+    if any(marker in value for marker in ("cargorack", "cargo rack", "refinery")):
+        return "CARGO"
+    if any(marker in value for marker in (
+        "shield", "reinforcement", "cellbank", "cell bank", "guardian",
+    )):
+        return "PROTECTION"
+    if any(marker in value for marker in ("dronecontrol", "limpet")):
+        return "LIMPETS"
+    if any(marker in value for marker in ("passenger", "cabin")):
+        return "PASSENGER"
+    if any(marker in value for marker in (
+        "fuelscoop", "fuel scoop", "detailedsurface", "discovery",
+        "vehiclehangar", "vehicle hangar", "autofieldmaintenance",
+    )):
+        return "EXPLORATION"
+    return "SUPPORT"
+
+
+def _module_core_slot(symbol: str) -> str:
+    value = str(symbol or "").casefold()
+    rules = (
+        ("PowerPlant", ("_powerplant_", "_guardianpowerplant_")),
+        ("MainEngines", ("_engine_",)),
+        ("FrameShiftDrive", ("_hyperdrive_",)),
+        ("LifeSupport", ("_lifesupport_",)),
+        ("PowerDistributor", ("_powerdistributor_", "_guardianpowerdistributor_")),
+        ("Radar", ("_sensors_", "_radar_")),
+        ("FuelTank", ("_fueltank_",)),
+        ("Armour", ("_armour_",)),
+    )
+    return next((slot for slot, markers in rules if any(marker in value for marker in markers)), "")
+
+
+def _module_schematic_kind(symbol: str, name: str) -> str:
+    value = f"{symbol} {name}".casefold()
+    rules = (
+        ("FRAGMENT", ("fragment", "slugshot")),
+        ("MULTI_CANNON", ("multicannon", "multi cannon")),
+        ("CANNON", ("cannon",)),
+        ("RAIL_PLASMA", ("railgun", "plasma", "guardian_gauss")),
+        ("LASER", ("laser",)),
+        ("MISSILE", ("missile", "torpedo", "flak", "rocket")),
+        ("FSD", ("frameshiftdrive", "frame shift drive", "fsd")),
+        ("POWER", ("powerplant", "power plant", "powerdistributor")),
+        ("THRUSTER", ("thruster",)),
+        ("SHIELD", ("shieldgenerator", "shield generator", "shieldbooster")),
+        ("SCANNER", ("scanner", "detailedsurface", "killwarrant", "wake")),
+        ("CARGO", ("cargorack", "cargo rack", "refinery", "limpet")),
+        ("UTILITY", ("chaff", "heatsink", "pointdefence", "ecm")),
+    )
+    for kind, needles in rules:
+        if any(needle in value for needle in needles):
+            return kind
+    return "INTERNAL"
 
 
 def build_module_catalog(payload: Any) -> list[dict[str, Any]]:
@@ -22,16 +180,162 @@ def build_module_catalog(payload: Any) -> list[dict[str, Any]]:
             "GIMBALLED" if "_gimbal_" in folded_symbol else
             "TURRETED" if "_turret_" in folded_symbol else ""
         )
+        size_rating = str(value[1] if len(value) > 1 else "").strip()
+        module_class_match = re.match(r"\d+", size_rating)
+        module_rating_match = re.search(r"[A-Z]$", size_rating.upper())
+        module_class = module_class_match[0] if module_class_match else ""
+        display_name = str(value[0] or symbol).strip()
+        module_group = _module_group(folded_symbol, module_class)
+        module_department = _module_department(
+            folded_symbol, display_name, module_group,
+        )
         rows.append({
             "symbol": folded_symbol,
-            "displayName": str(value[0] or symbol).strip(),
-            "sizeRating": str(value[1] if len(value) > 1 else "").strip(),
+            "displayName": display_name,
+            "sizeRating": size_rating,
             "mount": mount,
+            "moduleClass": module_class,
+            "moduleRating": module_rating_match[0] if module_rating_match else "",
+            "moduleGroup": module_group,
+            "moduleGroupLabel": MODULE_GROUP_LABELS[module_group],
+            "moduleDepartment": module_department,
+            "moduleFamily": display_name,
+            "moduleFamilyKey": _family_key(display_name),
+            "moduleCoreSlot": _module_core_slot(folded_symbol),
+            "schematicKind": _module_schematic_kind(
+                folded_symbol, display_name,
+            ),
             "kind": "MODULES",
         })
     return sorted(rows, key=lambda row: (
         row["displayName"].casefold(), row["sizeRating"], row["symbol"],
     ))
+
+
+def build_module_families(
+    catalog: Iterable[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """Return one truthful shop-category tile per module family."""
+    grouped: dict[tuple[str, str], dict[str, Any]] = {}
+    for source in catalog:
+        row = source if isinstance(source, dict) else {}
+        group = str(row.get("moduleGroup") or "OPTIONAL")
+        key = str(row.get("moduleFamilyKey") or "")
+        if not key:
+            continue
+        identity = (group, key)
+        family = grouped.setdefault(identity, {
+            "moduleGroup": group,
+            "moduleGroupLabel": str(
+                row.get("moduleGroupLabel") or MODULE_GROUP_LABELS.get(group, group)
+            ),
+            "moduleFamily": str(row.get("moduleFamily") or row.get("displayName") or ""),
+            "moduleFamilyKey": key,
+            "moduleDepartment": str(row.get("moduleDepartment") or "SUPPORT"),
+            "schematicKind": str(row.get("schematicKind") or "INTERNAL"),
+            "variantCount": 0,
+            "classes": set(),
+            "mounts": set(),
+            "fitStates": set(),
+            "compatibleVariantCount": 0,
+        })
+        family["variantCount"] += 1
+        if row.get("moduleClass"):
+            family["classes"].add(str(row["moduleClass"]))
+        if row.get("mount"):
+            family["mounts"].add(str(row["mount"]))
+        fit_status = str(row.get("currentShipFitStatus") or "UNKNOWN")
+        family["fitStates"].add(fit_status)
+        if fit_status == "FITS":
+            family["compatibleVariantCount"] += 1
+    result = []
+    group_order = {"HARDPOINTS": 0, "UTILITY": 1, "CORE": 2, "OPTIONAL": 3}
+    for family in grouped.values():
+        classes = sorted(family.pop("classes"), key=lambda item: int(item))
+        mounts = sorted(family.pop("mounts"))
+        fit_states = family.pop("fitStates")
+        family["classLabel"] = "CLASS " + ("–".join(
+            [classes[0], classes[-1]] if len(classes) > 1 else classes
+        ) if classes else "—")
+        family["mountLabel"] = " · ".join(mounts)
+        family["currentShipFitStatus"] = (
+            "FITS" if "FITS" in fit_states else
+            "UNKNOWN" if "UNKNOWN" in fit_states else "INCOMPATIBLE"
+        )
+        result.append(family)
+    return sorted(result, key=lambda row: (
+        group_order.get(str(row["moduleGroup"]), 9),
+        str(row["moduleFamily"]).casefold(),
+    ))
+
+
+def module_catalog_with_ship_fit(
+    catalog: Iterable[dict[str, Any]], ship_slots: Any,
+) -> list[dict[str, Any]]:
+    """Annotate modules without hiding uncertain compatibility evidence."""
+    slots = [dict(row) for row in (ship_slots or []) if isinstance(row, dict)]
+    if not slots:
+        return [{
+            **dict(row),
+            "fitsCurrentShip": True,
+            "currentShipFitStatus": "UNKNOWN",
+            "currentShipFitReason": "Current ship slot layout is unavailable",
+        } for row in catalog if isinstance(row, dict)]
+
+    group_names = {
+        "HARDPOINTS": "HARDPOINTS",
+        "UTILITY": "UTILITY MOUNTS",
+        "CORE": "CORE INTERNALS",
+        "OPTIONAL": "OPTIONAL INTERNALS",
+    }
+    result = []
+    for source in catalog:
+        if not isinstance(source, dict):
+            continue
+        row = dict(source)
+        group = str(row.get("moduleGroup") or "OPTIONAL")
+        target_group = group_names.get(group, "OPTIONAL INTERNALS")
+        candidates = [
+            slot for slot in slots
+            if str(slot.get("group") or "") == target_group
+        ]
+        if group == "CORE":
+            core_slot = str(row.get("moduleCoreSlot") or "")
+            if not core_slot:
+                row.update({
+                    "fitsCurrentShip": True,
+                    "currentShipFitStatus": "UNKNOWN",
+                    "currentShipFitReason": "Core slot family could not be verified",
+                })
+                result.append(row)
+                continue
+            candidates = [
+                slot for slot in candidates
+                if str(slot.get("slot") or "") == core_slot
+            ]
+        try:
+            module_size = int(row.get("moduleClass"))
+        except (TypeError, ValueError):
+            module_size = None
+        if module_size is None:
+            row.update({
+                "fitsCurrentShip": True,
+                "currentShipFitStatus": "UNKNOWN",
+                "currentShipFitReason": "Module class is unavailable",
+            })
+        else:
+            fits = any(int(slot.get("slotSize") or 0) >= module_size for slot in candidates)
+            row.update({
+                "fitsCurrentShip": fits,
+                "currentShipFitStatus": "FITS" if fits else "INCOMPATIBLE",
+                "currentShipFitReason": (
+                    f"Fits a {target_group.lower()} slot on the current ship"
+                    if fits else
+                    f"No compatible {target_group.lower()} slot on the current ship"
+                ),
+            })
+        result.append(row)
+    return result
 
 
 def build_ship_catalog(
@@ -74,7 +378,14 @@ def build_ship_catalog(
                 ),
             })
         rows.append(row)
-    return sorted(rows, key=lambda row: row["displayName"].casefold())
+    # Elite's purchase carousel presents affordable hulls before expensive
+    # ones.  The global catalog has no station context yet, so use the
+    # explicit reference price; unknown prices remain visible at the end.
+    return sorted(rows, key=lambda row: (
+        0 if _integer(row.get("referencePrice")) is not None else 1,
+        _integer(row.get("referencePrice")) or 0,
+        row["displayName"].casefold(),
+    ))
 
 
 def catalog_suggestions(
@@ -154,6 +465,102 @@ def _overview_ranks(overview: Any) -> dict[str, int | None]:
         key = str(row.get("key") or "")
         result[key] = _integer(row.get("rank")) if row.get("known") else None
     return result
+
+
+def evaluate_ship_access(
+    item: Any, commander_overview: Any,
+) -> dict[str, Any]:
+    """Return the known naval-rank purchase gate for one hull."""
+    source = item if isinstance(item, dict) else {}
+    symbol = str(source.get("symbol") or "").strip().casefold()
+    rule = SHIP_RANK_REQUIREMENTS.get(symbol)
+    if not rule:
+        return {
+            "purchaseStatus": "OPEN",
+            "purchaseTone": "OPEN",
+            "purchaseReason": "No known naval-rank purchase requirement",
+            "purchaseRank": 0,
+        }
+    field = str(rule["field"])
+    minimum = int(rule["minimum"])
+    rank_name = str(rule["rankName"])
+    value = _overview_ranks(commander_overview).get(field)
+    requirement = f"Requires {field} {rank_name} (rank {minimum})"
+    if value is None:
+        return {
+            "purchaseStatus": "RANK UNCONFIRMED",
+            "purchaseTone": "UNKNOWN",
+            "purchaseReason": f"{requirement}; Journal rank is unavailable",
+            "purchaseRank": 2,
+            "requiredRank": minimum,
+            "requiredRankName": rank_name,
+            "requiredRankField": field,
+        }
+    if value < minimum:
+        return {
+            "purchaseStatus": "RANK REQUIRED",
+            "purchaseTone": "LOCKED",
+            "purchaseReason": f"{requirement}; Journal shows rank {value}",
+            "purchaseRank": 3,
+            "requiredRank": minimum,
+            "requiredRankName": rank_name,
+            "requiredRankField": field,
+            "commanderRank": value,
+        }
+    return {
+        "purchaseStatus": "RANK CONFIRMED",
+        "purchaseTone": "CONFIRMED",
+        "purchaseReason": f"Journal {field} rank {value} satisfies {rank_name}",
+        "purchaseRank": 0,
+        "requiredRank": minimum,
+        "requiredRankName": rank_name,
+        "requiredRankField": field,
+        "commanderRank": value,
+    }
+
+
+def ship_catalog_with_access(
+    catalog: Iterable[dict[str, Any]], commander_overview: Any,
+) -> list[dict[str, Any]]:
+    """Decorate and order hulls like the purchase carousel.
+
+    Available hulls come first, unconfirmed rank access follows, and hulls
+    proven to be rank-locked for the current commander sit at the far right.
+    Price remains the ordering inside each access group.
+    """
+    decorated = [
+        {**dict(row), **evaluate_ship_access(row, commander_overview)}
+        for row in catalog if isinstance(row, dict)
+    ]
+    access_order = {"OPEN": 0, "CONFIRMED": 0, "UNKNOWN": 1, "LOCKED": 2}
+    return sorted(decorated, key=lambda row: (
+        access_order.get(str(row.get("purchaseTone") or "UNKNOWN"), 1),
+        0 if _integer(row.get("referencePrice")) is not None else 1,
+        _integer(row.get("referencePrice")) or 0,
+        str(row.get("displayName") or row.get("symbol") or "").casefold(),
+    ))
+
+
+def _observed_age(value: str) -> tuple[int | None, str]:
+    text = str(value or "").strip()
+    if not text:
+        return None, "AGE UNKNOWN"
+    try:
+        parsed = datetime.fromisoformat(text.replace("Z", "+00:00"))
+        if parsed.tzinfo is None:
+            parsed = parsed.replace(tzinfo=timezone.utc)
+        minutes = max(0, int(
+            (datetime.now(timezone.utc) - parsed.astimezone(timezone.utc))
+            .total_seconds() // 60
+        ))
+    except (TypeError, ValueError, OverflowError):
+        return None, "AGE UNKNOWN"
+    if minutes < 60:
+        return minutes, f"{minutes} MIN OLD"
+    hours = minutes // 60
+    if hours < 48:
+        return minutes, f"{hours} H OLD"
+    return minutes, f"{hours // 24} D OLD"
 
 
 def evaluate_station_access(
@@ -238,16 +645,23 @@ def evaluate_station_access(
                 "accessRank": 3,
             }
     return {
-        "accessStatus": "PERMIT UNCONFIRMED",
-        "accessTone": "UNKNOWN",
-        "accessReason": str(rule.get("method") or f"No Journal proof for {permit_name}"),
-        "accessRank": 2,
+        # A permit-gated destination without positive Journal proof must not
+        # look travel-safe.  Red here means "do not recommend", while the
+        # wording remains honest that absence of proof is not proof of absence.
+        "accessStatus": "PERMIT NOT CONFIRMED",
+        "accessTone": "LOCKED",
+        "accessReason": (
+            f"No Journal proof for {permit_name} · "
+            + str(rule.get("method") or "permit evidence required")
+        ),
+        "accessRank": 3,
     }
 def rank_station_offers(
     rows: Iterable[dict[str, Any]], *, kind: str,
     origin_coordinates: Any = None, max_distance_ly: int = 0,
     pad_filter: str = "ANY", item: dict[str, Any] | None = None,
     commander_overview: Any = None, permit_rules: Any = None,
+    price_rules: Any = None,
     access_filter: str = "SAFE + UNKNOWN",
 ) -> list[dict[str, Any]]:
     """Filter, enrich and rank station offers without inventing facts."""
@@ -283,14 +697,67 @@ def rank_station_offers(
         confidence = str(offer.get("priceConfidence") or "").upper()
         price_type = str(offer.get("priceType") or "").upper()
         price_observed_at = str(offer.get("priceObservedAt") or "").strip()
-        if (
-            kind == "SHIPS" and price is not None
-            and price_type == "BASE_PRICE" and not price_observed_at
-        ):
-            # A manufacturer/global base value is useful in the selected-ship
-            # panel, but it is not a purchase price observed at this market.
-            price = None
-            price_status = "UNKNOWN"
+        price_source = str(
+            offer.get("priceSource") or source.get("priceSource")
+            or source.get("source") or ""
+        )
+        price_rule_label = ""
+        price_adjustment_bps = 0
+        reference_price = _integer((item or {}).get("referencePrice"))
+        if kind == "SHIPS":
+            # Shipyard.json can contain the Commander's active hull/trade-in
+            # value and EDDN only proves availability.  A station-specific
+            # exact price therefore overrides the deterministic catalog only
+            # when it came from an actual, opt-in ShipyardBuy Journal event.
+            purchase_confirmed = (
+                price is not None
+                and "shipyardbuy" in price_source.casefold().replace(" ", "")
+            )
+            rules = (
+                price_rules.get("rules", [])
+                if isinstance(price_rules, dict) else price_rules
+            )
+            matching_rule = None
+            for candidate in rules or []:
+                if not isinstance(candidate, dict):
+                    continue
+                rule_system = str(candidate.get("system") or "").strip()
+                rule_station = str(candidate.get("station") or "").strip()
+                if (
+                    (not rule_system or rule_system.casefold() == system.casefold())
+                    and (not rule_station or rule_station.casefold() == station.casefold())
+                ):
+                    matching_rule = candidate
+                    break
+            if matching_rule is not None:
+                price_adjustment_bps = _integer(
+                    matching_rule.get("priceAdjustmentBps")
+                ) or 0
+                price_rule_label = str(
+                    matching_rule.get("label") or "Station price rule"
+                ).strip()
+            if purchase_confirmed:
+                price_status = "PURCHASE CONFIRMED"
+            elif reference_price is not None:
+                factor = max(0, 10_000 + price_adjustment_bps)
+                price = (reference_price * factor + 5_000) // 10_000
+                if matching_rule is not None:
+                    price_status = "DISCOUNTED" if price_adjustment_bps < 0 else "STATION RULE"
+                    price_source = price_rule_label
+                else:
+                    price_status = "REFERENCE"
+                    price_source = str(
+                        (item or {}).get("referencePriceSource")
+                        or "ED-Frame fixed ship reference catalog"
+                    )
+                price_observed_at = ""
+            else:
+                # Newly released hulls remain honestly unknown until the
+                # bundled reference catalog is updated.  Availability is kept.
+                price = None
+                price_status = "UNKNOWN"
+                price_source = ""
+                price_observed_at = ""
         elif price is None:
             price_status = "UNKNOWN"
         elif (
@@ -307,13 +774,50 @@ def rank_station_offers(
             or source.get("outfittingObservedAt" if kind == "MODULES" else "shipyardObservedAt")
             or source.get("observedAt") or ""
         )
-        price_source = str(
-            offer.get("priceSource") or source.get("priceSource") or source.get("source") or ""
-        )
         arrival = source.get("distanceToArrivalLs")
-        access = evaluate_station_access(system, commander_overview, permit_rules)
-        if str(access_filter or "").upper() == "CONFIRMED ONLY" and access["accessRank"] > 1:
+        system_access = evaluate_station_access(
+            system, commander_overview, permit_rules,
+        )
+        ship_access = (
+            evaluate_ship_access(item, commander_overview)
+            if kind == "SHIPS" else {
+                "purchaseStatus": "OPEN", "purchaseTone": "OPEN",
+                "purchaseReason": "No ship purchase rank applies",
+                "purchaseRank": 0,
+            }
+        )
+        if int(ship_access["purchaseRank"]) > int(system_access["accessRank"]):
+            access = {
+                "accessStatus": ship_access["purchaseStatus"],
+                "accessTone": ship_access["purchaseTone"],
+                "accessReason": ship_access["purchaseReason"],
+                "accessRank": ship_access["purchaseRank"],
+            }
+        else:
+            access = dict(system_access)
+        if (
+            str(access_filter or "").upper()
+            in {"CONFIRMED ONLY", "ACCESSIBLE ONLY"}
+            and access["accessRank"] > 1
+        ):
             continue
+        age_minutes, age_label = _observed_age(observed_at)
+        pad_label = str(source.get("landingPadSize") or "UNKNOWN").upper()
+        distance_label = (
+            f"{distance:.1f} LY" if distance is not None else "LY UNKNOWN"
+        )
+        arrival_number = _integer(arrival)
+        arrival_label = (
+            f"{arrival_number:,} LS" if arrival_number is not None
+            else "ARRIVAL UNKNOWN"
+        )
+        access_label = (
+            "SAFE" if access["accessRank"] <= 1 else access["accessStatus"]
+        )
+        recommendation = " · ".join((
+            access_label, f"{pad_label}-PAD", age_label,
+            distance_label, arrival_label,
+        ))
         projected.append({
             "marketId": source.get("marketId"),
             "system": system,
@@ -327,15 +831,24 @@ def rank_station_offers(
             "priceKnown": price is not None,
             "priceStatus": price_status,
             "priceSource": price_source,
+            "referencePrice": reference_price,
+            "priceAdjustmentBps": price_adjustment_bps,
+            "priceRuleLabel": price_rule_label,
             "observedAt": observed_at,
+            "dataAgeMinutes": age_minutes,
+            "dataAgeLabel": age_label,
+            "systemAccessStatus": system_access["accessStatus"],
+            "systemAccessReason": system_access["accessReason"],
+            **ship_access,
             **access,
             "reason": "Availability observed"
                       + (f" · {price_status.lower()} price" if price_status != "UNKNOWN" else " · price unknown"),
+            "recommendationReason": recommendation,
         })
     projected.sort(key=lambda row: (
         row["accessRank"],
-        0 if row["priceStatus"] == "OBSERVED" else
-        1 if row["priceStatus"] == "ESTIMATED" else
+        0 if row["priceStatus"] in {"OBSERVED", "PURCHASE CONFIRMED"} else
+        1 if row["priceStatus"] in {"ESTIMATED", "DISCOUNTED", "STATION RULE"} else
         2 if row["priceKnown"] else 3,
         row["price"] if row["priceKnown"] else 10**18,
         row["distanceLy"] if row["distanceKnown"] else 10**9,

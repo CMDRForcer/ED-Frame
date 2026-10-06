@@ -160,8 +160,11 @@ from ed_companion.navigation.mining_market import (
     project_local_market_snapshot,
 )
 from ed_companion.navigation.shipyard_finder import (
+    build_module_families,
     catalog_suggestions,
+    module_catalog_with_ship_fit,
     rank_station_offers,
+    ship_catalog_with_access,
 )
 from ed_companion.navigation.state_find_catalog import (
     fetch_edframe_state_find_delta,
@@ -380,6 +383,31 @@ class NavigationMixin:
 
     traderSyncFinished = Signal(bool, str)
 
+    def _shipyard_module_projection(self):
+        """Cache current-hull compatibility away from repeated QML reads."""
+        state = self._state if isinstance(getattr(self, "_state", None), dict) else {}
+        slots = state.get("activeShipSlots", []) or []
+        slot_signature = tuple(sorted(
+            (
+                str(row.get("group") or ""),
+                str(row.get("slot") or ""),
+                int(row.get("slotSize") or 0),
+                str(row.get("restriction") or ""),
+            )
+            for row in slots if isinstance(row, dict)
+        ))
+        catalog = getattr(self, "_shipyard_module_catalog", []) or []
+        cache_key = (
+            id(catalog), str(state.get("activeShipId") or ""), slot_signature,
+        )
+        if cache_key != getattr(self, "_shipyard_module_fit_cache_key", None):
+            projected = module_catalog_with_ship_fit(catalog, slots)
+            self._shipyard_module_fit_cache_key = cache_key
+            self._shipyard_module_fit_cache = (
+                projected, build_module_families(projected),
+            )
+        return getattr(self, "_shipyard_module_fit_cache", ([], []))
+
     shipyardFinderSuggestions = Property(
         "QVariantList",
         lambda self: list(
@@ -394,8 +422,38 @@ class NavigationMixin:
     )
     shipyardShipCatalog = Property(
         "QVariantList",
-        lambda self: list(getattr(self, "_shipyard_ship_catalog", []) or []),
+        lambda self: ship_catalog_with_access(
+            getattr(self, "_shipyard_ship_catalog", []) or [],
+            (
+                self._state.get("commanderOverview", {})
+                if isinstance(getattr(self, "_state", None), dict) else {}
+            ),
+        ),
         notify=shipyardFinderChanged,
+    )
+    shipyardModuleCatalog = Property(
+        "QVariantList",
+        lambda self: list(self._shipyard_module_projection()[0]),
+        notify=CoreControllerMixin.stateChanged,
+    )
+    shipyardModuleFamilies = Property(
+        "QVariantList",
+        lambda self: list(self._shipyard_module_projection()[1]),
+        notify=CoreControllerMixin.stateChanged,
+    )
+    shipyardCurrentShip = Property(
+        str,
+        lambda self: str(
+            self._state.get("activeShipType")
+            or self._state.get("activeShip") or ""
+        ) if isinstance(getattr(self, "_state", None), dict) else "",
+        notify=CoreControllerMixin.stateChanged,
+    )
+    shipyardCurrentShipFitKnown = Property(
+        bool,
+        lambda self: bool(self._state.get("activeShipSlots", []))
+        if isinstance(getattr(self, "_state", None), dict) else False,
+        notify=CoreControllerMixin.stateChanged,
     )
     shipyardFinderBusy = Property(
         bool,
@@ -410,13 +468,19 @@ class NavigationMixin:
 
     @Slot(str, str)
     def requestShipyardSuggestions(self, kind, query):
-        catalog = (
-            getattr(self, "_shipyard_module_catalog", [])
-            if str(kind or "").upper() == "MODULES"
-            else getattr(self, "_shipyard_ship_catalog", [])
-        )
+        if str(kind or "").upper() == "MODULES":
+            catalog = getattr(self, "_shipyard_module_catalog", [])
+        else:
+            catalog = ship_catalog_with_access(
+                getattr(self, "_shipyard_ship_catalog", []),
+                (
+                    self._state.get("commanderOverview", {})
+                    if isinstance(getattr(self, "_state", None), dict) else {}
+                ),
+            )
         self._shipyard_finder_suggestions = catalog_suggestions(
-            catalog, query, limit=12,
+            catalog, query,
+            limit=100 if str(kind or "").upper() == "MODULES" else 12,
         )
         self.shipyardFinderChanged.emit()
 
@@ -493,6 +557,14 @@ class NavigationMixin:
                 offer = offer if isinstance(offer, dict) else {}
                 if offer.get("buyPrice") is None and row.get("buyPrice") is None:
                     return 0
+                price_source = str(
+                    offer.get("priceSource") or row.get("priceSource") or ""
+                ).casefold().replace(" ", "")
+                if normalized_kind == "SHIPS":
+                    # Only a completed purchase is exact ship-price evidence.
+                    # In particular, a local Shipyard.json trade-in row must
+                    # never displace a server-side ShipyardBuy confirmation.
+                    return 4 if "shipyardbuy" in price_source else 1
                 price_type = str(offer.get("priceType") or "").upper()
                 if offer.get("priceObservedAt") or price_type == "OBSERVED":
                     return 3
@@ -532,6 +604,7 @@ class NavigationMixin:
                     if isinstance(getattr(self, "_state", None), dict) else {}
                 ),
                 permit_rules=getattr(self, "_shipyard_permit_rules", {}),
+                price_rules=getattr(self, "_ship_price_rules", {}),
                 access_filter=access_filter,
             ) if coordinates is not None else []
             self.shipyardFinderSearchFinished.emit({
@@ -2736,13 +2809,13 @@ class NavigationMixin:
     def setEdFrameStationPriceSharingEnabled(self, enabled):
         self._edframe_station_price_sharing_enabled = bool(enabled)
         self._edframe_station_price_upload_status = (
-            "Ready · checking the latest Outfitting and Shipyard snapshots…"
-            if enabled else "Off · observed module and ship prices remain local"
+            "Ready · checking Outfitting and future ship purchases…"
+            if enabled else "Off · module prices and ship purchases remain local"
         )
         self._append_edframe_catalog_log(
-            "Anonymous module and ship price sharing enabled"
+            "Anonymous module prices and confirmed ship purchases enabled"
             if enabled else
-            "Module and ship price sharing disabled · prices stay local"
+            "Module prices and ship purchases disabled · data stays local"
         )
         self._save_ui_config()
         self.connectionChanged.emit()
@@ -2779,7 +2852,7 @@ class NavigationMixin:
         if sent > 0 and accepted == sent:
             self._edframe_station_price_last_key = key
             self._edframe_station_price_upload_status = (
-                "Shared latest anonymous module and ship prices"
+                "Shared latest anonymous module prices or ship purchase"
             )
             self._append_edframe_catalog_log(
                 f"Shared {accepted} observed station price list(s)"

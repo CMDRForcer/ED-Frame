@@ -20,6 +20,7 @@ from ed_companion.navigation.mining_market import (
     nearby_catalog_markets,
     project_local_outfitting_observation,
     project_local_shipyard_observation,
+    project_shipyard_purchase_observation,
     project_local_market_snapshot,
     project_edframe_catalog_markets,
     project_market_imports,
@@ -135,6 +136,37 @@ class MiningMarketTests(unittest.TestCase):
         observation = project_local_shipyard_observation(snapshot, None)
         self.assertIsNone(observation)
         self.assertIsNone(prepare_station_snapshot("shipyard", snapshot, {}))
+
+    def test_shipyard_buy_projects_only_exact_anonymous_purchase(self):
+        observation = project_shipyard_purchase_observation({
+            "timestamp": "2026-10-06T20:00:00Z",
+            "event": "ShipyardBuy", "MarketID": 128666762,
+            "ShipType": "mandalay", "ShipType_Localised": "Mandalay",
+            "ShipPrice": 15875298, "StoreShipID": 7,
+            "Commander": "must not leave the app",
+        }, {
+            "MarketID": 128666762, "StarSystem": "Shinrarta Dezhra",
+            "StationName": "Jameson Memorial", "StationType": "Orbis",
+            "odyssey": True,
+        })
+        self.assertEqual(observation["kind"], "SHIP_PURCHASE")
+        self.assertEqual(observation["ships"], [{
+            "name": "mandalay", "displayName": "Mandalay",
+            "buyPrice": 15875298,
+            "priceObservedAt": "2026-10-06T20:00:00Z",
+            "priceSource": "ED-Frame Journal · ShipyardBuy",
+        }])
+        self.assertNotIn("Commander", observation)
+        self.assertNotIn("StoreShipID", str(observation))
+
+    def test_shipyard_buy_requires_matching_active_market(self):
+        self.assertIsNone(project_shipyard_purchase_observation({
+            "timestamp": "2026-10-06T20:00:00Z",
+            "event": "ShipyardBuy", "MarketID": 1,
+            "ShipType": "mandalay", "ShipPrice": 15875298,
+        }, {
+            "MarketID": 2, "StarSystem": "A", "StationName": "B",
+        }))
 
     def test_elite_discount_is_shared_as_amount_not_commander_rank(self):
         overview = {"ranks": [

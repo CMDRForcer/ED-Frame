@@ -31,7 +31,6 @@ def ensure_schema() -> None:
         conn.execute(schema)
         purge_invalid_shipyard_trade_in_values(conn)
         seed_reference_catalog(conn)
-        refresh_ship_reference_prices(conn)
 
 
 def purge_invalid_shipyard_trade_in_values(
@@ -260,18 +259,11 @@ def seed_reference_catalog(conn: psycopg.Connection) -> None:
                 boost_speed = EXCLUDED.boost_speed,
                 specifications = EXCLUDED.specifications,
                 source = EXCLUDED.source,
-                reference_price = CASE
-                    WHEN ship_catalog.reference_price_samples > 0
-                    THEN ship_catalog.reference_price
-                    ELSE EXCLUDED.reference_price END,
-                reference_price_observed_at = CASE
-                    WHEN ship_catalog.reference_price_samples > 0
-                    THEN ship_catalog.reference_price_observed_at
-                    ELSE EXCLUDED.reference_price_observed_at END,
-                reference_price_source = CASE
-                    WHEN ship_catalog.reference_price_samples > 0
-                    THEN ship_catalog.reference_price_source
-                    ELSE EXCLUDED.reference_price_source END,
+                reference_price = EXCLUDED.reference_price,
+                reference_price_observed_at =
+                    EXCLUDED.reference_price_observed_at,
+                reference_price_source = EXCLUDED.reference_price_source,
+                reference_price_samples = 0,
                 updated_at = NOW()
             WHERE (ship_catalog.display_name, ship_catalog.manufacturer,
                    ship_catalog.ship_size, ship_catalog.maximum_speed,
@@ -282,16 +274,14 @@ def seed_reference_catalog(conn: psycopg.Connection) -> None:
                    EXCLUDED.ship_size, EXCLUDED.maximum_speed,
                    EXCLUDED.boost_speed, EXCLUDED.specifications,
                    EXCLUDED.source)
-               OR (
-                   ship_catalog.reference_price_samples = 0
-                   AND (ship_catalog.reference_price,
-                        ship_catalog.reference_price_observed_at,
-                        ship_catalog.reference_price_source)
-                       IS DISTINCT FROM
-                       (EXCLUDED.reference_price,
-                        EXCLUDED.reference_price_observed_at,
-                        EXCLUDED.reference_price_source)
-               )
+               OR (ship_catalog.reference_price,
+                   ship_catalog.reference_price_observed_at,
+                   ship_catalog.reference_price_source,
+                   ship_catalog.reference_price_samples)
+                  IS DISTINCT FROM
+                  (EXCLUDED.reference_price,
+                   EXCLUDED.reference_price_observed_at,
+                   EXCLUDED.reference_price_source, 0)
             """,
             (json.dumps(ship_rows),),
         )
@@ -679,7 +669,7 @@ def upsert_station_offer_batch(
             continue
         if row.get("station_type") or isinstance(
             row.get("fleet_carrier"), bool
-        ):
+        ) or bool(row.get("partial_inventory")):
             # Direct Journal observations can arrive before a matching EDDN
             # Docked/commodity message.  Retain the public station type first
             # so Fleet Carrier prices never seed the global hull reference.
@@ -704,6 +694,10 @@ def upsert_station_offer_batch(
                 """,
                 row,
             )
+        if kind == "SHIPYARD" and bool(row.get("partial_inventory")):
+            _upsert_ship_purchase_offer(conn, row)
+            projected += 1
+            continue
         conn.execute(
             f"""
             INSERT INTO {table}
@@ -733,6 +727,71 @@ def upsert_station_offer_batch(
         )
         projected += 1
     return projected
+
+
+def _upsert_ship_purchase_offer(
+    conn: psycopg.Connection, row: dict[str, Any],
+) -> None:
+    """Merge one purchased hull price without replacing station inventory."""
+    conn.execute(
+        """
+        WITH incoming AS MATERIALIZED (
+            SELECT LOWER(value ->> 'name') AS symbol,
+                   NULLIF(value ->> 'id', '')::BIGINT AS ship_id,
+                   NULLIF(value ->> 'buyPrice', '')::BIGINT AS buy_price,
+                   COALESCE(
+                       NULLIF(value ->> 'priceObservedAt', '')::timestamptz,
+                       %(observed_at)s::timestamptz
+                   ) AS price_observed_at,
+                   COALESCE(
+                       NULLIF(value ->> 'priceSource', ''), %(source)s
+                   ) AS price_source,
+                   NULLIF(value ->> 'displayName', '') AS display_name
+            FROM jsonb_array_elements(%(items)s::jsonb) entry(value)
+            WHERE jsonb_typeof(value) = 'object'
+              AND NULLIF(value ->> 'name', '') IS NOT NULL
+              AND NULLIF(value ->> 'buyPrice', '') IS NOT NULL
+        ), discovered AS (
+            INSERT INTO ship_catalog
+                (symbol, display_name, specifications, source, updated_at)
+            SELECT symbol,
+                   COALESCE(display_name, INITCAP(REPLACE(symbol, '_', ' '))),
+                   '{}'::jsonb, 'ED-Frame ShipyardBuy discovery', NOW()
+            FROM incoming
+            ON CONFLICT (symbol) DO NOTHING
+            RETURNING symbol
+        )
+        INSERT INTO station_ship_offers
+            (market_id, ship_symbol, ship_id, buy_price, observed_at,
+             price_observed_at, availability_source, price_source, updated_at)
+        SELECT %(market_id)s, symbol, ship_id, buy_price,
+               %(observed_at)s::timestamptz, price_observed_at,
+               'ED-Frame Journal · ShipyardBuy', price_source, NOW()
+        FROM incoming
+        ON CONFLICT (market_id, ship_symbol) DO UPDATE SET
+            ship_id = COALESCE(
+                EXCLUDED.ship_id, station_ship_offers.ship_id
+            ),
+            buy_price = CASE
+              WHEN station_ship_offers.price_observed_at IS NULL
+                OR EXCLUDED.price_observed_at >=
+                   station_ship_offers.price_observed_at
+              THEN EXCLUDED.buy_price
+              ELSE station_ship_offers.buy_price END,
+            price_observed_at = GREATEST(
+                EXCLUDED.price_observed_at,
+                station_ship_offers.price_observed_at
+            ),
+            price_source = CASE
+              WHEN station_ship_offers.price_observed_at IS NULL
+                OR EXCLUDED.price_observed_at >=
+                   station_ship_offers.price_observed_at
+              THEN EXCLUDED.price_source
+              ELSE station_ship_offers.price_source END,
+            updated_at = NOW()
+        """,
+        row,
+    )
 
 
 def _replace_normalized_station_offers(
@@ -899,10 +958,6 @@ def _replace_normalized_station_offers(
             """,
             row,
         )
-    if kind == "SHIPYARD" and str(row.get("source") or "").startswith(
-        "ED-Frame Journal"
-    ):
-        refresh_ship_reference_prices(conn, market_id=int(row["market_id"]))
 
 
 def refresh_ship_reference_prices(

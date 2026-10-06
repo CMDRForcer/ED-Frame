@@ -258,6 +258,67 @@ def project_local_shipyard_observation(
     return result
 
 
+def project_shipyard_purchase_observation(
+    event: Any, context: Any, *, personal_discount_bps: int = 0,
+) -> dict[str, Any] | None:
+    """Project one exact, anonymous station purchase from ``ShipyardBuy``.
+
+    The Journal event contains the amount actually paid but no location name.
+    Location is therefore accepted only from the active, matching Journal
+    context.  Commander identity, credits, loadout and the old ship never
+    leave the app.
+    """
+    source = event if isinstance(event, dict) else {}
+    identity = context if isinstance(context, dict) else {}
+    if str(source.get("event") or "") != "ShipyardBuy":
+        return None
+    try:
+        market_id = int(source.get("MarketID") or 0)
+        context_market_id = int(identity.get("MarketID") or 0)
+        buy_price = int(source.get("ShipPrice"))
+    except (TypeError, ValueError):
+        return None
+    system = str(identity.get("StarSystem") or "").strip()
+    station = str(identity.get("StationName") or "").strip()
+    observed_at = str(source.get("timestamp") or "").strip()
+    ship_type = str(source.get("ShipType") or "").strip()
+    display_name = str(
+        source.get("ShipType_Localised") or ship_type
+    ).strip()
+    if (
+        market_id <= 0 or market_id != context_market_id
+        or buy_price <= 0 or not system or not station
+        or not observed_at or not ship_type
+    ):
+        return None
+    result = {
+        "kind": "SHIP_PURCHASE",
+        "marketId": market_id,
+        "system": system,
+        "station": station,
+        "observedAt": observed_at,
+        "ships": [{
+            "name": ship_type.casefold(),
+            "displayName": display_name,
+            "buyPrice": buy_price,
+            "priceObservedAt": observed_at,
+            "priceSource": "ED-Frame Journal · ShipyardBuy",
+        }],
+    }
+    station_type = str(identity.get("StationType") or "").strip()
+    if station_type:
+        result["stationType"] = station_type
+        result["fleetCarrier"] = (
+            station_type.casefold().replace(" ", "") == "fleetcarrier"
+        )
+    if personal_discount_bps == 250:
+        result["personalDiscountBps"] = 250
+    for field in ("horizons", "odyssey"):
+        if isinstance(identity.get(field), bool):
+            result[field] = identity[field]
+    return result
+
+
 def project_local_outfitting_observation(
     snapshot: Any, station_message: Any, *, personal_discount_bps: int = 0,
 ) -> dict[str, Any] | None:

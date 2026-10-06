@@ -2,6 +2,40 @@
 
 ## Unreleased
 
+## 1.5.35 — 2026-10-06
+
+### Added
+
+- **Elite-style Outfitting browser**: modules are grouped by shop section and
+  department, can follow the current ship's known slot layout, and expose
+  compatible variants without hiding uncertain Journal evidence.
+- **Permit- and rank-aware ship catalog**: naval-rank gates and system permits
+  remain visibly separate, with inaccessible hulls retained at the end of the
+  purchase carousel instead of silently disappearing.
+- **Confirmed ship-purchase prices**: with explicit station-price sharing
+  enabled, an actual `ShipyardBuy` event can anonymously confirm the exact
+  hull price for that station without transmitting Commander identity,
+  balance, loadout or the stored ship.
+
+### Changed
+
+- **Stable ship prices everywhere**: every known hull now uses its pinned
+  global retail reference, adjusted only by curated deterministic station
+  rules. Exact station overrides require a completed purchase and do not
+  expire or rewrite the global reference catalog.
+- **Availability stays independent**: EDDN continues to update which ships a
+  station sells, while `Shipyard.json` and active-ship trade-in values no
+  longer influence displayed ship prices.
+
+### Fixed
+
+- **Safe partial purchase merge**: one shared ship purchase updates only that
+  station/hull price and cannot erase the station's remaining ship inventory.
+- **Finder layout and price provenance**: the redesigned Shipyard & Outfitting
+  page keeps selection, access reasoning and price confidence readable at
+  desktop sizes and distinguishes reference, station-rule and purchase-
+  confirmed prices.
+
 ## 1.5.34 — 2026-10-06
 
 ### Added

@@ -281,7 +281,7 @@ def project_station_offer_observations(
         items_key = "modules" if kind == "OUTFITTING" else "ships"
         raw_items = observation.get(items_key)
         if (
-            kind not in {"OUTFITTING", "SHIPYARD"}
+            kind not in {"OUTFITTING", "SHIPYARD", "SHIP_PURCHASE"}
             or market_id is None or market_id <= 0
             or not system or not station or not observed_at
             or not isinstance(raw_items, list) or not raw_items
@@ -302,7 +302,9 @@ def project_station_offer_observations(
                 raw_item.get("buyPrice", raw_item.get("ShipPrice"))
             )
             if (
-                not name or item_id is None or item_id < 0
+                not name
+                or (kind != "SHIP_PURCHASE" and item_id is None)
+                or (item_id is not None and item_id < 0)
                 or buy_price is None or buy_price < 0
                 or (kind == "SHIPYARD" and item_id == 0)
             ):
@@ -321,13 +323,15 @@ def project_station_offer_observations(
                 "priceSource": (
                     "ED-Frame Journal · Outfitting.json"
                     if kind == "OUTFITTING" else
+                    "ED-Frame Journal · ShipyardBuy"
+                    if kind == "SHIP_PURCHASE" else
                     "ED-Frame Journal · Shipyard.json"
                 ) + (
                     " · personal 2.5% discount normalized"
                     if personal_discount_bps else ""
                 ),
             }
-            if kind == "SHIPYARD":
+            if kind in {"SHIPYARD", "SHIP_PURCHASE"}:
                 display_name = _text(
                     raw_item.get("displayName")
                     or raw_item.get("ShipType_Localised")
@@ -346,6 +350,8 @@ def project_station_offer_observations(
         source = (
             "ED-Frame Journal · Outfitting.json"
             if kind == "OUTFITTING" else
+            "ED-Frame Journal · ShipyardBuy"
+            if kind == "SHIP_PURCHASE" else
             "ED-Frame Journal · Shipyard.json"
         )
         station_type = _text(observation.get("stationType"))
@@ -359,7 +365,7 @@ def project_station_offer_observations(
             if isinstance(observation.get("fleetCarrier"), bool) else None
         )
         projected.append({
-            "kind": kind,
+            "kind": "SHIPYARD" if kind == "SHIP_PURCHASE" else kind,
             "market_id": market_id,
             "system_name": system,
             "station_name": station,
@@ -377,6 +383,7 @@ def project_station_offer_observations(
             "source": source,
             "station_type": station_type,
             "fleet_carrier": fleet_carrier,
+            "partial_inventory": kind == "SHIP_PURCHASE",
         })
     return projected
 
