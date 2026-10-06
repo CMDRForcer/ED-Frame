@@ -89,7 +89,7 @@ class SchemaContractTests(unittest.TestCase):
         self.assertIn('@app.get("/v1/catalog/modules/suggest")', source)
         self.assertIn('@app.get("/v1/catalog/ships/suggest")', source)
         self.assertIn('"priceType"] = "INFERRED"', source)
-        self.assertIn('"priceType"] = "BASE_PRICE"', source)
+        self.assertIn('"priceType"] = "UNKNOWN"', source)
         self.assertIn('@app.post("/v1/yields/observations")', source)
         self.assertIn('AS "prospectorSampleCount"', source)
         self.assertIn('AS "yieldStats"', source)

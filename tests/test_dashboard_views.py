@@ -117,6 +117,16 @@ class DashboardViewTests(unittest.TestCase):
             "basis": "LIVE STATUS",
         })
 
+    def test_commander_overview_collects_permits_and_visited_systems(self):
+        overview = commander_journal_overview([
+            {"event": "Location", "StarSystem": "Sol", "timestamp": "2026-01-01T10:00:00Z"},
+            {"event": "MissionCompleted", "PermitsAwarded": [
+                "Sirius permit", {"System": "Alioth"},
+            ], "timestamp": "2026-01-01T10:01:00Z"},
+        ])
+        self.assertEqual(overview["visitedSystems"], ["Sol"])
+        self.assertEqual(overview["permits"], ["Alioth", "Sirius permit"])
+
     def test_stale_status_balance_does_not_override_newer_load_game(self):
         overview = commander_journal_overview(
             [{
@@ -448,7 +458,7 @@ class FrontierRequestResilienceTests(unittest.TestCase):
 
     def test_unexpected_worker_error_releases_the_busy_state_without_leaking(self):
         controller = self._controller()
-        controller._frontier_client.query.side_effect = RuntimeError(
+        controller._frontier_client.query_many.side_effect = RuntimeError(
             "boom token=SUPERSECRET"
         )
         workers = []
@@ -483,7 +493,7 @@ class FrontierRequestResilienceTests(unittest.TestCase):
 
     def test_expected_frontier_error_is_defensively_redacted(self):
         controller = self._controller()
-        controller._frontier_client.query.side_effect = FrontierCapiError(
+        controller._frontier_client.query_many.side_effect = FrontierCapiError(
             "Frontier rejected token=KNOWN-SECRET-123456"
         )
         workers = []

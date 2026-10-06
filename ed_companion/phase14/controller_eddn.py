@@ -1162,6 +1162,7 @@ class EddnMixin:
     def _scan_local_shipyard_price_file(self):
         """Retain exact local module/ship prices and share only by opt-in."""
         observations = []
+        refresh_frontier_shipyard = False
         personal_discount_bps = commander_personal_discount_bps(
             self._state.get("commanderOverview", {})
             if isinstance(getattr(self, "_state", None), dict) else {}
@@ -1226,12 +1227,24 @@ class EddnMixin:
                         "source": f"ED-Frame Journal · {filename}",
                     }])
                 setattr(self, fingerprint_name, fingerprint)
+                if kind == "shipyard":
+                    refresh_frontier_shipyard = True
             except (OSError, UnicodeError, ValueError, TypeError) as exc:
                 LOGGER.debug("Local %s prices are not available yet: %s",
                              kind, exc)
             except sqlite3.DatabaseError as exc:
                 LOGGER.warning("Local %s prices were not retained: %s",
                                kind, exc)
+        if (
+            refresh_frontier_shipyard
+            and getattr(self, "_frontier_tokens", None) is not None
+            and bool(getattr(self, "_frontier_config", {}).get("consent"))
+            and not bool(getattr(self, "_frontier_busy", False))
+        ):
+            # Elite occasionally writes an incomplete Shipyard.json.  A
+            # connected, already-consented CAPI session fills that gap once
+            # per changed snapshot without polling Frontier continuously.
+            QTimer.singleShot(1200, self.refreshFrontierProfile)
         if not observations or not getattr(
             self, "_edframe_station_price_sharing_enabled", False
         ):

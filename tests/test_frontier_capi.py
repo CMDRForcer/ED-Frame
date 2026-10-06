@@ -16,6 +16,7 @@ from ed_companion.integrations.frontier_capi import (
     exchange_authorization_code,
     parse_authorization_callback,
     project_profile_snapshot,
+    project_shipyard_station_observations,
     refresh_frontier_tokens,
 )
 from ed_companion.integrations.frontier_credentials import (
@@ -230,6 +231,53 @@ class FrontierCapiTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             client.query("private-or-future-endpoint")
         self.assertEqual(session.calls, [])
+
+    def test_capi_bundle_waits_once_then_spaces_companion_documents(self):
+        sleeps = []
+        session = FakeSession([
+            FakeResponse(200, {"commander": {}}),
+            FakeResponse(200, {"id": 1, "name": "Port"}),
+        ])
+        client = FrontierCapiClient(
+            "token", session=session, min_interval=60,
+            clock=lambda: 0.0, sleeper=sleeps.append,
+        )
+
+        snapshots = client.query_many(("profile", "shipyard"), spacing=0.55)
+
+        self.assertEqual(set(snapshots), {"/profile", "/shipyard"})
+        self.assertEqual(sleeps, [0.55])
+        self.assertEqual(len(session.calls), 2)
+
+    def test_shipyard_projection_does_not_treat_base_value_as_station_price(self):
+        observations = project_shipyard_station_observations({
+            "payload": {
+                "lastSystem": {"name": "Shui Wei Sector VT-R b4-4"},
+                "lastStarport": {"id": 4209887491, "name": "Port Astley -x-"},
+            },
+        }, {
+            "observedAt": "2026-10-06T18:52:21Z",
+            "payload": {
+                "id": 4209887491, "name": "Port Astley -x-",
+                "ships": {"shipyard_list": {"1": {
+                    "id": 128049267, "name": "Mandalay",
+                    "basevalue": 17639220,
+                }}},
+                "modules": {"2": {
+                    "id": 128064028, "name": "Hpt_FragCannon_Fixed_Medium",
+                    "cost": 52600,
+                }},
+            },
+        })
+
+        by_kind = {row["kind"]: row for row in observations}
+        mandalay = by_kind["SHIPYARD"]["items"][0]
+        self.assertNotIn("buyPrice", mandalay)
+        self.assertNotIn("priceType", mandalay)
+        self.assertNotIn("priceObservedAt", mandalay)
+        frag = by_kind["OUTFITTING"]["items"][0]
+        self.assertEqual(frag["buyPrice"], 52600)
+        self.assertEqual(frag["priceType"], "OBSERVED")
 
     def test_capi_http_failure_is_retryable_without_leaking_body(self):
         session = FakeSession([FakeResponse(

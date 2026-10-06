@@ -52,6 +52,7 @@ FRONTIER_REDIRECT_URI = _configured(
 )
 CAPI_ENDPOINTS = frozenset({"/profile", "/market", "/shipyard", "/fleetcarrier"})
 CAPI_MIN_INTERVAL_SECONDS = 60.0
+CAPI_BUNDLE_SPACING_SECONDS = 0.55
 CAPI_TIMEOUT_SECONDS = 25
 
 
@@ -317,30 +318,60 @@ class FrontierCapiClient:
         self._lock = threading.Lock()
 
     def query(self, endpoint, *, timeout=CAPI_TIMEOUT_SECONDS):
+        endpoint = self._validated_endpoint(endpoint)
+        with self._lock:
+            self._wait_for_request_window()
+            return self._query_unlocked(endpoint, timeout=timeout)
+
+    def query_many(
+        self, endpoints, *, timeout=CAPI_TIMEOUT_SECONDS,
+        spacing=CAPI_BUNDLE_SPACING_SECONDS,
+    ):
+        """Read one user-triggered CAPI bundle without a 60 s intra-bundle wait."""
+        normalized = [self._validated_endpoint(value) for value in endpoints]
+        if not normalized:
+            return {}
+        with self._lock:
+            self._wait_for_request_window()
+            results = {}
+            for index, endpoint in enumerate(normalized):
+                if index:
+                    self._sleeper(max(0.0, float(spacing)))
+                results[endpoint] = self._query_unlocked(
+                    endpoint, timeout=timeout,
+                )
+            return results
+
+    @staticmethod
+    def _validated_endpoint(endpoint):
         endpoint = "/" + str(endpoint or "").strip().lstrip("/")
         if endpoint not in CAPI_ENDPOINTS:
             raise ValueError(f"Unsupported Frontier CAPI endpoint: {endpoint}")
-        with self._lock:
-            now = self._clock()
-            if self._last_request_at is not None:
-                delay = self._min_interval - (now - self._last_request_at)
-                if delay > 0:
-                    self._sleeper(delay)
-            self._last_request_at = self._clock()
-            try:
-                response = self._session.get(
-                    FRONTIER_CAPI_BASE + endpoint,
-                    headers={
-                        "Authorization": self._authorization,
-                        "User-Agent": f"ED-Frame/{APP_VERSION}",
-                        "Accept": "application/json",
-                    },
-                    timeout=timeout,
-                )
-            except requests.RequestException as exc:
-                raise FrontierCapiError(
-                    "Frontier CAPI could not be reached.", retryable=True
-                ) from exc
+        return endpoint
+
+    def _wait_for_request_window(self):
+        now = self._clock()
+        if self._last_request_at is not None:
+            delay = self._min_interval - (now - self._last_request_at)
+            if delay > 0:
+                self._sleeper(delay)
+
+    def _query_unlocked(self, endpoint, *, timeout):
+        self._last_request_at = self._clock()
+        try:
+            response = self._session.get(
+                FRONTIER_CAPI_BASE + endpoint,
+                headers={
+                    "Authorization": self._authorization,
+                    "User-Agent": f"ED-Frame/{APP_VERSION}",
+                    "Accept": "application/json",
+                },
+                timeout=timeout,
+            )
+        except requests.RequestException as exc:
+            raise FrontierCapiError(
+                "Frontier CAPI could not be reached.", retryable=True
+            ) from exc
         payload = _read_json_response(response, "CAPI request")
         if endpoint == "/profile" and not isinstance(
             payload.get("commander"), Mapping
@@ -354,6 +385,106 @@ class FrontierCapiClient:
             "observedAt": observed_at,
             "payload": payload,
         }
+
+
+def _mapping_values(value):
+    if isinstance(value, Mapping):
+        return value.values()
+    return value if isinstance(value, list) else ()
+
+
+def project_shipyard_station_observations(profile_snapshot, shipyard_snapshot):
+    """Project CAPI availability and prices without overstating ship base values."""
+    profile = profile_snapshot if isinstance(profile_snapshot, Mapping) else {}
+    profile_payload = profile.get("payload")
+    profile_payload = profile_payload if isinstance(profile_payload, Mapping) else {}
+    station_snapshot = (
+        shipyard_snapshot if isinstance(shipyard_snapshot, Mapping) else {}
+    )
+    payload = station_snapshot.get("payload")
+    payload = payload if isinstance(payload, Mapping) else {}
+    last_system = profile_payload.get("lastSystem")
+    last_system = last_system if isinstance(last_system, Mapping) else {}
+    last_starport = profile_payload.get("lastStarport")
+    last_starport = last_starport if isinstance(last_starport, Mapping) else {}
+    try:
+        market_id = int(payload.get("id") or last_starport.get("id") or 0)
+    except (TypeError, ValueError):
+        market_id = 0
+    system = str(last_system.get("name") or "").strip()
+    station = str(payload.get("name") or last_starport.get("name") or "").strip()
+    observed_at = str(station_snapshot.get("observedAt") or "").strip()
+    if market_id <= 0 or not system or not station or not observed_at:
+        return []
+
+    common = {
+        "marketId": market_id,
+        "system": system,
+        "station": station,
+        "observedAt": observed_at,
+        "receivedAt": observed_at,
+        "source": "Frontier CAPI · /shipyard",
+    }
+    station_type = str(
+        payload.get("outpostType") or last_starport.get("type") or ""
+    ).strip()
+    if station_type:
+        common["stationType"] = station_type
+
+    observations = []
+    ships_block = payload.get("ships")
+    ships_block = ships_block if isinstance(ships_block, Mapping) else {}
+    ships = {}
+    for source in _mapping_values(ships_block.get("shipyard_list")):
+        if not isinstance(source, Mapping):
+            continue
+        name = str(source.get("name") or "").strip()
+        ship_id = _clean_int(source.get("id"))
+        if not name:
+            continue
+        item = {
+            "name": name.casefold(),
+            "displayName": name,
+            "availabilitySource": "Frontier CAPI · /shipyard",
+        }
+        if ship_id is not None:
+            item["id"] = ship_id
+        ships[item["name"]] = item
+    if ships:
+        observations.append({
+            **common, "kind": "SHIPYARD",
+            "items": [ships[key] for key in sorted(ships)],
+        })
+
+    modules = {}
+    for source in _mapping_values(payload.get("modules")):
+        if not isinstance(source, Mapping):
+            continue
+        module = source.get("module")
+        module = module if isinstance(module, Mapping) else source
+        name = str(module.get("name") or source.get("name") or "").strip()
+        price = _clean_int(source.get("cost"))
+        module_id = _clean_int(module.get("id") or source.get("id"))
+        if not name:
+            continue
+        item = {
+            "name": name.casefold(), "displayName": name,
+            "priceSource": "Frontier CAPI · /shipyard",
+        }
+        if module_id is not None:
+            item["id"] = module_id
+        if price is not None:
+            item.update({
+                "buyPrice": price, "priceType": "OBSERVED",
+                "priceObservedAt": observed_at,
+            })
+        modules[item["name"]] = item
+    if modules:
+        observations.append({
+            **common, "kind": "OUTFITTING",
+            "items": [modules[key] for key in sorted(modules)],
+        })
+    return observations
 
 
 def _response_timestamp(response, payload, utcnow: Callable):

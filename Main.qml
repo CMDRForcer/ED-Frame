@@ -377,6 +377,7 @@ ApplicationWindow {
         {"id": "engineers", "label": t("nav.engineers", "ENGINEERS"), "icon": "\uE716", "page": 4},
         {"id": "materials", "label": t("nav.materials", "MATERIALS"), "icon": "\uE8B7", "page": 2},
         {"id": "mining-finder", "label": t("nav.mining_finder", "MINING FINDER"), "icon": "\uE81E", "page": 12},
+        {"id": "shipyard", "label": t("nav.shipyard", "SHIPYARD"), "icon": "\uE7B8", "page": 17},
         {"id": "state-finds", "label": t("nav.state_finds", "STATE FINDS"), "icon": "\uE707", "page": 8},
         {"id": "powerplay", "label": t("nav.powerplay", "POWERPLAY"), "icon": "\uE7C1", "page": 11},
         {"id": "cmdr", "label": t("nav.commander", "CMDR"), "icon": "\uE77B", "page": 10},
@@ -6742,6 +6743,19 @@ ApplicationWindow {
         asynchronous: false
         sourceComponent: Component {
             MiningFinderPage {
+                appWindow: window
+                sidebarWidth: sidebar.width
+            }
+        }
+    }
+    Loader {
+        id: pageLoader17
+        anchors.fill: parent
+        active: window.currentPage === 17 || smokeTest
+        visible: window.currentPage === 17
+        asynchronous: false
+        sourceComponent: Component {
+            ShipyardPage {
                 appWindow: window
                 sidebarWidth: sidebar.width
             }

@@ -74,14 +74,15 @@ class SyncCursorTests(unittest.TestCase):
         self.assertEqual(result["priceType"], "INFERRED")
         self.assertEqual(result["priceConfidence"], "CONFIRMED")
 
-    def test_ship_price_resolution_falls_back_to_global_reference(self):
+    def test_ship_reference_is_not_presented_as_a_station_price(self):
         result = _resolved_ship_offer(
             {"name": "python"}, reference_price=60000000,
             reference_samples=1, evidence=[],
         )
-        self.assertEqual(result["buyPrice"], 60000000)
-        self.assertEqual(result["priceType"], "BASE_PRICE")
-        self.assertEqual(result["priceConfidence"], "PROVISIONAL")
+        self.assertNotIn("buyPrice", result)
+        self.assertEqual(result["referencePrice"], 60000000)
+        self.assertEqual(result["priceType"], "UNKNOWN")
+        self.assertEqual(result["priceConfidence"], "UNKNOWN")
 
 
 if __name__ == "__main__":

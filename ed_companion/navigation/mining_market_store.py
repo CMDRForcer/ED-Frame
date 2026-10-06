@@ -19,7 +19,7 @@ from .mining_commodities import mining_commodity_id
 
 LOGGER = logging.getLogger(__name__)
 
-SCHEMA_VERSION = 5
+SCHEMA_VERSION = 6
 CURRENT_RETENTION_DAYS = 90
 HISTORY_RETENTION_DAYS = 30
 MAX_CURRENT_ROWS = 150_000
@@ -116,7 +116,7 @@ def _module_offer(value: Any) -> dict[str, Any] | None:
         number = _optional_nonnegative(value.get(source_key))
         if number >= 0:
             result[target_key] = number
-    for key in ("priceObservedAt", "priceSource"):
+    for key in ("priceObservedAt", "priceSource", "priceType", "priceConfidence"):
         text = str(value.get(key) or "").strip()
         if text:
             result[key] = text
@@ -134,6 +134,10 @@ def _ship_offer(value: Any) -> dict[str, Any] | None:
     ).strip().casefold()
     if not name:
         return None
+    # Elite can emit the active fitted ship as an ``id: 0`` trade-in row.
+    # Its ShipPrice is a resale valuation, never station stock.
+    if "id" in value and _integer(value.get("id"), -1) <= 0:
+        return None
     result: dict[str, Any] = {"name": name}
     for source_key, target_key in (
         ("id", "id"),
@@ -145,7 +149,7 @@ def _ship_offer(value: Any) -> dict[str, Any] | None:
         number = _optional_nonnegative(value.get(source_key))
         if number >= 0:
             result[target_key] = number
-    for key in ("priceObservedAt", "priceSource"):
+    for key in ("priceObservedAt", "priceSource", "priceType", "priceConfidence"):
         text = str(value.get(key) or "").strip()
         if text:
             result[key] = text
@@ -183,6 +187,16 @@ def _preserve_observed_offer_prices(
         item["name"]: item for item in existing_items
         if isinstance(item, dict) and "buyPrice" in item
     }
+
+    def price_quality(offer):
+        if not isinstance(offer, dict) or "buyPrice" not in offer:
+            return 0
+        price_type = str(offer.get("priceType") or "").upper()
+        if offer.get("priceObservedAt") or price_type == "OBSERVED":
+            return 3
+        if price_type == "INFERRED":
+            return 2
+        return 1
     merged = []
     projector = _module_offer if kind == "OUTFITTING" else _ship_offer
     for item in incoming_items:
@@ -190,8 +204,8 @@ def _preserve_observed_offer_prices(
         if not offer:
             continue
         retained = priced_existing.get(offer["name"])
-        if "buyPrice" not in offer and retained:
-            offer = {**retained, **offer}
+        if retained and price_quality(retained) > price_quality(offer):
+            offer = {**offer, **retained}
         merged.append(offer if len(offer) > 1 else offer["name"])
     return merged
 
@@ -396,6 +410,30 @@ class MarketCatalogStore:
                     connection.execute(
                         f"ALTER TABLE market_current ADD COLUMN "
                         f"{name} {declaration}"
+                    )
+            current_version = int(connection.execute(
+                "PRAGMA user_version"
+            ).fetchone()[0])
+            if current_version < 6:
+                rows = connection.execute(
+                    "SELECT market_id, ships_json FROM station_offers "
+                    "WHERE ships_json LIKE '%\"id\":0%'"
+                ).fetchall()
+                for row in rows:
+                    cleaned = _normalize_offer_items(
+                        _loaded_list(row["ships_json"]), "SHIPYARD"
+                    )
+                    connection.execute(
+                        "UPDATE station_offers SET ships_json=?, "
+                        "shipyard_observed_at=CASE WHEN ?='[]' THEN '' "
+                        "ELSE shipyard_observed_at END, "
+                        "shipyard_observed_epoch=CASE WHEN ?='[]' THEN 0 "
+                        "ELSE shipyard_observed_epoch END "
+                        "WHERE market_id=?",
+                        (
+                            _json_list(cleaned), _json_list(cleaned),
+                            _json_list(cleaned), int(row["market_id"]),
+                        ),
                     )
             connection.execute(f"PRAGMA user_version={SCHEMA_VERSION}")
             connection.commit()
@@ -962,7 +1000,11 @@ class MarketCatalogStore:
                 market_ids,
             ).fetchall()
             existing_by_market = {
-                int(row["market_id"]): row for row in existing_rows
+                int(row["market_id"]): {
+                    "modules_json": row["modules_json"],
+                    "ships_json": row["ships_json"],
+                }
+                for row in existing_rows
             }
             merged_prepared = []
             for raw in prepared:
@@ -980,6 +1022,19 @@ class MarketCatalogStore:
                         _loaded_list(existing["ships_json"]),
                         "SHIPYARD",
                     ))
+                current = existing or {
+                    "modules_json": "[]", "ships_json": "[]",
+                }
+                existing_by_market[int(values[0])] = {
+                    "modules_json": (
+                        values[11] if values[14] > 0
+                        else current["modules_json"]
+                    ),
+                    "ships_json": (
+                        values[12] if values[16] > 0
+                        else current["ships_json"]
+                    ),
+                }
                 merged_prepared.append(tuple(values))
             connection.executemany(statement, merged_prepared)
             connection.commit()
@@ -1066,6 +1121,14 @@ class MarketCatalogStore:
                 ),
                 "priceSource": (
                     matched_offer.get("priceSource")
+                    if matched_offer else None
+                ),
+                "priceType": (
+                    matched_offer.get("priceType")
+                    if matched_offer else None
+                ),
+                "priceConfidence": (
+                    matched_offer.get("priceConfidence")
                     if matched_offer else None
                 ),
                 "observedAt": row[

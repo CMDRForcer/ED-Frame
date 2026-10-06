@@ -2,6 +2,28 @@
 
 ## Unreleased
 
+## 1.5.34 — 2026-10-06
+
+### Added
+
+- **Shipyard & Outfitting finder**: a dedicated page now searches the local
+  and community catalog for ships and modules, presents permit-aware station
+  access, and keeps observed station offers separate from static reference
+  information.
+- **Complete ship reference catalog**: all 48 currently known hulls include a
+  pinned standard-price reference for browsing and comparison, while exact
+  station prices remain clearly labelled as observed or estimated.
+
+### Fixed
+
+- **No player values disguised as station prices**: active-ship trade-in and
+  fitted-ship values (`id: 0`) are rejected in local imports, EDDN projection
+  and server storage. Existing invalid rows are removed safely during startup
+  and affected references are restored from the pinned catalog.
+- **Truthful station offers**: CAPI availability no longer promotes `basevalue`
+  to an observed purchase price, and missing station prices stay unknown
+  instead of silently inheriting a global reference value.
+
 ## 1.5.33 — 2026-10-06
 
 ### Added

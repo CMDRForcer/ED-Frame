@@ -29,8 +29,79 @@ def ensure_schema() -> None:
         # startup cannot deadlock while acquiring table and index locks.
         conn.execute("SELECT pg_advisory_xact_lock(%s)", (45444652414,))
         conn.execute(schema)
+        purge_invalid_shipyard_trade_in_values(conn)
         seed_reference_catalog(conn)
         refresh_ship_reference_prices(conn)
+
+
+def purge_invalid_shipyard_trade_in_values(
+    conn: psycopg.Connection,
+) -> None:
+    """Remove active-ship trade-in valuations uploaded as station offers.
+
+    Current Elite builds can emit an ``id: 0`` PriceList row containing the
+    fitted current ship's 90% resale value.  Older ED-Frame clients accepted
+    that row as a purchase offer.  Clean both the normalized index and source
+    snapshot, then let the bundled static catalog restore the hull reference.
+    """
+    conn.execute(
+        """
+        UPDATE station_shipyards yard
+        SET ships = COALESCE((
+                SELECT jsonb_agg(entry.value ORDER BY entry.ordinality)
+                FROM jsonb_array_elements(yard.ships)
+                     WITH ORDINALITY entry(value, ordinality)
+                WHERE NOT (
+                    jsonb_typeof(entry.value) = 'object'
+                    AND COALESCE(
+                        NULLIF(entry.value ->> 'id', '')::BIGINT, 1
+                    ) <= 0
+                )
+            ), '[]'::jsonb),
+            updated_at = NOW()
+        WHERE yard.source LIKE 'ED-Frame Journal · Shipyard.json%'
+          AND EXISTS (
+              SELECT 1
+              FROM jsonb_array_elements(yard.ships) entry(value)
+              WHERE jsonb_typeof(entry.value) = 'object'
+                AND COALESCE(
+                    NULLIF(entry.value ->> 'id', '')::BIGINT, 1
+                ) <= 0
+          )
+        """
+    )
+    conn.execute(
+        """
+        WITH invalid AS MATERIALIZED (
+            SELECT DISTINCT ship_symbol
+            FROM station_ship_offers
+            WHERE ship_id <= 0
+              AND price_source LIKE 'ED-Frame Journal · Shipyard.json%'
+        ), removed AS (
+            DELETE FROM station_ship_offers offer
+            USING invalid
+            WHERE offer.ship_symbol = invalid.ship_symbol
+              AND offer.ship_id <= 0
+              AND offer.price_source LIKE
+                  'ED-Frame Journal · Shipyard.json%'
+            RETURNING invalid.ship_symbol
+        )
+        UPDATE ship_catalog catalog
+        SET reference_price = NULL,
+            reference_price_observed_at = NULL,
+            reference_price_source = NULL,
+            reference_price_samples = 0,
+            updated_at = NOW()
+        WHERE catalog.symbol IN (SELECT ship_symbol FROM removed)
+        """
+    )
+    conn.execute(
+        """
+        DELETE FROM station_shipyards
+        WHERE source LIKE 'ED-Frame Journal · Shipyard.json%'
+          AND ships = '[]'::jsonb
+        """
+    )
 
 
 def _reference_data_dir() -> Path | None:
@@ -55,6 +126,11 @@ def seed_reference_catalog(conn: psycopg.Connection) -> None:
         )
         ships_payload = json.loads(
             (data_dir / "ships.json").read_text(encoding="utf-8")
+        )
+        ship_prices_payload = json.loads(
+            (data_dir / "ship_reference_prices.json").read_text(
+                encoding="utf-8"
+            )
         )
     except (OSError, UnicodeError, ValueError, TypeError):
         return
@@ -114,6 +190,13 @@ def seed_reference_catalog(conn: psycopg.Connection) -> None:
             """,
             (json.dumps(module_rows),),
         )
+    ship_prices = (
+        ship_prices_payload.get("ships", {})
+        if isinstance(ship_prices_payload, dict) else {}
+    )
+    price_captured_at = str(
+        ship_prices_payload.get("capturedAt") or ""
+    ) if isinstance(ship_prices_payload, dict) else ""
     ship_rows = []
     if isinstance(ships_payload, list):
         for ship in ships_payload:
@@ -123,6 +206,11 @@ def seed_reference_catalog(conn: psycopg.Connection) -> None:
             display_name = str(ship.get("name") or "").strip()
             if not symbol or not display_name:
                 continue
+            price_row = ship_prices.get(symbol.casefold())
+            price_row = price_row if isinstance(price_row, dict) else {}
+            reference_price = price_row.get("referencePrice")
+            if not isinstance(reference_price, int) or reference_price <= 0:
+                reference_price = None
             ship_rows.append({
                 "symbol": symbol.casefold(),
                 "display_name": display_name,
@@ -136,19 +224,33 @@ def seed_reference_catalog(conn: psycopg.Connection) -> None:
                     ) if key in ship
                 },
                 "source": "ED-Frame ship reference catalog",
+                "reference_price": reference_price,
+                "reference_price_observed_at": (
+                    price_captured_at or None
+                ),
+                "reference_price_source": (
+                    f"Static reference · {price_row.get('source')}"
+                    if reference_price else None
+                ),
             })
     if ship_rows:
         conn.execute(
             """
             INSERT INTO ship_catalog
                 (symbol, display_name, manufacturer, ship_size, maximum_speed,
-                 boost_speed, specifications, source, updated_at)
+                 boost_speed, specifications, source, reference_price,
+                 reference_price_observed_at, reference_price_source,
+                 reference_price_samples, updated_at)
             SELECT symbol, display_name, manufacturer, ship_size,
-                   maximum_speed, boost_speed, specifications, source, NOW()
+                   maximum_speed, boost_speed, specifications, source,
+                   reference_price, reference_price_observed_at::TIMESTAMPTZ,
+                   reference_price_source, 0, NOW()
             FROM jsonb_to_recordset(%s::jsonb) AS incoming(
                 symbol TEXT, display_name TEXT, manufacturer TEXT,
                 ship_size TEXT, maximum_speed INTEGER, boost_speed INTEGER,
-                specifications JSONB, source TEXT
+                specifications JSONB, source TEXT, reference_price BIGINT,
+                reference_price_observed_at TEXT,
+                reference_price_source TEXT
             )
             ON CONFLICT (symbol) DO UPDATE SET
                 display_name = EXCLUDED.display_name,
@@ -158,6 +260,18 @@ def seed_reference_catalog(conn: psycopg.Connection) -> None:
                 boost_speed = EXCLUDED.boost_speed,
                 specifications = EXCLUDED.specifications,
                 source = EXCLUDED.source,
+                reference_price = CASE
+                    WHEN ship_catalog.reference_price_samples > 0
+                    THEN ship_catalog.reference_price
+                    ELSE EXCLUDED.reference_price END,
+                reference_price_observed_at = CASE
+                    WHEN ship_catalog.reference_price_samples > 0
+                    THEN ship_catalog.reference_price_observed_at
+                    ELSE EXCLUDED.reference_price_observed_at END,
+                reference_price_source = CASE
+                    WHEN ship_catalog.reference_price_samples > 0
+                    THEN ship_catalog.reference_price_source
+                    ELSE EXCLUDED.reference_price_source END,
                 updated_at = NOW()
             WHERE (ship_catalog.display_name, ship_catalog.manufacturer,
                    ship_catalog.ship_size, ship_catalog.maximum_speed,
@@ -168,6 +282,16 @@ def seed_reference_catalog(conn: psycopg.Connection) -> None:
                    EXCLUDED.ship_size, EXCLUDED.maximum_speed,
                    EXCLUDED.boost_speed, EXCLUDED.specifications,
                    EXCLUDED.source)
+               OR (
+                   ship_catalog.reference_price_samples = 0
+                   AND (ship_catalog.reference_price,
+                        ship_catalog.reference_price_observed_at,
+                        ship_catalog.reference_price_source)
+                       IS DISTINCT FROM
+                       (EXCLUDED.reference_price,
+                        EXCLUDED.reference_price_observed_at,
+                        EXCLUDED.reference_price_source)
+               )
             """,
             (json.dumps(ship_rows),),
         )

@@ -82,6 +82,34 @@ def fetch_edframe_catalog_status(*, get: Any, timeout: int = 60) -> dict[str, An
     return payload
 
 
+def fetch_edframe_station_offers(
+    *, kind: str, item: str, get: Any, timeout: int = 20, limit: int = 200,
+) -> list[dict[str, Any]]:
+    """Search the public indexed module/ship inventory without Commander data."""
+    normalized_kind = str(kind or "").strip().upper()
+    parameter = "module" if normalized_kind == "MODULES" else (
+        "ship" if normalized_kind == "SHIPS" else ""
+    )
+    wanted = str(item or "").strip().casefold()
+    if not parameter or not wanted:
+        raise MiningMarketError("A valid module or ship is required")
+    response = get(
+        f"{EDFRAME_CATALOG_BASE}/v1/station-offers/search",
+        params={parameter: wanted, "limit": max(1, min(200, int(limit or 200)))},
+        timeout=timeout,
+    )
+    response.raise_for_status()
+    payload = response.json()
+    if (
+        not isinstance(payload, dict)
+        or not isinstance(payload.get("results"), list)
+    ):
+        raise MiningMarketError(
+            "ED-Frame station search returned an invalid response"
+        )
+    return [row for row in payload["results"] if isinstance(row, dict)]
+
+
 def fetch_edframe_market_delta(
     *, cursor: str = "", get: Any, timeout: int = 20, limit: int = 1000,
 ) -> dict[str, Any]:
@@ -186,7 +214,10 @@ def project_local_shipyard_observation(
             buy_price = int(source.get("ShipPrice"))
         except (TypeError, ValueError):
             continue
-        if not name or ship_id < 0 or buy_price < 0:
+        # Current Elite builds can overwrite Shipyard.json with an ``id: 0``
+        # row for the Commander's active ship.  Its ShipPrice is the 90%
+        # trade-in value of the fitted ship, not a station purchase offer.
+        if not name or ship_id <= 0 or buy_price < 0:
             continue
         key = name.casefold()
         ships[key] = {

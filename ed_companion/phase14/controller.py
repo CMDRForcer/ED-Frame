@@ -128,6 +128,11 @@ from ed_companion.navigation.mining_commodities import (
     mining_commodities_for_method,
 )
 from ed_companion.navigation.mining_market_store import MarketCatalogStore
+from ed_companion.navigation.shipyard_finder import (
+    build_module_catalog,
+    build_permit_rules,
+    build_ship_catalog,
+)
 from ed_companion.navigation.trader_type_cache import normalize_timestamp
 
 HGE_OBSERVATION_LIMIT = 10000
@@ -146,7 +151,8 @@ COMMANDER_CARD_IDS = (
 )
 NAVIGATION_IDS = (
     "operations", "engineering", "wishlist", "engineers", "materials",
-    "mining-finder", "state-finds", "powerplay", "cmdr", "logbook",
+    "mining-finder", "shipyard", "state-finds", "powerplay", "cmdr",
+    "logbook",
     "exploration", "exobiology", "missions", "nav", "settings",
 )
 LEGACY_DEFAULT_NAVIGATION_ORDERS = {
@@ -187,6 +193,8 @@ def initial_navigation_order(configured):
             continue
         if item == "exploration" and "exobiology" in order:
             order.insert(order.index("exobiology"), item)
+        elif item == "shipyard" and "mining-finder" in order:
+            order.insert(order.index("mining-finder") + 1, item)
         else:
             order.append(item)
     return order
@@ -573,7 +581,7 @@ class CockpitController(
         self._shutdown_complete = False
         self._network_threads = set()
         self._network_threads_lock = threading.Lock()
-        self._last_page = max(0, min(16, int(ui_config.get("last_page", 0) or 0)))
+        self._last_page = max(0, min(17, int(ui_config.get("last_page", 0) or 0)))
         configured_cards = ui_config.get("commander_card_order", [])
         configured_cards = configured_cards if isinstance(configured_cards, list) else []
         self._commander_card_order = list(dict.fromkeys(
@@ -690,6 +698,18 @@ class CockpitController(
         if not isinstance(self._mining_market_cache, dict):
             self._mining_market_cache = {}
         self._mining_market_store = self._open_mining_market_store()
+        local_offer_summary = self._mining_market_store.station_offer_summary()
+        if not isinstance(getattr(self, "_edframe_catalog_stats", None), dict):
+            self._edframe_catalog_stats = {}
+        self._edframe_catalog_stats.update({
+            "localOfferStations": int(local_offer_summary.get("stations", 0)),
+            "localOutfittingStations": int(
+                local_offer_summary.get("outfittingStations", 0)
+            ),
+            "localShipyardStations": int(
+                local_offer_summary.get("shipyardStations", 0)
+            ),
+        })
         self._mining_market_busy = False
         self._mining_market_background = False
         self._mining_market_status = self._mining_market_cache_status()
@@ -823,8 +843,28 @@ class CockpitController(
         self._ship_catalog = read_json(
             self._reference_data_dir / "ships.json", []
         )
+        self._ship_reference_prices = read_json(
+            self._reference_data_dir / "ship_reference_prices.json", {}
+        )
+        self._shipyard_module_catalog = build_module_catalog(read_json(
+            self._reference_data_dir / "module_display.json", {}
+        ))
+        self._shipyard_ship_catalog = build_ship_catalog(
+            self._ship_catalog, self._ship_reference_prices,
+        )
+        self._shipyard_finder_suggestions = []
+        self._shipyard_finder_results = []
+        self._shipyard_finder_busy = False
+        self._shipyard_finder_status = "Ready · choose a module or ship"
+        self._shipyard_finder_search_token = 0
+        self.shipyardFinderSearchFinished.connect(
+            self._finish_shipyard_finder_search
+        )
         self._engineer_unlock_catalog = load_unlock_catalog(
             self._data_dir, self.package_root
+        )
+        self._shipyard_permit_rules = build_permit_rules(
+            self._engineer_unlock_catalog
         )
         self._blueprint_catalog = blueprint_catalog(self._reference_data_dir)
         self._blueprint_groups = {}
@@ -2612,6 +2652,18 @@ class CockpitController(
         if not isinstance(self._mining_market_cache, dict):
             self._mining_market_cache = {}
         self._mining_market_store = self._open_mining_market_store()
+        local_offer_summary = self._mining_market_store.station_offer_summary()
+        if not isinstance(getattr(self, "_edframe_catalog_stats", None), dict):
+            self._edframe_catalog_stats = {}
+        self._edframe_catalog_stats.update({
+            "localOfferStations": int(local_offer_summary.get("stations", 0)),
+            "localOutfittingStations": int(
+                local_offer_summary.get("outfittingStations", 0)
+            ),
+            "localShipyardStations": int(
+                local_offer_summary.get("shipyardStations", 0)
+            ),
+        })
         self._mining_market_status = self._mining_market_cache_status()
         self._mining_powerplay_catalog = self._read_local_json(
             self.mining_powerplay_catalog_file, {}
@@ -2750,6 +2802,9 @@ class CockpitController(
         self._tech_broker_sync_status = self._load_tech_broker_sync_status()
         self._engineer_unlock_catalog = load_unlock_catalog(
             self._data_dir, self.package_root
+        )
+        self._shipyard_permit_rules = build_permit_rules(
+            self._engineer_unlock_catalog
         )
         self._station_rejections = {}
         self._navroute_rejections = {}
@@ -2976,7 +3031,7 @@ class CockpitController(
 
     @Slot(int)
     def setLastPage(self, page):
-        page = max(0, min(16, int(page)))
+        page = max(0, min(17, int(page)))
         if page != self._last_page:
             if self._last_page == 3 and page != 3:
                 self.clearCraftConfirmation()

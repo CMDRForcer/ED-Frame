@@ -150,6 +150,7 @@ from ed_companion.navigation.mining_market import (
     fetch_edframe_catalog_status,
     fetch_edframe_market_delta,
     fetch_edframe_station_offer_delta,
+    fetch_edframe_station_offers,
     fetch_edframe_system_coordinates,
     fetch_edsm_system_coordinates,
     fetch_market_imports,
@@ -157,6 +158,10 @@ from ed_companion.navigation.mining_market import (
     market_provider_status_summary,
     nearby_catalog_markets,
     project_local_market_snapshot,
+)
+from ed_companion.navigation.shipyard_finder import (
+    catalog_suggestions,
+    rank_station_offers,
 )
 from ed_companion.navigation.state_find_catalog import (
     fetch_edframe_state_find_delta,
@@ -330,6 +335,9 @@ class NavigationMixin:
 
     miningChanged = Signal()
 
+    shipyardFinderChanged = Signal()
+    shipyardFinderSearchFinished = Signal(object)
+
 
     miningVerificationChanged = Signal()
 
@@ -371,6 +379,212 @@ class NavigationMixin:
 
 
     traderSyncFinished = Signal(bool, str)
+
+    shipyardFinderSuggestions = Property(
+        "QVariantList",
+        lambda self: list(
+            getattr(self, "_shipyard_finder_suggestions", []) or []
+        ),
+        notify=shipyardFinderChanged,
+    )
+    shipyardFinderResults = Property(
+        "QVariantList",
+        lambda self: list(getattr(self, "_shipyard_finder_results", []) or []),
+        notify=shipyardFinderChanged,
+    )
+    shipyardShipCatalog = Property(
+        "QVariantList",
+        lambda self: list(getattr(self, "_shipyard_ship_catalog", []) or []),
+        notify=shipyardFinderChanged,
+    )
+    shipyardFinderBusy = Property(
+        bool,
+        lambda self: bool(getattr(self, "_shipyard_finder_busy", False)),
+        notify=shipyardFinderChanged,
+    )
+    shipyardFinderStatus = Property(
+        str,
+        lambda self: str(getattr(self, "_shipyard_finder_status", "Ready")),
+        notify=shipyardFinderChanged,
+    )
+
+    @Slot(str, str)
+    def requestShipyardSuggestions(self, kind, query):
+        catalog = (
+            getattr(self, "_shipyard_module_catalog", [])
+            if str(kind or "").upper() == "MODULES"
+            else getattr(self, "_shipyard_ship_catalog", [])
+        )
+        self._shipyard_finder_suggestions = catalog_suggestions(
+            catalog, query, limit=12,
+        )
+        self.shipyardFinderChanged.emit()
+
+    @Slot()
+    def clearShipyardFinder(self):
+        self._shipyard_finder_search_token = getattr(
+            self, "_shipyard_finder_search_token", 0
+        ) + 1
+        self._shipyard_finder_suggestions = []
+        self._shipyard_finder_results = []
+        self._shipyard_finder_busy = False
+        self._shipyard_finder_status = "Ready · choose a module or ship"
+        self.shipyardFinderChanged.emit()
+
+    @Slot(str, str, str, int, str, str, "QVariantMap")
+    def searchShipyardOffers(
+        self, kind, symbol, origin_system, max_distance_ly, pad_filter,
+        access_filter, item,
+    ):
+        normalized_kind = str(kind or "").upper()
+        wanted = str(symbol or "").strip().casefold()
+        origin_name = str(origin_system or "").strip()
+        if normalized_kind not in {"MODULES", "SHIPS"} or not wanted:
+            self._shipyard_finder_status = "Select a module or ship first"
+            self.shipyardFinderChanged.emit()
+            return
+        if not origin_name:
+            self._shipyard_finder_status = "Enter a start system"
+            self.shipyardFinderChanged.emit()
+            return
+        self._shipyard_finder_search_token = getattr(
+            self, "_shipyard_finder_search_token", 0
+        ) + 1
+        token = self._shipyard_finder_search_token
+        self._shipyard_finder_busy = True
+        self._shipyard_finder_status = "Searching local and server catalogs…"
+        self.shipyardFinderChanged.emit()
+        item_snapshot = dict(item or {})
+
+        def perform_search():
+            source = "LOCAL CATALOG"
+            server_error = ""
+            server_rows = []
+            if bool(getattr(self, "_edframe_catalog_enabled", True)):
+                try:
+                    server_rows = fetch_edframe_station_offers(
+                        kind=normalized_kind, item=wanted,
+                        get=requests.get, timeout=20, limit=200,
+                    )
+                    source = "ED-FRAME SERVER + LOCAL CATALOG"
+                except Exception as exc:  # local fallback is intentional
+                    server_error = str(exc)
+            store = getattr(self, "_mining_market_store", None)
+            local_rows = []
+            if store is not None:
+                try:
+                    local_rows = store.stations_offering(
+                        wanted,
+                        kind=(
+                            "OUTFITTING"
+                            if normalized_kind == "MODULES" else "SHIPYARD"
+                        ),
+                    )
+                except (OSError, sqlite3.DatabaseError) as exc:
+                    server_error = server_error or str(exc)
+            merged = {}
+
+            def price_quality(row):
+                offer_key = (
+                    "moduleOffer" if normalized_kind == "MODULES"
+                    else "shipOffer"
+                )
+                offer = row.get(offer_key)
+                offer = offer if isinstance(offer, dict) else {}
+                if offer.get("buyPrice") is None and row.get("buyPrice") is None:
+                    return 0
+                price_type = str(offer.get("priceType") or "").upper()
+                if offer.get("priceObservedAt") or price_type == "OBSERVED":
+                    return 3
+                if price_type == "INFERRED":
+                    return 2
+                return 1
+
+            # Combine both catalogs by evidence quality.  A local CAPI base
+            # value fills a server gap, but never replaces an exact observed
+            # station price merely because it arrived later.
+            for row in [*server_rows, *local_rows]:
+                key = (
+                    int(row.get("marketId") or 0),
+                    str(row.get("station") or "").casefold(),
+                )
+                current = merged.get(key)
+                if current is None or price_quality(row) >= price_quality(current):
+                    merged[key] = row
+            origin = self._known_mining_origin(origin_name)
+            if not origin:
+                try:
+                    origin = fetch_edframe_system_coordinates(
+                        origin_name, get=requests.get, timeout=15,
+                    )
+                except Exception:
+                    origin = {}
+            coordinates = (
+                origin.get("coordinates") if isinstance(origin, dict) else None
+            )
+            rows = rank_station_offers(
+                merged.values(), kind=normalized_kind,
+                origin_coordinates=coordinates,
+                max_distance_ly=int(max_distance_ly or 0),
+                pad_filter=pad_filter, item=item_snapshot,
+                commander_overview=(
+                    self._state.get("commanderOverview", {})
+                    if isinstance(getattr(self, "_state", None), dict) else {}
+                ),
+                permit_rules=getattr(self, "_shipyard_permit_rules", {}),
+                access_filter=access_filter,
+            ) if coordinates is not None else []
+            self.shipyardFinderSearchFinished.emit({
+                "token": token, "rows": rows, "source": source,
+                "originKnown": coordinates is not None,
+                "available": len(merged), "error": server_error,
+            })
+
+        def worker():
+            try:
+                perform_search()
+            except Exception as exc:
+                LOGGER.exception("Shipyard Finder search failed")
+                self.shipyardFinderSearchFinished.emit({
+                    "token": token, "rows": [], "source": "LOCAL CATALOG",
+                    "originKnown": True, "available": 0,
+                    "error": str(exc), "failed": True,
+                })
+
+        if not self._start_network_worker(worker, "shipyard-offer-search"):
+            self._shipyard_finder_busy = False
+            self._shipyard_finder_status = "Search unavailable during shutdown"
+            self.shipyardFinderChanged.emit()
+
+    @Slot(object)
+    def _finish_shipyard_finder_search(self, payload):
+        result = payload if isinstance(payload, dict) else {}
+        if int(result.get("token") or -1) != getattr(
+            self, "_shipyard_finder_search_token", 0
+        ):
+            return
+        rows = result.get("rows", [])
+        self._shipyard_finder_results = (
+            list(rows) if isinstance(rows, list) else []
+        )
+        self._shipyard_finder_busy = False
+        if result.get("failed"):
+            self._shipyard_finder_status = (
+                "Search failed · retained catalog unchanged"
+            )
+        elif not result.get("originKnown"):
+            self._shipyard_finder_status = (
+                "Start-system coordinates unavailable · no distance guessed"
+            )
+        elif self._shipyard_finder_results:
+            self._shipyard_finder_status = (
+                f"{len(self._shipyard_finder_results)} offers · {result.get('source') or 'LOCAL CATALOG'}"
+            )
+        elif int(result.get("available") or 0) > 0:
+            self._shipyard_finder_status = "Offers known, but none match range or pad filters"
+        else:
+            self._shipyard_finder_status = "No observed station availability yet"
+        self.shipyardFinderChanged.emit()
 
 
     def _mining_market_cache_status(self):

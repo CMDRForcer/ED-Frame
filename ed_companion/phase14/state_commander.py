@@ -186,11 +186,27 @@ def commander_journal_overview(events, status=None):
     credits = {"value": None, "timestamp": "", "basis": "SESSION START"}
     assets = {"value": None, "timestamp": "", "basis": "LAST JOURNAL UPDATE"}
     relevant_timestamps = []
+    permits = set()
+    visited_systems = set()
     for event in events or []:
         if not isinstance(event, dict):
             continue
         name = str(event.get("event") or "")
         timestamp = str(event.get("timestamp") or "")
+        star_system = str(event.get("StarSystem") or "").strip()
+        if star_system:
+            visited_systems.add(star_system)
+        awarded = event.get("PermitsAwarded")
+        if isinstance(awarded, (list, tuple)):
+            for value in awarded:
+                if isinstance(value, dict):
+                    value = (
+                        value.get("System") or value.get("Name")
+                        or value.get("Permit")
+                    )
+                normalized = str(value or "").strip()
+                if normalized:
+                    permits.add(normalized)
         if name == "Rank":
             for key in ranks:
                 value = event.get(key)
@@ -253,6 +269,8 @@ def commander_journal_overview(events, status=None):
                     "value": int(credits["value"] or 0)},
         "assets": {**assets, "known": assets["value"] is not None,
                    "value": int(assets["value"] or 0)},
+        "permits": sorted(permits, key=str.casefold),
+        "visitedSystems": sorted(visited_systems, key=str.casefold),
         "lastUpdated": max((value for value in relevant_timestamps if value), default=""),
     }
 

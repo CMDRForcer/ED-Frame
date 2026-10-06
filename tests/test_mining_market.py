@@ -1,6 +1,7 @@
 from datetime import datetime, timezone
 import unittest
 
+from ed_companion.integrations.eddn import prepare_station_snapshot
 from ed_companion.navigation.mining_market import (
     commander_personal_discount_bps,
     EDDATA_MARKET_SOURCE,
@@ -9,6 +10,7 @@ from ed_companion.navigation.mining_market import (
     fetch_edframe_catalog_status,
     fetch_edframe_market_delta,
     fetch_edframe_station_offer_delta,
+    fetch_edframe_station_offers,
     fetch_edframe_system_coordinates,
     fetch_edsm_system_coordinates,
     fetch_market_imports,
@@ -41,6 +43,24 @@ class _Response:
 
 
 class MiningMarketTests(unittest.TestCase):
+    def test_station_offer_search_uses_anonymous_indexed_endpoint(self):
+        seen = {}
+
+        def get(url, **kwargs):
+            seen.update({"url": url, **kwargs})
+            return _Response({"results": [{
+                "marketId": 42, "system": "Cubeo",
+                "station": "Chelomey Orbital",
+                "moduleOffer": {"name": "int_hyperdrive_size5_class5"},
+            }]})
+
+        rows = fetch_edframe_station_offers(
+            kind="MODULES", item="int_hyperdrive_size5_class5", get=get,
+        )
+        self.assertEqual(rows[0]["marketId"], 42)
+        self.assertEqual(seen["params"]["module"], "int_hyperdrive_size5_class5")
+        self.assertNotIn("commander", seen["params"])
+
     def test_local_outfitting_projection_keeps_exact_public_prices(self):
         observation = project_local_outfitting_observation({
             "timestamp": "2026-10-03T08:00:00Z",
@@ -98,6 +118,23 @@ class MiningMarketTests(unittest.TestCase):
         self.assertEqual(response["accepted"], 1)
         self.assertTrue(calls[0][0].endswith("/v1/station-offers/observations"))
         self.assertEqual(calls[0][1]["json"]["observations"], [observation])
+
+    def test_active_ship_trade_in_value_is_not_a_station_offer(self):
+        snapshot = {
+            "timestamp": "2026-10-06T19:18:30Z",
+            "MarketID": 4209887491,
+            "StationName": "Port Astley -x-",
+            "StarSystem": "Shui Wei Sector VT-R b4-4",
+            "PriceList": [{
+                "id": 0,
+                "ShipType": "krait_mkii",
+                "ShipType_Localised": "Krait Mk II",
+                "ShipPrice": 209184381,
+            }],
+        }
+        observation = project_local_shipyard_observation(snapshot, None)
+        self.assertIsNone(observation)
+        self.assertIsNone(prepare_station_snapshot("shipyard", snapshot, {}))
 
     def test_elite_discount_is_shared_as_amount_not_commander_rank(self):
         overview = {"ranks": [

@@ -12,7 +12,7 @@ class NavigationOrderTests(unittest.TestCase):
             NAVIGATION_IDS,
             (
                 "operations", "engineering", "wishlist", "engineers", "materials",
-                "mining-finder", "state-finds", "powerplay", "cmdr", "logbook",
+                "mining-finder", "shipyard", "state-finds", "powerplay", "cmdr", "logbook",
                 "exploration", "exobiology", "missions", "nav", "settings",
             ),
         )
@@ -48,6 +48,13 @@ class NavigationOrderTests(unittest.TestCase):
         )
         self.assertEqual(
             [item for item in migrated if item in custom], custom
+        )
+
+    def test_new_shipyard_page_is_inserted_after_mining_finder(self):
+        custom = ["operations", "mining-finder", "state-finds", "settings"]
+        migrated = initial_navigation_order(custom)
+        self.assertEqual(
+            migrated.index("shipyard"), migrated.index("mining-finder") + 1
         )
 
 if __name__ == "__main__":

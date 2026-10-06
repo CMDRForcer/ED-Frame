@@ -304,6 +304,7 @@ def project_station_offer_observations(
             if (
                 not name or item_id is None or item_id < 0
                 or buy_price is None or buy_price < 0
+                or (kind == "SHIPYARD" and item_id == 0)
             ):
                 continue
             if personal_discount_bps:

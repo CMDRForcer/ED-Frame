@@ -286,6 +286,19 @@ class ProjectionTests(unittest.TestCase):
         }])
         self.assertNotIn("commander", rows[0]["items"].casefold())
 
+    def test_edframe_shipyard_rejects_active_ship_trade_in_value(self):
+        rows = project_station_offer_observations({"observations": [{
+            "kind": "SHIPYARD", "marketId": 4209887491,
+            "system": "Shui Wei Sector VT-R b4-4",
+            "station": "Port Astley -x-",
+            "observedAt": "2026-10-06T19:18:30Z",
+            "ships": [{
+                "id": 0, "name": "krait_mkii",
+                "displayName": "Krait Mk II", "buyPrice": 209184381,
+            }],
+        }]}, "2026-10-06T19:18:31Z")
+        self.assertEqual(rows, [])
+
     def test_edframe_shipyard_observation_identifies_fleet_carrier(self):
         rows = project_station_offer_observations({"observations": [{
             "kind": "SHIPYARD", "marketId": 43,

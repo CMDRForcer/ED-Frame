@@ -817,6 +817,15 @@ def prepare_station_snapshot(kind, snapshot, context):
     if kind == "shipyard":
         ships = []
         for source in snapshot.get("PriceList") or []:
+            # ``id: 0`` identifies the active-ship trade-in valuation emitted
+            # by current game builds in some Shipyard UI states.  Advertising
+            # it as station stock would poison both EDDN and our local index.
+            if (
+                isinstance(source, dict)
+                and isinstance(source.get("id"), int)
+                and source.get("id") <= 0
+            ):
+                continue
             name = source.get("ShipType") if isinstance(source, dict) else source
             name = str(name or "").strip()
             if name:

@@ -59,6 +59,7 @@ from ed_companion.integrations.frontier_capi import (
     exchange_authorization_code,
     parse_authorization_callback,
     project_profile_snapshot,
+    project_shipyard_station_observations,
     refresh_frontier_tokens,
 )
 from ed_companion.integrations.frontier_credentials import (
@@ -411,13 +412,17 @@ class FrontierCapiMixin:
                         active_tokens.access_token,
                         token_type=active_tokens.token_type,
                     )
-                snapshot = client.query("/profile")
+                snapshots = client.query_many(("/profile", "/shipyard"))
+                profile_snapshot = snapshots["/profile"]
                 self.frontierFinished.emit({
                     "requestToken": request_token,
                     "profileGeneration": profile_generation,
                     "tokens": active_tokens,
                     "client": client,
-                    "profile": project_profile_snapshot(snapshot),
+                    "profile": project_profile_snapshot(profile_snapshot),
+                    "stationOffers": project_shipyard_station_observations(
+                        profile_snapshot, snapshots["/shipyard"],
+                    ),
                     "error": "",
                 })
             except FrontierCapiError as exc:
@@ -494,6 +499,30 @@ class FrontierCapiMixin:
         if isinstance(profile, dict) and profile:
             self._apply_frontier_profile(profile)
             self._frontier_last_sync = str(profile.get("observedAt") or "")
+        station_offers = result.get("stationOffers")
+        if isinstance(station_offers, list) and station_offers:
+            store = getattr(self, "_mining_market_store", None)
+            if store is not None:
+                try:
+                    store.ingest_station_offers(station_offers)
+                    summary = store.station_offer_summary()
+                    stats = getattr(self, "_edframe_catalog_stats", None)
+                    if isinstance(stats, dict):
+                        stats.update({
+                            "localOfferStations": int(
+                                summary.get("stations", 0) or 0
+                            ),
+                            "localOutfittingStations": int(
+                                summary.get("outfittingStations", 0) or 0
+                            ),
+                            "localShipyardStations": int(
+                                summary.get("shipyardStations", 0) or 0
+                            ),
+                        })
+                except (OSError, sqlite3.DatabaseError) as exc:
+                    LOGGER.warning(
+                        "Frontier station prices were not retained: %s", exc
+                    )
         if storage_error:
             self._frontier_status = (
                 "CONNECTED FOR THIS RUN · Secure token storage failed."
@@ -505,8 +534,18 @@ class FrontierCapiMixin:
                 "AUTHORIZATION FAILED · Frontier approval may still be pending."
             )
         else:
-            self._frontier_status = "CONNECTED · COMMANDER PROFILE UPDATED"
+            offer_count = len(station_offers) if isinstance(
+                station_offers, list
+            ) else 0
+            self._frontier_status = (
+                "CONNECTED · PROFILE + STATION PRICES UPDATED"
+                if offer_count else "CONNECTED · COMMANDER PROFILE UPDATED"
+            )
         self.connectionChanged.emit()
+        if isinstance(station_offers, list) and station_offers:
+            shipyard_changed = getattr(self, "shipyardFinderChanged", None)
+            if shipyard_changed is not None:
+                shipyard_changed.emit()
 
 
     @Slot()

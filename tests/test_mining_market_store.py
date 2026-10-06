@@ -1,4 +1,5 @@
 from datetime import datetime, timedelta, timezone
+from contextlib import closing
 import os
 from pathlib import Path
 import sqlite3
@@ -188,6 +189,88 @@ class MiningMarketStoreTests(unittest.TestCase):
             self.assertEqual(len(MarketCatalogStore(path).stations_offering(
                 "cobramkiii", kind="SHIPYARD"
             )), 1)
+
+    def test_active_ship_trade_in_value_is_rejected_and_migrated(self):
+        with TemporaryDirectory() as directory:
+            path = Path(directory, "market.sqlite3")
+            store = MarketCatalogStore(path)
+            self.assertEqual(store.ingest_station_offers([{
+                "kind": "SHIPYARD", "marketId": 4209887491,
+                "system": "Shui Wei Sector VT-R b4-4",
+                "station": "Port Astley -x-",
+                "items": [{
+                    "name": "krait_mkii", "id": 0,
+                    "buyPrice": 209184381,
+                    "priceSource": "ED-Frame Journal · Shipyard.json",
+                }],
+                "observedAt": "2026-10-06T19:18:30Z",
+            }]), 0)
+
+            with closing(sqlite3.connect(path)) as connection:
+                connection.execute(
+                    "INSERT INTO station_offers "
+                    "(market_id, system, station, ships_json, "
+                    "shipyard_observed_at, shipyard_observed_epoch, source) "
+                    "VALUES (?, ?, ?, ?, ?, ?, ?)",
+                    (
+                        4209887491, "Shui Wei Sector VT-R b4-4",
+                        "Port Astley -x-",
+                        '[{"name":"krait_mkii","id":0,'
+                        '"buyPrice":209184381}]',
+                        "2026-10-06T19:18:30Z", 1791314310,
+                        "ED-Frame Journal · Shipyard.json",
+                    ),
+                )
+                connection.execute("PRAGMA user_version=5")
+                connection.commit()
+            reopened = MarketCatalogStore(path)
+            self.assertEqual(reopened.stations_offering(
+                "krait_mkii", kind="SHIPYARD"
+            ), [])
+            self.assertEqual(reopened.station_offer_summary()[
+                "shipyardStations"
+            ], 0)
+
+    def test_capi_availability_cannot_replace_exact_station_price(self):
+        with TemporaryDirectory() as directory:
+            path = Path(directory, "market.sqlite3")
+            base = {
+                "kind": "SHIPYARD", "marketId": 4209887491,
+                "system": "Shui Wei Sector VT-R b4-4",
+                "station": "Port Astley -x-",
+            }
+            store = MarketCatalogStore(path)
+            store.ingest_station_offers([{
+                **base, "observedAt": "2026-10-06T18:52:21Z",
+                "items": [{
+                    "name": "Mandalay",
+                    "availabilitySource": "Frontier CAPI · /shipyard",
+                }],
+            }])
+            reference = store.stations_offering(
+                "mandalay", kind="SHIPYARD"
+            )[0]
+            self.assertIsNone(reference["buyPrice"])
+
+            store.ingest_station_offers([{
+                **base, "observedAt": "2026-10-06T18:53:00Z",
+                "items": [{
+                    "name": "Mandalay", "buyPrice": 17000000,
+                    "priceObservedAt": "2026-10-06T18:53:00Z",
+                    "priceSource": "ED-Frame Journal · Shipyard.json",
+                }],
+            }, {
+                **base, "observedAt": "2026-10-06T18:54:00Z",
+                "items": [{
+                    "name": "Mandalay",
+                    "availabilitySource": "Frontier CAPI · /shipyard",
+                }],
+            }])
+            exact = store.stations_offering("mandalay", kind="SHIPYARD")[0]
+            self.assertEqual(exact["buyPrice"], 17000000)
+            self.assertEqual(
+                exact["priceObservedAt"], "2026-10-06T18:53:00Z"
+            )
 
     def test_older_or_invalid_station_offer_does_not_replace_inventory(self):
         with TemporaryDirectory() as directory:

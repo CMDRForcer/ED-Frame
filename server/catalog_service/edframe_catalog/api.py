@@ -107,12 +107,11 @@ def _resolved_ship_offer(
         result["priceSource"] = "ED-Frame inferred station discount"
         return result
 
-    result["buyPrice"] = reference_price
-    result["priceType"] = "BASE_PRICE"
-    result["priceConfidence"] = (
-        "CONSENSUS" if int(reference_samples or 0) >= 2 else "PROVISIONAL"
-    )
-    result["priceSource"] = "ED-Frame observed global reference"
+    # Keep the global hull value as explicitly separate metadata.  Returning
+    # it as buyPrice would falsely present the same number as a purchase price
+    # at every station that merely reported ship availability.
+    result["priceType"] = "UNKNOWN"
+    result["priceConfidence"] = "UNKNOWN"
     return result
 
 
