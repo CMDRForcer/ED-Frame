@@ -666,8 +666,12 @@ def build_state(
         dict(row)
         for row in loadout_slots_by_ship.get(selected_ship_id, [])
     ]
+    # The engineering catalog is immutable reference data for this state
+    # projection.  Reuse one projection instead of reparsing blueprints for
+    # the installed-module list and both ship slot layouts.
+    engineering_catalog = blueprint_catalog(reference_data_dir(package_root))
     engineering_slots = engineering_loadout_rows(
-        module_slots, blueprint_catalog(reference_data_dir(package_root)),
+        module_slots, engineering_catalog,
     )
     selected_ship_data = next(
         (
@@ -683,7 +687,7 @@ def build_state(
     )
     engineering_ship_slots = ship_slot_layout(
         selected_ship_data, module_slots,
-        blueprint_catalog(reference_data_dir(package_root)),
+        engineering_catalog,
         read_json(data_dir / "desired_outfitting.json", {}).get(
             selected_ship_id, {}
         ),
@@ -707,7 +711,7 @@ def build_state(
             [dict(row) for row in loadout_slots_by_ship.get(
                 str(fleet_state.get("active_id") or ""), []
             )],
-            blueprint_catalog(reference_data_dir(package_root)),
+            engineering_catalog,
         )
         if active_ship_data else []
     )

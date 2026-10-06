@@ -65,6 +65,27 @@ class ShipyardFinderTests(unittest.TestCase):
         page = Path("qml/pages/ShipyardPage.qml").read_text(encoding="utf-8")
         self.assertIn('Qt.resolvedUrl("../../" + path)', page)
 
+    def test_result_rows_declare_the_qml_index_they_use(self):
+        page = Path("qml/pages/ShipyardPage.qml").read_text(encoding="utf-8")
+        self.assertIn(
+            "required property var modelData\n"
+            "                                    required property int index",
+            page,
+        )
+
+    def test_commander_subpages_only_materialize_the_visible_model(self):
+        page = Path("Main.qml").read_text(encoding="utf-8")
+        self.assertIn(
+            "property var fleetRows: activeSection === 2 ? "
+            "(cockpit.commanderFleet || []) : []",
+            page,
+        )
+        self.assertIn("model: visible ? commanderPage.cardOrder : []", page)
+        self.assertIn("model: visible ? commanderPage.fleetRows : []", page)
+        self.assertIn("property bool commanderPagePrimed: false", page)
+        self.assertIn("active: window.commanderPagePrimed || smokeTest", page)
+        self.assertIn("asynchronous: true", page)
+
     def test_module_shop_groups_and_families_match_outfitting_structure(self):
         modules = build_module_catalog({"modules": {
             "hpt_fragcannon_fixed_medium": ["FRAGMENT CANNON", "2A"],

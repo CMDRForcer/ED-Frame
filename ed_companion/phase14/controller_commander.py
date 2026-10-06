@@ -287,6 +287,16 @@ class CommanderMixin:
 
 
     def _commander_fleet(self):
+        cache_key = (
+            self._state_revision,
+            tuple(sorted(
+                (str(ship_id), str(filename))
+                for ship_id, filename in self._fleet_images.items()
+            )),
+        )
+        cached = self._derived_cache.get("commander_fleet")
+        if cached and cached[0] == cache_key:
+            return cached[1]
         asset_symbols = {}
         asset_names = {}
         for record in self._ship_catalog if isinstance(self._ship_catalog, list) else []:
@@ -327,6 +337,7 @@ class CommanderMixin:
             str(row.get("type") or "").casefold(),
             str(row.get("name") or "").casefold(),
         ))
+        self._derived_cache["commander_fleet"] = (cache_key, rows)
         return rows
 
 

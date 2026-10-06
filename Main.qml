@@ -145,6 +145,10 @@ ApplicationWindow {
     property bool reducedMotion: cockpit ? cockpit.reducedMotion : true
     property bool enhancedVisuals: cockpit ? cockpit.enhancedVisuals : false
     property int currentPage: cockpit.lastPage
+    // CMDR is a comparatively rich workspace.  Once opened, keep its QML
+    // object tree alive so repeated navigation does not synchronously rebuild
+    // charts, cards and Fleet image delegates on the GUI thread.
+    property bool commanderPagePrimed: false
     property var globalResults: []
     property int connectionPreviewMode: 0
     // Cross-page navigation requests live at window scope because inactive
@@ -405,7 +409,11 @@ ApplicationWindow {
     }
     property string feedbackMessage: ""
     property bool feedbackVisible: false
-    onCurrentPageChanged: cockpit.setLastPage(currentPage)
+    onCurrentPageChanged: {
+        cockpit.setLastPage(currentPage)
+        if (currentPage === 10)
+            commanderPagePrimed = true
+    }
     function applyInterfaceScale() {
         contentItem.scale = cockpit.uiScale
         contentItem.transformOrigin = Item.TopLeft
@@ -413,6 +421,8 @@ ApplicationWindow {
         contentItem.height = height / cockpit.uiScale
     }
     Component.onCompleted: {
+        if (currentPage === 10)
+            commanderPagePrimed = true
         applyInterfaceScale()
         if (smokeInjectQmlError)
             console.warn("PHASE14 injected QML smoke-test failure")
@@ -5826,18 +5836,22 @@ ApplicationWindow {
     Loader {
         id: pageLoader10
         anchors.fill: parent
-        active: window.currentPage === 10 || smokeTest
+        active: window.commanderPagePrimed || smokeTest
         visible: window.currentPage === 10
-        asynchronous: false
+        asynchronous: true
         sourceComponent: Component {
     ColumnLayout {
         id: commanderPage
         objectName: "qa-page-cmdr"
+        property int activeSection: previewCmdrSection
         property var overview: cockpit.commanderOverview || ({})
         property var rankRows: overview.ranks || []
-        property var cards: cockpit.commanderCards || ({})
-        property var financeHistory: cockpit.commanderFinanceHistory || []
-        property var financeSummary: cockpit.commanderFinanceSummary || ({})
+        // Only ask Python for the data used by the visible CMDR sub-page.
+        // Previously all three projections and their delegates were built at
+        // once, making the Fleet switch contend with finance/overview work.
+        property var cards: activeSection === 0 ? (cockpit.commanderCards || ({})) : ({})
+        property var financeHistory: activeSection === 1 ? (cockpit.commanderFinanceHistory || []) : []
+        property var financeSummary: activeSection === 1 ? (cockpit.commanderFinanceSummary || ({})) : ({})
         property bool financeZeroBased: false
         property bool financeHasAssets: {
             for (let index = 0; index < financeHistory.length; ++index) {
@@ -5857,8 +5871,7 @@ ApplicationWindow {
             window.t("commander.credits.range_30d", "30 DAYS"),
             window.t("commander.credits.range_all", "ALL TIME")
         ]
-        property var fleetRows: cockpit.commanderFleet || []
-        property int activeSection: previewCmdrSection
+        property var fleetRows: activeSection === 2 ? (cockpit.commanderFleet || []) : []
         property string imageShipId: ""
         property var allowedCardIds: [
             "ranks", "major-reputation", "finances", "current-ship",
@@ -6001,10 +6014,11 @@ ApplicationWindow {
             Layout.fillHeight: true
             visible: commanderPage.activeSection === 0
             clip: true
-            model: commanderPage.cardOrder
+            model: visible ? commanderPage.cardOrder : []
             cellWidth: width / (window.narrowWorkspace ? 1 : 2)
             cellHeight: 250
             boundsBehavior: Flickable.StopAtBounds
+            reuseItems: true
             ScrollBar.horizontal: ScrollBar { policy: ScrollBar.AlwaysOff }
             ScrollBar.vertical: CockpitScrollBar {}
             delegate: Item {
@@ -6648,10 +6662,11 @@ ApplicationWindow {
             objectName: "qa-cmdr-fleet-grid"
             Layout.fillWidth: true; Layout.fillHeight: true
             visible: commanderPage.activeSection === 2
-            clip: true; model: commanderPage.fleetRows
+            clip: true; model: visible ? commanderPage.fleetRows : []
             cellWidth: width / (window.narrowWorkspace ? 1 : width > 1500 ? 3 : 2)
             cellHeight: 392
             boundsBehavior: Flickable.StopAtBounds
+            reuseItems: true
             ScrollBar.horizontal: ScrollBar { policy: ScrollBar.AlwaysOff }
             ScrollBar.vertical: CockpitScrollBar {}
             delegate: Item {

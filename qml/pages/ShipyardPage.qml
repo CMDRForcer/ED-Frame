@@ -1031,6 +1031,7 @@ Item {
                                 ScrollBar.vertical: CockpitScrollBar {}
                                 delegate: Rectangle {
                                     required property var modelData
+                                    required property int index
                                     width: resultList.width; height: 84; radius: 8
                                     color: String(modelData.accessTone || "") === "LOCKED"
                                            ? Qt.rgba(1.0, 0.20, 0.30, 0.09) : panelRaised
