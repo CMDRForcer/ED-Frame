@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 1.5.32 — 2026-10-06
+
 ### Added
 
 - **Observed module and Shipyard prices**: ED-Frame now retains exact
@@ -13,6 +15,21 @@
   module/ship offers beside its atomic inventory snapshots, seeds public
   module class/rating and ship specification reference data, and exposes
   suggestion endpoints with availability and observed-price coverage.
+- **Progressively complete ship prices**: each anonymous `Shipyard.json`
+  observation is authoritative for its station and hull, while repeated
+  non-carrier observations teach a global reference price. Missing station
+  prices can then be labelled honestly as base-price or station-discount
+  inferences until that exact hull is observed there.
+
+### Fixed
+
+- **Continuous station-price sharing**: corrected the observation-batch
+  fingerprint so later station visits are no longer mistaken for the already
+  uploaded first batch.
+- **Personal rebate normalization**: the public 2.5% Elite purchase discount
+  is detected locally and transmitted only as an anonymous amount. The server
+  restores the comparable station price without receiving Commander identity
+  or rank.
 
 ## 1.5.31 — 2026-10-04
 

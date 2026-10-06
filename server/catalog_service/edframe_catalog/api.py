@@ -54,6 +54,68 @@ def _percent(part: int, whole: int) -> float:
     return round((part * 100.0 / whole), 1) if whole else 0.0
 
 
+def _resolved_ship_offer(
+    offer: dict | None, *, reference_price: int | None,
+    reference_samples: int = 0, evidence: object = None,
+) -> dict | None:
+    """Describe an exact, inferred or global-default shipyard price."""
+    if not isinstance(offer, dict):
+        return offer
+    result = dict(offer)
+    if isinstance(reference_price, int) and reference_price > 0:
+        result["referencePrice"] = reference_price
+        result["referenceSamples"] = max(0, int(reference_samples or 0))
+    exact = result.get("buyPrice")
+    if isinstance(exact, int) and exact >= 0:
+        result["priceType"] = "OBSERVED"
+        result["priceConfidence"] = "OBSERVED"
+        return result
+    if not isinstance(reference_price, int) or reference_price <= 0:
+        result["priceType"] = "UNKNOWN"
+        result["priceConfidence"] = "UNKNOWN"
+        return result
+
+    discounts = []
+    for row in evidence if isinstance(evidence, list) else []:
+        if not isinstance(row, dict):
+            continue
+        price = row.get("price")
+        base = row.get("reference")
+        if (
+            not isinstance(price, int) or price <= 0
+            or not isinstance(base, int) or base <= 0
+        ):
+            continue
+        discount = round((1.0 - price / base) * 10_000)
+        if -2_500 <= discount <= 5_000:
+            discounts.append(int(discount))
+    if discounts:
+        ordered = sorted(discounts)
+        discount_bps = ordered[(len(ordered) - 1) // 2]
+        matching = sum(
+            1 for value in discounts if abs(value - discount_bps) <= 25
+        )
+        result["buyPrice"] = max(0, (
+            reference_price * (10_000 - discount_bps) + 5_000
+        ) // 10_000)
+        result["discountBps"] = discount_bps
+        result["discountEvidence"] = matching
+        result["priceType"] = "INFERRED"
+        result["priceConfidence"] = (
+            "CONFIRMED" if matching >= 2 else "PROVISIONAL"
+        )
+        result["priceSource"] = "ED-Frame inferred station discount"
+        return result
+
+    result["buyPrice"] = reference_price
+    result["priceType"] = "BASE_PRICE"
+    result["priceConfidence"] = (
+        "CONSENSUS" if int(reference_samples or 0) >= 2 else "PROVISIONAL"
+    )
+    result["priceSource"] = "ED-Frame observed global reference"
+    return result
+
+
 def _encode_market_cursor(
     sync_at: datetime | str, market_id: int, commodity: str,
 ) -> str:
@@ -490,6 +552,9 @@ def search_station_offers(
                        'priceObservedAt', so.price_observed_at,
                        'priceSource', so.price_source
                      )) END AS "shipOffer",
+                   sc.reference_price AS "shipReferencePrice",
+                   sc.reference_price_samples AS "shipReferenceSamples",
+                   ship_price_evidence.rows AS "shipPriceEvidence",
                    mo.observed_at AS "outfittingObservedAt",
                    so.observed_at AS "shipyardObservedAt"
             {offer_tables}
@@ -501,6 +566,19 @@ def search_station_offers(
               ON LOWER(sy.name) = LOWER(
                    COALESCE(o.system_name, y.system_name, st.system_name)
                  )
+            LEFT JOIN ship_catalog sc ON sc.symbol = so.ship_symbol
+            LEFT JOIN LATERAL (
+                SELECT jsonb_agg(jsonb_build_object(
+                           'price', evidence.buy_price,
+                           'reference', evidence_catalog.reference_price
+                       )) AS rows
+                FROM station_ship_offers evidence
+                JOIN ship_catalog evidence_catalog
+                  ON evidence_catalog.symbol = evidence.ship_symbol
+                WHERE evidence.market_id = so.market_id
+                  AND evidence.buy_price IS NOT NULL
+                  AND evidence_catalog.reference_price IS NOT NULL
+            ) ship_price_evidence ON so.ship_symbol IS NOT NULL
             WHERE {' AND '.join(clauses)}
             ORDER BY GREATEST(
                 COALESCE(mo.observed_at, '-infinity'::timestamptz),
@@ -510,13 +588,23 @@ def search_station_offers(
             """,
             values,
         ).fetchall()
+    results = []
+    for source in rows:
+        row = dict(source)
+        row["shipOffer"] = _resolved_ship_offer(
+            row.get("shipOffer"),
+            reference_price=row.pop("shipReferencePrice", None),
+            reference_samples=row.pop("shipReferenceSamples", 0),
+            evidence=row.pop("shipPriceEvidence", None),
+        )
+        results.append(row)
     return {
         "generatedAt": _now(),
         "query": {
             "module": normalized_module or None,
             "ship": normalized_ship or None,
         },
-        "results": rows,
+        "results": results,
     }
 
 
@@ -565,6 +653,10 @@ def suggest_ships(
                    c.manufacturer, c.ship_size AS size,
                    c.maximum_speed AS "maximumSpeed",
                    c.boost_speed AS boost, c.specifications, c.source,
+                   c.reference_price AS "referencePrice",
+                   c.reference_price_observed_at AS "referencePriceObservedAt",
+                   c.reference_price_source AS "referencePriceSource",
+                   c.reference_price_samples AS "referencePriceSamples",
                    COUNT(o.market_id) AS "knownStations",
                    COUNT(o.buy_price) AS "pricedStations",
                    MIN(o.buy_price) AS "lowestObservedPrice"
@@ -572,7 +664,9 @@ def suggest_ships(
             LEFT JOIN station_ship_offers o ON o.ship_symbol = c.symbol
             WHERE c.symbol LIKE %s OR LOWER(c.display_name) LIKE %s
             GROUP BY c.symbol, c.display_name, c.manufacturer, c.ship_size,
-                     c.maximum_speed, c.boost_speed, c.specifications, c.source
+                     c.maximum_speed, c.boost_speed, c.specifications, c.source,
+                     c.reference_price, c.reference_price_observed_at,
+                     c.reference_price_source, c.reference_price_samples
             ORDER BY CASE WHEN c.symbol LIKE %s
                            OR LOWER(c.display_name) LIKE %s THEN 0 ELSE 1 END,
                      c.display_name, c.symbol

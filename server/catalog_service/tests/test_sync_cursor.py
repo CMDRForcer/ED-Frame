@@ -10,6 +10,7 @@ from edframe_catalog.api import (
     _encode_market_cursor,
     _encode_offer_cursor,
     _encode_state_cursor,
+    _resolved_ship_offer,
 )
 
 
@@ -49,6 +50,38 @@ class SyncCursorTests(unittest.TestCase):
         self.assertEqual(
             _decode_offer_cursor(cursor), (stamp, "OUTFITTING", 42)
         )
+
+    def test_ship_price_resolution_keeps_observed_price_authoritative(self):
+        result = _resolved_ship_offer(
+            {"name": "anaconda", "buyPrice": 85000},
+            reference_price=100000, reference_samples=4,
+            evidence=[{"price": 85000, "reference": 100000}],
+        )
+        self.assertEqual(result["buyPrice"], 85000)
+        self.assertEqual(result["priceType"], "OBSERVED")
+
+    def test_ship_price_resolution_infers_station_discount(self):
+        result = _resolved_ship_offer(
+            {"name": "python"}, reference_price=60000000,
+            reference_samples=3,
+            evidence=[
+                {"price": 85000, "reference": 100000},
+                {"price": 127500, "reference": 150000},
+            ],
+        )
+        self.assertEqual(result["buyPrice"], 51000000)
+        self.assertEqual(result["discountBps"], 1500)
+        self.assertEqual(result["priceType"], "INFERRED")
+        self.assertEqual(result["priceConfidence"], "CONFIRMED")
+
+    def test_ship_price_resolution_falls_back_to_global_reference(self):
+        result = _resolved_ship_offer(
+            {"name": "python"}, reference_price=60000000,
+            reference_samples=1, evidence=[],
+        )
+        self.assertEqual(result["buyPrice"], 60000000)
+        self.assertEqual(result["priceType"], "BASE_PRICE")
+        self.assertEqual(result["priceConfidence"], "PROVISIONAL")
 
 
 if __name__ == "__main__":

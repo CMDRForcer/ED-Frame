@@ -20,8 +20,8 @@ anonymous public catalog facts ED-Frame can reuse:
   new or newer observation. Version 3 retains the observed `BuyPrice` and
   `BuyMercCoinsPrice`; version 2 remains a compatible availability fallback;
 - opt-in, anonymous module and ship purchase prices from ED-Frame
-  `Outfitting.json` and `Shipyard.json`
-  snapshots. These retain item ID, exact observed price, source and observation
+  `Outfitting.json` and `Shipyard.json` snapshots. These retain item ID, exact
+  observed price, source and observation
   time; later availability-only EDDN messages preserve matching prices;
 - normalized station-module and station-ship offer tables for indexed Finder
   lookups, alongside the lossless complete-inventory JSON snapshots;
@@ -35,6 +35,15 @@ anonymous public catalog facts ED-Frame can reuse:
   projected rows, ignored messages, errors, compressed relay bytes and last
   receipt time. Raw relay frames are never retained. `/v1/status` exposes the
   rolling latest 24 buckets; buckets older than eight days are removed.
+
+Ship prices use three explicit confidence levels. A direct `Shipyard.json`
+price is `OBSERVED` for that station and hull. The most common current
+non-carrier observation becomes the gradual global `BASE_PRICE`; an early
+discounted value is automatically displaced when ordinary-price observations
+become the consensus. Other hulls at the same station may use the median
+observed discount as `INFERRED`, with one supporting hull marked provisional
+and two matching hulls confirmed. Elite's public 2.5% personal rebate is
+removed before storage; no Commander rank or identity is accepted.
 
 Missing source fields remain `null`; the collector does not infer landing-pad
 size or other station properties from names or station types. Sparse newer

@@ -141,10 +141,21 @@ CREATE TABLE IF NOT EXISTS ship_catalog (
     ship_size TEXT,
     maximum_speed INTEGER,
     boost_speed INTEGER,
+    reference_price BIGINT,
+    reference_price_observed_at TIMESTAMPTZ,
+    reference_price_source TEXT,
+    reference_price_samples INTEGER NOT NULL DEFAULT 0,
     specifications JSONB NOT NULL DEFAULT '{}'::jsonb,
     source TEXT NOT NULL,
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
+
+ALTER TABLE ship_catalog ADD COLUMN IF NOT EXISTS reference_price BIGINT;
+ALTER TABLE ship_catalog
+    ADD COLUMN IF NOT EXISTS reference_price_observed_at TIMESTAMPTZ;
+ALTER TABLE ship_catalog ADD COLUMN IF NOT EXISTS reference_price_source TEXT;
+ALTER TABLE ship_catalog
+    ADD COLUMN IF NOT EXISTS reference_price_samples INTEGER NOT NULL DEFAULT 0;
 
 CREATE INDEX IF NOT EXISTS ship_catalog_name_idx
     ON ship_catalog (LOWER(display_name), symbol);

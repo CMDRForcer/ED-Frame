@@ -270,6 +270,14 @@ def project_station_offer_observations(
         system = _text(observation.get("system"))
         station = _text(observation.get("station"))
         observed_at = _text(observation.get("observedAt"))
+        personal_discount_bps = _integer(
+            observation.get("personalDiscountBps", 0)
+        )
+        # ED-Frame only recognises Elite's public galaxy-wide 2.5% rebate.
+        # Reject arbitrary client percentages rather than letting an upload
+        # inflate the shared reference catalog.
+        if personal_discount_bps not in {0, 250}:
+            continue
         items_key = "modules" if kind == "OUTFITTING" else "ships"
         raw_items = observation.get(items_key)
         if (
@@ -298,6 +306,11 @@ def project_station_offer_observations(
                 or buy_price is None or buy_price < 0
             ):
                 continue
+            if personal_discount_bps:
+                denominator = 10_000 - personal_discount_bps
+                buy_price = (
+                    buy_price * 10_000 + denominator // 2
+                ) // denominator
             key = name.casefold()
             item = {
                 "name": key,
@@ -308,6 +321,9 @@ def project_station_offer_observations(
                     "ED-Frame Journal · Outfitting.json"
                     if kind == "OUTFITTING" else
                     "ED-Frame Journal · Shipyard.json"
+                ) + (
+                    " · personal 2.5% discount normalized"
+                    if personal_discount_bps else ""
                 ),
             }
             if kind == "OUTFITTING":
@@ -322,6 +338,16 @@ def project_station_offer_observations(
             "ED-Frame Journal · Outfitting.json"
             if kind == "OUTFITTING" else
             "ED-Frame Journal · Shipyard.json"
+        )
+        station_type = _text(observation.get("stationType"))
+        station_type_is_carrier = bool(
+            station_type
+            and station_type.casefold().replace(" ", "") == "fleetcarrier"
+        )
+        fleet_carrier = (
+            True if station_type_is_carrier else
+            bool(observation["fleetCarrier"])
+            if isinstance(observation.get("fleetCarrier"), bool) else None
         )
         projected.append({
             "kind": kind,
@@ -340,6 +366,8 @@ def project_station_offer_observations(
             "observed_at": observed_at,
             "received_at": received_at,
             "source": source,
+            "station_type": station_type,
+            "fleet_carrier": fleet_carrier,
         })
     return projected
 

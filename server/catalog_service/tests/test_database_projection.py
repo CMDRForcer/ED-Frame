@@ -169,6 +169,41 @@ class DatabaseProjectionTests(unittest.TestCase):
         self.assertIn("jsonb_array_elements", conn.calls[2][0])
         self.assertIn("station_ship_offers", conn.calls[3][0])
 
+    def test_direct_shipyard_price_refreshes_global_reference_model(self):
+        conn = RecordingConnection()
+        projected = upsert_station_offer_batch(conn, [{
+            "kind": "SHIPYARD", "market_id": 42,
+            "system_name": "Cubeo", "station_name": "Chelomey Orbital",
+            "items": '[{"name":"anaconda","id":1,"buyPrice":100000}]',
+            "horizons": True, "odyssey": True,
+            "observed_at": "2026-10-06T08:00:00Z",
+            "received_at": "2026-10-06T08:00:01Z",
+            "source": "ED-Frame Journal · Shipyard.json",
+        }])
+        self.assertEqual(projected, 1)
+        self.assertEqual(len(conn.calls), 3)
+        self.assertIn("station_ship_offers", conn.calls[1][0])
+        self.assertIn("UPDATE ship_catalog", conn.calls[2][0])
+        self.assertEqual(conn.calls[2][1]["market_id"], 42)
+
+    def test_direct_carrier_metadata_is_saved_before_price_reference(self):
+        conn = RecordingConnection()
+        upsert_station_offer_batch(conn, [{
+            "kind": "SHIPYARD", "market_id": 43,
+            "system_name": "Cubeo", "station_name": "ABC-123",
+            "station_type": "FleetCarrier", "fleet_carrier": True,
+            "items": '[{"name":"anaconda","id":1,"buyPrice":1}]',
+            "horizons": True, "odyssey": True,
+            "observed_at": "2026-10-06T08:00:00Z",
+            "received_at": "2026-10-06T08:00:01Z",
+            "source": "ED-Frame Journal · Shipyard.json",
+        }])
+        self.assertIn("INSERT INTO stations", conn.calls[0][0])
+        self.assertTrue(conn.calls[0][1]["fleet_carrier"])
+        self.assertIn("station_shipyards", conn.calls[1][0])
+        self.assertIn("station_ship_offers", conn.calls[2][0])
+        self.assertIn("UPDATE ship_catalog", conn.calls[3][0])
+
     def test_reference_catalog_seeds_module_quality_and_ship_facts(self):
         conn = RecordingConnection()
         seed_reference_catalog(conn)

@@ -134,6 +134,7 @@ from ed_companion.navigation.mining_commodities import (
     mining_commodities_for_method,
 )
 from ed_companion.navigation.mining_market import (
+    commander_personal_discount_bps,
     project_local_outfitting_observation,
     project_local_shipyard_observation,
     send_edframe_station_offer_observations,
@@ -1161,6 +1162,10 @@ class EddnMixin:
     def _scan_local_shipyard_price_file(self):
         """Retain exact local module/ship prices and share only by opt-in."""
         observations = []
+        personal_discount_bps = commander_personal_discount_bps(
+            self._state.get("commanderOverview", {})
+            if isinstance(getattr(self, "_state", None), dict) else {}
+        )
         for kind, filename, projector, items_key in (
             ("outfitting", "Outfitting.json",
              project_local_outfitting_observation, "modules"),
@@ -1181,7 +1186,25 @@ class EddnMixin:
                     prepared.get("message")
                     if isinstance(prepared, dict) else None
                 )
-                observation = projector(snapshot, message)
+                # StationType is useful for the private ED-Frame catalog but
+                # is not part of every public EDDN station schema.  Enrich a
+                # local-only copy instead of changing the schema-exact EDDN
+                # message produced by prepare_station_snapshot().
+                local_identity = dict(message or {})
+                context = getattr(self, "_eddn_context", {})
+                trigger = (
+                    context.get(f"{kind}Context")
+                    if isinstance(context, dict) else None
+                )
+                if not isinstance(trigger, dict):
+                    trigger = context if isinstance(context, dict) else {}
+                station_type = trigger.get("StationType")
+                if isinstance(station_type, str) and station_type.strip():
+                    local_identity["stationType"] = station_type.strip()
+                observation = projector(
+                    snapshot, local_identity,
+                    personal_discount_bps=personal_discount_bps,
+                )
                 if not observation:
                     continue
                 observations.append(observation)

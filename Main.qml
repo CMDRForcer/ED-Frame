@@ -8033,7 +8033,7 @@ ApplicationWindow {
                                     Layout.fillWidth: true
                                     text: window.t(
                                         "connections.edframe_share_ship_prices_privacy",
-                                        "Only public station, module/ship identifier, observed price and timestamp data is sent. Commander name and Journal path are never included.")
+                                        "Only public station, module/ship identifier, observed price, timestamp and the applicable 2.5% discount amount are sent. Commander name and Journal path are never included. Rank is never included.")
                                     color: muted; font.pixelSize: 9
                                     wrapMode: Text.WordWrap
                                 }

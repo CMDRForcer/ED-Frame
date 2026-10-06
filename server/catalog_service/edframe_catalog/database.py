@@ -30,6 +30,7 @@ def ensure_schema() -> None:
         conn.execute("SELECT pg_advisory_xact_lock(%s)", (45444652414,))
         conn.execute(schema)
         seed_reference_catalog(conn)
+        refresh_ship_reference_prices(conn)
 
 
 def _reference_data_dir() -> Path | None:
@@ -552,6 +553,33 @@ def upsert_station_offer_batch(
             """
         else:
             continue
+        if row.get("station_type") or isinstance(
+            row.get("fleet_carrier"), bool
+        ):
+            # Direct Journal observations can arrive before a matching EDDN
+            # Docked/commodity message.  Retain the public station type first
+            # so Fleet Carrier prices never seed the global hull reference.
+            conn.execute(
+                """
+                INSERT INTO stations
+                    (market_id, system_name, station_name, station_type,
+                     fleet_carrier, observed_at, received_at, source)
+                VALUES
+                    (%(market_id)s, %(system_name)s, %(station_name)s,
+                     %(station_type)s, %(fleet_carrier)s,
+                     TIMESTAMPTZ 'epoch', %(received_at)s, %(source)s)
+                ON CONFLICT (market_id) DO UPDATE SET
+                    system_name = EXCLUDED.system_name,
+                    station_name = EXCLUDED.station_name,
+                    station_type = COALESCE(
+                        NULLIF(EXCLUDED.station_type, ''), stations.station_type
+                    ),
+                    fleet_carrier = COALESCE(
+                        EXCLUDED.fleet_carrier, stations.fleet_carrier
+                    )
+                """,
+                row,
+            )
         conn.execute(
             f"""
             INSERT INTO {table}
@@ -708,6 +736,63 @@ def _replace_normalized_station_offers(
             updated_at = NOW()
         """,
         row,
+    )
+    if kind == "SHIPYARD" and str(row.get("source") or "").startswith(
+        "ED-Frame Journal"
+    ):
+        refresh_ship_reference_prices(conn, market_id=int(row["market_id"]))
+
+
+def refresh_ship_reference_prices(
+    conn: psycopg.Connection, *, market_id: int | None = None,
+) -> None:
+    """Learn one global default per hull from current non-carrier observations.
+
+    The most frequently observed price wins.  A tie prefers the higher value,
+    which lets an early discounted observation be corrected once an ordinary
+    station reports the list price.  Exact station observations always remain
+    authoritative for their own market.
+    """
+    conn.execute(
+        """
+        WITH affected AS MATERIALIZED (
+            SELECT DISTINCT ship_symbol
+            FROM station_ship_offers
+            WHERE buy_price IS NOT NULL
+              AND (%(market_id)s::BIGINT IS NULL OR market_id = %(market_id)s)
+        ), candidates AS MATERIALIZED (
+            SELECT o.ship_symbol, o.buy_price,
+                   COUNT(*)::INTEGER AS samples,
+                   MAX(o.price_observed_at) AS last_observed_at
+            FROM station_ship_offers o
+            JOIN affected a ON a.ship_symbol = o.ship_symbol
+            LEFT JOIN stations s ON s.market_id = o.market_id
+            WHERE o.buy_price IS NOT NULL
+              AND o.buy_price > 0
+              AND s.fleet_carrier IS NOT TRUE
+            GROUP BY o.ship_symbol, o.buy_price
+        ), ranked AS MATERIALIZED (
+            SELECT *, ROW_NUMBER() OVER (
+                PARTITION BY ship_symbol
+                ORDER BY samples DESC, buy_price DESC, last_observed_at DESC
+            ) AS preference
+            FROM candidates
+        )
+        UPDATE ship_catalog catalog
+        SET reference_price = ranked.buy_price,
+            reference_price_observed_at = ranked.last_observed_at,
+            reference_price_source = 'ED-Frame observed station consensus',
+            reference_price_samples = ranked.samples,
+            updated_at = NOW()
+        FROM ranked
+        WHERE ranked.preference = 1
+          AND catalog.symbol = ranked.ship_symbol
+          AND (catalog.reference_price, catalog.reference_price_observed_at,
+               catalog.reference_price_samples)
+              IS DISTINCT FROM
+              (ranked.buy_price, ranked.last_observed_at, ranked.samples)
+        """,
+        {"market_id": market_id},
     )
 
 

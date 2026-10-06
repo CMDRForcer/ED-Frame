@@ -265,6 +265,7 @@ class ProjectionTests(unittest.TestCase):
             "kind": "SHIPYARD", "marketId": 42,
             "system": "Cubeo", "station": "Chelomey Orbital",
             "observedAt": "2026-10-03T08:00:00Z",
+            "stationType": "Coriolis", "fleetCarrier": False,
             "ships": [{
                 "id": 128049363, "name": "Anaconda", "buyPrice": 146969451,
             }],
@@ -274,12 +275,50 @@ class ProjectionTests(unittest.TestCase):
         self.assertEqual(len(rows), 1)
         self.assertEqual(rows[0]["kind"], "SHIPYARD")
         self.assertEqual(rows[0]["source"], "ED-Frame Journal · Shipyard.json")
+        self.assertEqual(rows[0]["station_type"], "Coriolis")
+        self.assertFalse(rows[0]["fleet_carrier"])
         self.assertEqual(json.loads(rows[0]["items"]), [{
             "name": "anaconda", "id": 128049363, "buyPrice": 146969451,
             "priceObservedAt": "2026-10-03T08:00:00Z",
             "priceSource": "ED-Frame Journal · Shipyard.json",
         }])
         self.assertNotIn("commander", rows[0]["items"].casefold())
+
+    def test_edframe_shipyard_observation_identifies_fleet_carrier(self):
+        rows = project_station_offer_observations({"observations": [{
+            "kind": "SHIPYARD", "marketId": 43,
+            "system": "Cubeo", "station": "ABC-123",
+            "stationType": "FleetCarrier",
+            "observedAt": "2026-10-03T08:00:00Z",
+            "ships": [{"id": 1, "name": "Anaconda", "buyPrice": 1}],
+        }]}, "2026-10-03T08:00:01Z")
+        self.assertTrue(rows[0]["fleet_carrier"])
+
+    def test_edframe_shipyard_observation_normalizes_personal_discount(self):
+        rows = project_station_offer_observations({"observations": [{
+            "kind": "SHIPYARD", "marketId": 42,
+            "system": "Cubeo", "station": "Chelomey Orbital",
+            "observedAt": "2026-10-06T08:00:00Z",
+            "personalDiscountBps": 250,
+            "ships": [{
+                "id": 128049363, "name": "Anaconda", "buyPrice": 97500,
+            }],
+        }]}, "2026-10-06T08:00:01Z")
+
+        item = json.loads(rows[0]["items"])[0]
+        self.assertEqual(item["buyPrice"], 100000)
+        self.assertIn("discount normalized", item["priceSource"])
+        self.assertNotIn("personalDiscountBps", rows[0])
+
+    def test_arbitrary_personal_discount_is_rejected(self):
+        rows = project_station_offer_observations({"observations": [{
+            "kind": "SHIPYARD", "marketId": 42,
+            "system": "Cubeo", "station": "Chelomey Orbital",
+            "observedAt": "2026-10-06T08:00:00Z",
+            "personalDiscountBps": 9000,
+            "ships": [{"id": 1, "name": "Anaconda", "buyPrice": 1}],
+        }]}, "2026-10-06T08:00:01Z")
+        self.assertEqual(rows, [])
 
     def test_edframe_outfitting_observation_retains_exact_prices_anonymously(self):
         rows = project_station_offer_observations({"observations": [{

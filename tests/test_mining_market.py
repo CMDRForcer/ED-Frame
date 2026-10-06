@@ -2,6 +2,7 @@ from datetime import datetime, timezone
 import unittest
 
 from ed_companion.navigation.mining_market import (
+    commander_personal_discount_bps,
     EDDATA_MARKET_SOURCE,
     MiningMarketError,
     fetch_edframe_catalog_status,
@@ -20,6 +21,7 @@ from ed_companion.navigation.mining_market import (
     project_edframe_catalog_markets,
     project_market_imports,
     send_edframe_station_offer_observations,
+    station_offer_observation_key,
 )
 
 
@@ -66,9 +68,21 @@ class MiningMarketTests(unittest.TestCase):
         }, {
             "marketId": 42, "systemName": "Cubeo",
             "stationName": "Chelomey Orbital", "odyssey": True,
+            "stationType": "Coriolis",
         })
         self.assertEqual(observation["ships"][0]["buyPrice"], 146969451)
+        self.assertEqual(observation["stationType"], "Coriolis")
+        self.assertFalse(observation["fleetCarrier"])
         self.assertNotIn("Commander", observation)
+
+        carrier = project_local_shipyard_observation({
+            "timestamp": "2026-10-03T08:00:00Z",
+            "MarketID": 43, "StationName": "ABC-123",
+            "StarSystem": "Cubeo", "PriceList": [{
+                "id": 128049363, "ShipType": "Anaconda", "ShipPrice": 1,
+            }],
+        }, {"stationType": "FleetCarrier"})
+        self.assertTrue(carrier["fleetCarrier"])
 
         calls = []
         def post(url, **kwargs):
@@ -81,6 +95,32 @@ class MiningMarketTests(unittest.TestCase):
         self.assertEqual(response["accepted"], 1)
         self.assertTrue(calls[0][0].endswith("/v1/station-offers/observations"))
         self.assertEqual(calls[0][1]["json"]["observations"], [observation])
+
+    def test_elite_discount_is_shared_as_amount_not_commander_rank(self):
+        overview = {"ranks": [
+            {"key": "combat", "known": True, "rank": 8},
+            {"key": "trade", "known": True, "rank": 4},
+        ]}
+        self.assertEqual(commander_personal_discount_bps(overview), 250)
+        observation = project_local_shipyard_observation({
+            "timestamp": "2026-10-06T08:00:00Z",
+            "MarketID": 42, "StationName": "Test Port",
+            "StarSystem": "Cubeo", "PriceList": [{
+                "id": 128049363, "ShipType": "Anaconda",
+                "ShipPrice": 97500,
+            }],
+        }, None, personal_discount_bps=250)
+        self.assertEqual(observation["personalDiscountBps"], 250)
+        self.assertNotIn("rank", str(observation).casefold())
+
+    def test_station_offer_key_changes_for_each_observation_batch(self):
+        first = station_offer_observation_key([{
+            "kind": "SHIPYARD", "marketId": 1,
+        }])
+        second = station_offer_observation_key([{
+            "kind": "SHIPYARD", "marketId": 2,
+        }])
+        self.assertNotEqual(first, second)
     def test_incremental_sync_is_anonymous_bounded_and_resumable(self):
         calls = []
 

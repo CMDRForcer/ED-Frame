@@ -9,6 +9,7 @@ the planner.  No Commander identifier is sent.
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
+import json
 import math
 from typing import Any
 from urllib.parse import quote
@@ -139,7 +140,7 @@ def fetch_edframe_station_offer_delta(
 
 
 def project_local_shipyard_observation(
-    snapshot: Any, station_message: Any,
+    snapshot: Any, station_message: Any, *, personal_discount_bps: int = 0,
 ) -> dict[str, Any] | None:
     """Keep exact public ship prices without Commander or filesystem data."""
     if not isinstance(snapshot, dict):
@@ -192,6 +193,19 @@ def project_local_shipyard_observation(
         "observedAt": observed_at,
         "ships": [ships[key] for key in sorted(ships)],
     }
+    station_type = str(
+        identity.get("stationType") or identity.get("StationType") or ""
+    ).strip()
+    if station_type:
+        result["stationType"] = station_type
+        result["fleetCarrier"] = (
+            station_type.casefold().replace(" ", "") == "fleetcarrier"
+        )
+    if personal_discount_bps == 250:
+        # Only the public discount amount is shared.  No rank, Commander or
+        # account identifier leaves the app.  The server uses it to restore
+        # the station price before the Commander's galaxy-wide Elite rebate.
+        result["personalDiscountBps"] = 250
     for direct, source in (("horizons", "Horizons"), ("odyssey", "Odyssey")):
         value = identity.get(direct, snapshot.get(source))
         if isinstance(value, bool):
@@ -200,7 +214,7 @@ def project_local_shipyard_observation(
 
 
 def project_local_outfitting_observation(
-    snapshot: Any, station_message: Any,
+    snapshot: Any, station_message: Any, *, personal_discount_bps: int = 0,
 ) -> dict[str, Any] | None:
     """Keep exact public module prices without Commander or filesystem data."""
     if not isinstance(snapshot, dict):
@@ -257,6 +271,16 @@ def project_local_outfitting_observation(
         "observedAt": observed_at,
         "modules": [modules[key] for key in sorted(modules)],
     }
+    station_type = str(
+        identity.get("stationType") or identity.get("StationType") or ""
+    ).strip()
+    if station_type:
+        result["stationType"] = station_type
+        result["fleetCarrier"] = (
+            station_type.casefold().replace(" ", "") == "fleetcarrier"
+        )
+    if personal_discount_bps == 250:
+        result["personalDiscountBps"] = 250
     for direct, source in (("horizons", "Horizons"), ("odyssey", "Odyssey")):
         value = identity.get(direct, snapshot.get(source))
         if isinstance(value, bool):
@@ -264,9 +288,32 @@ def project_local_outfitting_observation(
     return result
 
 
+def commander_personal_discount_bps(overview: Any) -> int:
+    """Return Elite's public 2.5% purchase rebate without exposing rank data."""
+    source = overview if isinstance(overview, dict) else {}
+    ranks = source.get("ranks")
+    if not isinstance(ranks, list):
+        return 0
+    eligible = {"combat", "trade", "explore", "cqc"}
+    for row in ranks:
+        if not isinstance(row, dict):
+            continue
+        key = str(row.get("key") or "").strip().casefold()
+        rank = row.get("rank")
+        if (
+            key in eligible
+            and isinstance(rank, (int, float))
+            and not isinstance(rank, bool)
+            and int(rank) >= 8
+        ):
+            return 250
+    return 0
+
+
 def station_offer_observation_key(observation: Any) -> str:
+    source = observation if isinstance(observation, (dict, list)) else {}
     payload = json.dumps(
-        observation if isinstance(observation, dict) else {},
+        source,
         sort_keys=True, ensure_ascii=True, separators=(",", ":"),
     )
     import hashlib
