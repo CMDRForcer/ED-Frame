@@ -62,8 +62,18 @@ def market_provider_status_summary(statuses: Any) -> str:
     )
 
 
-def fetch_edframe_catalog_status(*, get: Any, timeout: int = 12) -> dict[str, Any]:
-    """Return the anonymous central catalog's public health summary."""
+def fetch_edframe_catalog_health(*, get: Any, timeout: int = 5) -> dict[str, Any]:
+    """Return the catalog service's lightweight liveness response."""
+    response = get(f"{EDFRAME_CATALOG_BASE}/healthz", timeout=timeout)
+    response.raise_for_status()
+    payload = response.json()
+    if not isinstance(payload, dict) or payload.get("status") != "ok":
+        raise MiningMarketError("ED-Frame returned an invalid health response")
+    return payload
+
+
+def fetch_edframe_catalog_status(*, get: Any, timeout: int = 30) -> dict[str, Any]:
+    """Return the anonymous central catalog's potentially expensive summary."""
     response = get(f"{EDFRAME_CATALOG_BASE}/v1/status", timeout=timeout)
     response.raise_for_status()
     payload = response.json()
@@ -168,6 +178,9 @@ def project_local_shipyard_observation(
         if not isinstance(source, dict):
             continue
         name = str(source.get("ShipType") or "").strip()
+        display_name = str(
+            source.get("ShipType_Localised") or source.get("ShipType") or ""
+        ).strip()
         try:
             ship_id = int(source.get("id"))
             buy_price = int(source.get("ShipPrice"))
@@ -178,6 +191,7 @@ def project_local_shipyard_observation(
         key = name.casefold()
         ships[key] = {
             "name": key,
+            "displayName": display_name,
             "id": ship_id,
             "buyPrice": buy_price,
             "priceObservedAt": observed_at,

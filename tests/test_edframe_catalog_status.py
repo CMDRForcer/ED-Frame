@@ -94,6 +94,48 @@ class BackupController:
 
 
 class EdFrameCatalogStatusTests(unittest.TestCase):
+    def test_health_success_marks_online_before_details_arrive(self):
+        controller = ControllerStub()
+        controller._edframe_catalog_online = False
+
+        NavigationMixin._finish_edframe_catalog_status(controller, {
+            "id": "request", "phase": "health", "success": True,
+            "health": {"status": "ok", "time": "2026-10-06T10:00:00Z"},
+        })
+
+        self.assertTrue(controller._edframe_catalog_online)
+        self.assertTrue(controller._edframe_catalog_busy)
+        self.assertIsNotNone(controller._active_edframe_catalog_request)
+        self.assertIn("loading catalog details", controller._edframe_catalog_status)
+
+    def test_detail_timeout_does_not_turn_healthy_server_offline(self):
+        controller = ControllerStub()
+        controller._edframe_catalog_online = True
+
+        NavigationMixin._finish_edframe_catalog_status(controller, {
+            "id": "request", "phase": "status", "success": False,
+            "error": "Timeout: details were slow",
+        })
+
+        self.assertTrue(controller._edframe_catalog_online)
+        self.assertFalse(controller._edframe_catalog_busy)
+        self.assertIsNone(controller._active_edframe_catalog_request)
+        self.assertIn("details temporarily unavailable", controller._edframe_catalog_status)
+
+    def test_health_failure_marks_server_offline(self):
+        controller = ControllerStub()
+        controller._edframe_catalog_online = True
+
+        NavigationMixin._finish_edframe_catalog_status(controller, {
+            "id": "request", "phase": "health", "success": False,
+            "error": "ConnectionError: refused",
+        })
+
+        self.assertFalse(controller._edframe_catalog_online)
+        self.assertFalse(controller._edframe_catalog_busy)
+        self.assertIsNone(controller._active_edframe_catalog_request)
+        self.assertIn("Offline", controller._edframe_catalog_status)
+
     def test_market_backup_is_skipped_while_recent(self):
         store = BackupStore(due=False)
         controller = BackupController(store)

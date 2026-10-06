@@ -146,6 +146,7 @@ from ed_companion.navigation.mining_planner import (
     plan_mining_routes,
 )
 from ed_companion.navigation.mining_market import (
+    fetch_edframe_catalog_health,
     fetch_edframe_catalog_status,
     fetch_edframe_market_delta,
     fetch_edframe_station_offer_delta,
@@ -2738,17 +2739,35 @@ class NavigationMixin:
         self.miningChanged.emit()
 
         def worker():
-            result = dict(request)
             try:
-                result["status"] = fetch_edframe_catalog_status(
+                health = fetch_edframe_catalog_health(
                     get=requests.get,
                 )
-                result["success"] = True
             except Exception as exc:
-                result.update({
+                self.edFrameCatalogStatusFinished.emit({
+                    **request,
+                    "phase": "health",
                     "success": False,
                     "error": f"{type(exc).__name__}: {exc}",
                 })
+                return
+            self.edFrameCatalogStatusFinished.emit({
+                **request,
+                "phase": "health",
+                "success": True,
+                "health": health,
+            })
+            try:
+                status = fetch_edframe_catalog_status(get=requests.get)
+                result = {
+                    **request, "phase": "status", "success": True,
+                    "status": status,
+                }
+            except Exception as exc:
+                result = {
+                    **request, "phase": "status", "success": False,
+                    "error": f"{type(exc).__name__}: {exc}",
+                }
             self.edFrameCatalogStatusFinished.emit(result)
 
         if not self._start_network_worker(worker, "edframe-catalog-status"):
@@ -2766,20 +2785,57 @@ class NavigationMixin:
         request = getattr(self, "_active_edframe_catalog_request", None)
         if not request or result.get("id") != request.get("id"):
             return
-        self._active_edframe_catalog_request = None
-        self._edframe_catalog_busy = False
+        phase = str(result.get("phase") or "status")
         if not getattr(self, "_edframe_catalog_enabled", True):
+            self._active_edframe_catalog_request = None
+            self._edframe_catalog_busy = False
             return
         store = getattr(self, "_mining_market_store", None)
-        if not result.get("success"):
-            error = str(result.get("error") or "unknown error")
-            self._edframe_catalog_online = False
-            self._edframe_catalog_status = "Offline · retained local catalog active"
-            self._append_edframe_catalog_log(f"Server unavailable · {error}")
+        if phase == "health" and result.get("success"):
+            health = result.get("health") or {}
+            self._edframe_catalog_online = True
+            self._edframe_catalog_last_success = str(
+                health.get("time")
+                or datetime.now(timezone.utc).isoformat(timespec="seconds")
+            )
+            self._edframe_catalog_status = (
+                "Online · loading catalog details… · local catalog active"
+            )
+            self._append_edframe_catalog_log(
+                "Server online · loading catalog details"
+            )
             if store is not None:
                 store.record_source_result(
-                    "ED-Frame catalog server", success=False, error=error,
+                    "ED-Frame catalog server", success=True,
                 )
+            self.connectionChanged.emit()
+            self.miningChanged.emit()
+            return
+
+        self._active_edframe_catalog_request = None
+        self._edframe_catalog_busy = False
+        if not result.get("success"):
+            error = str(result.get("error") or "unknown error")
+            if phase == "status" and getattr(
+                self, "_edframe_catalog_online", False
+            ):
+                self._edframe_catalog_status = (
+                    "Online · catalog details temporarily unavailable · "
+                    "local catalog active"
+                )
+                self._append_edframe_catalog_log(
+                    f"Catalog details unavailable · {error}"
+                )
+            else:
+                self._edframe_catalog_online = False
+                self._edframe_catalog_status = (
+                    "Offline · retained local catalog active"
+                )
+                self._append_edframe_catalog_log(f"Server unavailable · {error}")
+                if store is not None:
+                    store.record_source_result(
+                        "ED-Frame catalog server", success=False, error=error,
+                    )
         else:
             payload = result.get("status") or {}
             counts = payload.get("counts") or {}
@@ -2907,10 +2963,10 @@ class NavigationMixin:
             self._save_ui_config()
         self.connectionChanged.emit()
         self.miningChanged.emit()
-        if result.get("success") and store is not None:
+        if phase == "status" and result.get("success") and store is not None:
             QTimer.singleShot(0, self.syncEdFrameCatalog)
             QTimer.singleShot(0, self.syncEdFrameStationOffers)
-        if result.get("success"):
+        if phase == "status" and result.get("success"):
             state_sync = getattr(self, "syncEdFrameStateFinds", None)
             if callable(state_sync):
                 QTimer.singleShot(0, state_sync)

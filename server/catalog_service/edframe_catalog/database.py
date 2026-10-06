@@ -737,6 +737,44 @@ def _replace_normalized_station_offers(
         """,
         row,
     )
+    if kind == "SHIPYARD":
+        conn.execute(
+            """
+            WITH incoming AS MATERIALIZED (
+                SELECT LOWER(
+                           CASE
+                             WHEN jsonb_typeof(value) = 'object'
+                               THEN value ->> 'name'
+                             WHEN jsonb_typeof(value) = 'string'
+                               THEN value #>> '{}'
+                             ELSE NULL
+                           END
+                       ) AS symbol,
+                       NULLIF(
+                           CASE WHEN jsonb_typeof(value) = 'object'
+                                  THEN value ->> 'displayName'
+                                ELSE NULL END,
+                           ''
+                       ) AS display_name
+                FROM jsonb_array_elements(%(items)s::jsonb) entry(value)
+                WHERE jsonb_typeof(value) IN ('object', 'string')
+            )
+            INSERT INTO ship_catalog
+                (symbol, display_name, specifications, source, updated_at)
+            SELECT symbol,
+                   COALESCE(
+                       display_name,
+                       INITCAP(REPLACE(symbol, '_', ' '))
+                   ),
+                   '{}'::jsonb,
+                   'ED-Frame automatic ship discovery',
+                   NOW()
+            FROM incoming
+            WHERE NULLIF(symbol, '') IS NOT NULL
+            ON CONFLICT (symbol) DO NOTHING
+            """,
+            row,
+        )
     if kind == "SHIPYARD" and str(row.get("source") or "").startswith(
         "ED-Frame Journal"
     ):

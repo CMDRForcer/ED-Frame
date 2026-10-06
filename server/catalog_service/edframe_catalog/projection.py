@@ -326,6 +326,14 @@ def project_station_offer_observations(
                     if personal_discount_bps else ""
                 ),
             }
+            if kind == "SHIPYARD":
+                display_name = _text(
+                    raw_item.get("displayName")
+                    or raw_item.get("ShipType_Localised")
+                    or raw_item.get("ShipType")
+                )
+                if display_name:
+                    item["displayName"] = display_name
             if kind == "OUTFITTING":
                 merc_price = _integer(raw_item.get("buyMercCoinsPrice", 0))
                 if merc_price is None or merc_price < 0:

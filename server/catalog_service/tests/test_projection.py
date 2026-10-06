@@ -267,7 +267,8 @@ class ProjectionTests(unittest.TestCase):
             "observedAt": "2026-10-03T08:00:00Z",
             "stationType": "Coriolis", "fleetCarrier": False,
             "ships": [{
-                "id": 128049363, "name": "Anaconda", "buyPrice": 146969451,
+                "id": 128049363, "name": "Anaconda",
+                "displayName": "Anaconda Mk II", "buyPrice": 146969451,
             }],
             "commander": "must not be projected",
         }]}, "2026-10-03T08:00:01Z")
@@ -281,6 +282,7 @@ class ProjectionTests(unittest.TestCase):
             "name": "anaconda", "id": 128049363, "buyPrice": 146969451,
             "priceObservedAt": "2026-10-03T08:00:00Z",
             "priceSource": "ED-Frame Journal · Shipyard.json",
+            "displayName": "Anaconda Mk II",
         }])
         self.assertNotIn("commander", rows[0]["items"].casefold())
 

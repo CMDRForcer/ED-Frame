@@ -2,6 +2,22 @@
 
 ## Unreleased
 
+## 1.5.33 — 2026-10-06
+
+### Added
+
+- **Automatic discovery of new ships**: shipyard inventories now register
+  previously unknown Frontier hull symbols in the central ship catalog on
+  first observation. Localised Journal names are retained when available,
+  while later curated reference data can enrich the provisional entry.
+
+### Fixed
+
+- **Honest ED-Frame server state**: a lightweight health check now determines
+  online/offline state independently from the expensive catalog statistics.
+  Slow detail counts keep loading in the background and can no longer make a
+  healthy server appear offline.
+
 ## 1.5.32 — 2026-10-06
 
 ### Added

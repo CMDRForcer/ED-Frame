@@ -5,6 +5,7 @@ from ed_companion.navigation.mining_market import (
     commander_personal_discount_bps,
     EDDATA_MARKET_SOURCE,
     MiningMarketError,
+    fetch_edframe_catalog_health,
     fetch_edframe_catalog_status,
     fetch_edframe_market_delta,
     fetch_edframe_station_offer_delta,
@@ -62,6 +63,7 @@ class MiningMarketTests(unittest.TestCase):
             "timestamp": "2026-10-03T08:00:00Z",
             "PriceList": [{
                 "id": 128049363, "ShipType": "Anaconda",
+                "ShipType_Localised": "Anaconda",
                 "ShipPrice": 146969451,
             }],
             "Commander": "must not leave the app",
@@ -71,6 +73,7 @@ class MiningMarketTests(unittest.TestCase):
             "stationType": "Coriolis",
         })
         self.assertEqual(observation["ships"][0]["buyPrice"], 146969451)
+        self.assertEqual(observation["ships"][0]["displayName"], "Anaconda")
         self.assertEqual(observation["stationType"], "Coriolis")
         self.assertFalse(observation["fleetCarrier"])
         self.assertNotIn("Commander", observation)
@@ -207,6 +210,30 @@ class MiningMarketTests(unittest.TestCase):
         status = fetch_edframe_catalog_status(get=get)
         self.assertEqual(status["counts"]["markets"], 20)
         self.assertTrue(calls[0][0].endswith("/v1/status"))
+        self.assertEqual(calls[0][1]["timeout"], 30)
+
+    def test_central_catalog_health_uses_lightweight_endpoint(self):
+        calls = []
+
+        def get(url, **kwargs):
+            calls.append((url, kwargs))
+            return _Response({
+                "status": "ok", "version": "0.8.1",
+                "time": "2026-10-06T10:00:00Z",
+            })
+
+        health = fetch_edframe_catalog_health(get=get)
+
+        self.assertEqual(health["status"], "ok")
+        self.assertTrue(calls[0][0].endswith("/healthz"))
+        self.assertEqual(calls[0][1]["timeout"], 5)
+
+    def test_central_catalog_health_rejects_non_ok_payload(self):
+        def get(_url, **_kwargs):
+            return _Response({"status": "starting"})
+
+        with self.assertRaises(MiningMarketError):
+            fetch_edframe_catalog_health(get=get)
 
     def test_central_catalog_resolves_exact_system_coordinates(self):
         calls = []

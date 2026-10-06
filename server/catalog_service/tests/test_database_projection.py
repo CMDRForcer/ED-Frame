@@ -168,6 +168,9 @@ class DatabaseProjectionTests(unittest.TestCase):
         self.assertIn("EDDN shipyard/2", conn.calls[2][0])
         self.assertIn("jsonb_array_elements", conn.calls[2][0])
         self.assertIn("station_ship_offers", conn.calls[3][0])
+        self.assertIn("INSERT INTO ship_catalog", conn.calls[4][0])
+        self.assertIn("automatic ship discovery", conn.calls[4][0])
+        self.assertIn("ON CONFLICT (symbol) DO NOTHING", conn.calls[4][0])
 
     def test_direct_shipyard_price_refreshes_global_reference_model(self):
         conn = RecordingConnection()
@@ -181,10 +184,11 @@ class DatabaseProjectionTests(unittest.TestCase):
             "source": "ED-Frame Journal · Shipyard.json",
         }])
         self.assertEqual(projected, 1)
-        self.assertEqual(len(conn.calls), 3)
+        self.assertEqual(len(conn.calls), 4)
         self.assertIn("station_ship_offers", conn.calls[1][0])
-        self.assertIn("UPDATE ship_catalog", conn.calls[2][0])
-        self.assertEqual(conn.calls[2][1]["market_id"], 42)
+        self.assertIn("INSERT INTO ship_catalog", conn.calls[2][0])
+        self.assertIn("UPDATE ship_catalog", conn.calls[3][0])
+        self.assertEqual(conn.calls[3][1]["market_id"], 42)
 
     def test_direct_carrier_metadata_is_saved_before_price_reference(self):
         conn = RecordingConnection()
@@ -202,7 +206,8 @@ class DatabaseProjectionTests(unittest.TestCase):
         self.assertTrue(conn.calls[0][1]["fleet_carrier"])
         self.assertIn("station_shipyards", conn.calls[1][0])
         self.assertIn("station_ship_offers", conn.calls[2][0])
-        self.assertIn("UPDATE ship_catalog", conn.calls[3][0])
+        self.assertIn("INSERT INTO ship_catalog", conn.calls[3][0])
+        self.assertIn("UPDATE ship_catalog", conn.calls[4][0])
 
     def test_reference_catalog_seeds_module_quality_and_ship_facts(self):
         conn = RecordingConnection()
