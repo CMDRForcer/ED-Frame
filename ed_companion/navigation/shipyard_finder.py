@@ -8,6 +8,9 @@ from __future__ import annotations
 
 import math
 import re
+import json
+from functools import lru_cache
+from pathlib import Path
 from datetime import datetime, timezone
 from typing import Any, Iterable
 
@@ -221,8 +224,16 @@ def _module_schematic_kind(symbol: str, name: str) -> str:
     return "INTERNAL"
 
 
-def build_module_catalog(payload: Any) -> list[dict[str, Any]]:
+def build_module_catalog(payload: Any, *, include_hull_armour: bool = False) -> list[dict[str, Any]]:
     modules = payload.get("modules", {}) if isinstance(payload, dict) else {}
+    if include_hull_armour:
+        modules = dict(modules)
+        names = {"grade1": ("LIGHTWEIGHT ALLOYS", "1C"), "grade2": ("REINFORCED ALLOYS", "1B"),
+                 "grade3": ("MILITARY GRADE COMPOSITE", "1A"), "mirrored": ("MIRRORED SURFACE COMPOSITE", "1A"),
+                 "reactive": ("REACTIVE SURFACE COMPOSITE", "1A")}
+        for symbol in module_fit_reference().get("modules", {}):
+            if "_armour_" in symbol and symbol.split("_armour_")[-1] in names:
+                modules.setdefault(symbol, names[symbol.split("_armour_")[-1]])
     rows = []
     for symbol, value in modules.items():
         if not isinstance(value, (list, tuple)) or not value:
@@ -333,11 +344,31 @@ def build_module_families(
     ))
 
 
+@lru_cache(maxsize=1)
+def module_fit_reference() -> dict[str, Any]:
+    """Small bundled reference, loaded once; missing data never implies a fit."""
+    try:
+        data = json.loads((Path(__file__).resolve().parents[2] / "ed_data" / "module_fit_reference.json").read_text(encoding="utf-8"))
+        return data if isinstance(data, dict) else {}
+    except (OSError, ValueError):
+        return {}
+
+
 def module_catalog_with_ship_fit(
     catalog: Iterable[dict[str, Any]], ship_slots: Any,
+    ship_symbol: str = "", reference: Any = None, ship_stats: Any = None,
 ) -> list[dict[str, Any]]:
     """Annotate modules without hiding uncertain compatibility evidence."""
     slots = [dict(row) for row in (ship_slots or []) if isinstance(row, dict)]
+    reference = reference if isinstance(reference, dict) else module_fit_reference()
+    stats = reference.get("modules", {})
+    ship_symbol = str(ship_symbol or "").casefold()
+    hull_mass = reference.get("ships", {}).get(ship_symbol, {}).get("hullMass")
+    ship_stats = ship_stats if isinstance(ship_stats, dict) else {}
+    catalog = [{**row, "referencePrice": stats.get(str(row.get("symbol") or "").casefold(), {}).get("cost"),
+                "referencePriceSource": reference.get("rulesSource", "") if "_armour_" in str(row.get("symbol") or "").casefold() else reference.get("source", ""),
+                "powerDrawMW": stats.get(str(row.get("symbol") or "").casefold(), {}).get("power")}
+               for row in catalog if isinstance(row, dict)]
     if not slots:
         return [{
             **dict(row),
@@ -357,7 +388,10 @@ def module_catalog_with_ship_fit(
         if not isinstance(source, dict):
             continue
         row = dict(source)
+        symbol = str(row.get("symbol") or "").casefold()
+        spec = stats.get(symbol, {})
         group = str(row.get("moduleGroup") or "OPTIONAL")
+        core_slot = str(row.get("moduleCoreSlot") or "")
         target_group = group_names.get(group, "OPTIONAL INTERNALS")
         candidates = [
             slot for slot in slots
@@ -388,15 +422,94 @@ def module_catalog_with_ship_fit(
                 "currentShipFitReason": "Module class is unavailable",
             })
         else:
-            fits = any(int(slot.get("slotSize") or 0) >= module_size for slot in candidates)
+            slot_fits = {}
+            for slot in candidates:
+                size = int(slot.get("slotSize") or 0)
+                restriction = str(slot.get("restriction") or "").casefold()
+                family = str(row.get("moduleFamily") or row.get("displayName") or "").upper()
+                status, reason = "FITS", "Slot type and class match; power and mass limits not verified"
+                if module_size > size and core_slot != "Armour":
+                    status, reason = "INCOMPATIBLE", "Module exceeds slot class"
+                elif group == "CORE" and core_slot in {"LifeSupport", "Radar"} and module_size != size:
+                    status, reason = "INCOMPATIBLE", "Life support and sensors require the exact slot class"
+                elif restriction == "military" and not any(name in family for name in (
+                    "HULL REINFORCEMENT", "MODULE REINFORCEMENT", "SHIELD CELL BANK", "GUARDIAN SHIELD REINFORCEMENT",
+                )):
+                    status, reason = "INCOMPATIBLE", "Military slot accepts reinforcement packages and shield cell banks only"
+                elif restriction == "planetaryapproachsuite":
+                    status, reason = "INCOMPATIBLE", "Reserved planetary approach suite slot"
+                elif restriction and restriction != "military":
+                    status, reason = "UNKNOWN", "Slot restriction has not been verified: " + restriction
+                elif spec.get("noUndersize") and module_size != size:
+                    status, reason = "INCOMPATIBLE", "This module requires the exact slot class"
+                if status != "INCOMPATIBLE":
+                    if core_slot == "Armour":
+                        status = "FITS" if ship_symbol and symbol.split("_armour_")[0] == ship_symbol else "INCOMPATIBLE" if ship_symbol else "UNKNOWN"
+                        reason = "Armour is specific to this hull" if status == "FITS" else "Armour belongs to another hull" if ship_symbol else "Hull identity unavailable"
+                    elif "allowedShips" in spec:
+                        known_ship = ship_symbol in reference.get("ships", {})
+                        if ship_symbol in spec["allowedShips"]:
+                            if status == "FITS":
+                                reason = "Hull-specific module allowed"
+                        else:
+                            status = "INCOMPATIBLE" if known_ship else "UNKNOWN"
+                            reason = "Module not approved for this hull" if known_ship else "Hull rule reference unavailable"
+                    elif any(name in family for name in ("FIGHTER HANGAR", "LUXURY", "MK II")) and not spec:
+                        status, reason = "UNKNOWN", "Ship-specific compatibility requires additional evidence"
+                    limit = spec.get("limit")
+                    if limit and status != "INCOMPATIBLE":
+                        others = [s for s in slots if str(s.get("slot")) != str(slot.get("slot"))]
+                        count = sum(stats.get(str(s.get("moduleId") or "").casefold(), {}).get("limit") == limit for s in others)
+                        maximum = reference.get("limits", {}).get(limit)
+                        if maximum is None or any(not s.get("empty") and str(s.get("moduleId") or "").casefold() not in stats for s in others):
+                            status, reason = "UNKNOWN", "Installation count cannot be verified"
+                        elif any(stats.get(str(s.get("moduleId") or "").casefold(), {}).get("unlimit") == limit for s in slots):
+                            status, reason = "UNKNOWN", "Experimental weapon stabiliser limit needs verification"
+                        elif count >= maximum:
+                            status, reason = "INCOMPATIBLE", f"Installation limit reached ({maximum}); replace the existing module"
+                    if symbol and not spec and status == "FITS":
+                        status, reason = "UNKNOWN", "Module-specific rule reference unavailable"
+                    if status != "INCOMPATIBLE" and ("SHIELD GENERATOR" in family or core_slot == "MainEngines"):
+                        max_mass = spec.get("maxmass")
+                        if hull_mass is None or max_mass is None:
+                            status, reason = "UNKNOWN", "Mass limit reference unavailable"
+                        elif hull_mass > max_mass:
+                            status, reason = "INCOMPATIBLE", f"Hull mass {hull_mass:g} t exceeds module limit {max_mass:g} t"
+                        elif core_slot == "MainEngines":
+                            status, reason = "UNKNOWN", f"Hull below {max_mass:g} t limit; full loadout, engineering, fuel and cargo mass still need verification"
+                            old_spec = stats.get(str(slot.get("moduleId") or "").casefold(), {})
+                            snapshot = ship_stats.get("modules", {})
+                            snapshot_matches = bool(snapshot) and all(str(s.get("moduleId") or "").casefold() == str(snapshot.get(str(s.get("slot") or ""), "")).casefold() for s in slots)
+                            fuel = ship_stats.get("fuelCapacity")
+                            if isinstance(fuel, dict):
+                                fuel = sum(fuel.values()) if all(isinstance(v, (int, float)) and math.isfinite(v) and v >= 0 for v in fuel.values()) else None
+                            values = [ship_stats.get("unladenMass"), ship_stats.get("cargoCapacity"), fuel, old_spec.get("mass"), spec.get("mass")]
+                            if snapshot_matches and not slot.get("engineered") and all(isinstance(v, (int, float)) and math.isfinite(v) and v >= 0 for v in values):
+                                laden_mass = values[0] + values[1] + values[2] - values[3] + values[4]
+                                status = "FITS" if laden_mass <= max_mass else "INCOMPATIBLE"
+                                reason = f"Fully laden replacement mass {laden_mass:g} / {max_mass:g} t (Journal loadout; standard replacement)"
+                        elif status == "FITS":
+                            reason = f"Slot and hull mass verified ({hull_mass:g} / {max_mass:g} t)"
+                power_warning = "Power budget not verified"
+                installed = [s for s in slots if not s.get("empty") and str(s.get("slot")) != str(slot.get("slot"))]
+                if spec.get("power") is not None and all(stats.get(str(s.get("moduleId") or "").casefold(), {}).get("power") is not None and not s.get("engineered") for s in installed):
+                    reactor = spec if core_slot == "PowerPlant" else next((stats.get(str(s.get("moduleId") or "").casefold(), {}) for s in installed if s.get("slot") == "PowerPlant"), {})
+                    capacity = reactor.get("pgen")
+                    if capacity is not None:
+                        demand = sum(stats[str(s["moduleId"]).casefold()].get("power", 0) for s in installed) + spec.get("power", 0)
+                        power_warning = f"Reference deployed draw {demand:g} / {capacity:g} MW" + ("; OVER BUDGET" if demand > capacity else "") + "; cargo hatch, module priorities and engineering not included"
+                slot_fits[str(slot.get("slot") or "")] = {"status": status, "reason": reason, "powerWarning": power_warning}
+            fits = any(value["status"] != "INCOMPATIBLE" for value in slot_fits.values())
+            status = "FITS" if any(value["status"] == "FITS" for value in slot_fits.values()) else "UNKNOWN" if fits else "INCOMPATIBLE"
             row.update({
+                "currentShipSlotFits": slot_fits,
                 "fitsCurrentShip": fits,
-                "currentShipFitStatus": "FITS" if fits else "INCOMPATIBLE",
+                "currentShipFitStatus": status,
                 "currentShipFitReason": (
-                    f"Fits a {target_group.lower()} slot on the current ship"
-                    if fits else
-                    f"No compatible {target_group.lower()} slot on the current ship"
+                    next((value["reason"] for value in slot_fits.values() if value["status"] == status),
+                         f"No compatible {target_group.lower()} slot on the current ship")
                 ),
+                "powerWarning": "Power budget not verified" + (f"; reference draw {row['powerDrawMW']:g} MW" if row.get("powerDrawMW") is not None else "; module power draw unknown"),
             })
         result.append(row)
     return result

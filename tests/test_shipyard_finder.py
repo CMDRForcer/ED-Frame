@@ -151,8 +151,8 @@ class ShipyardFinderTests(unittest.TestCase):
 
     def test_current_ship_fit_uses_physical_group_size_and_core_slot(self):
         modules = build_module_catalog({"modules": {
-            "hpt_fragcannon_fixed_medium": ["FRAGMENT CANNON", "2A"],
-            "hpt_fragcannon_fixed_large": ["FRAGMENT CANNON", "3A"],
+            "hpt_slugshot_fixed_medium": ["FRAGMENT CANNON", "2A"],
+            "hpt_slugshot_fixed_large": ["FRAGMENT CANNON", "3A"],
             "int_powerplant_size4_class5": ["POWER PLANT", "4A"],
             "int_powerplant_size5_class5": ["POWER PLANT", "5A"],
         }})
@@ -161,8 +161,8 @@ class ShipyardFinderTests(unittest.TestCase):
             {"group": "CORE INTERNALS", "slot": "PowerPlant", "slotSize": 4},
         ])
         states = {row["symbol"]: row["currentShipFitStatus"] for row in annotated}
-        self.assertEqual(states["hpt_fragcannon_fixed_medium"], "FITS")
-        self.assertEqual(states["hpt_fragcannon_fixed_large"], "INCOMPATIBLE")
+        self.assertEqual(states["hpt_slugshot_fixed_medium"], "FITS")
+        self.assertEqual(states["hpt_slugshot_fixed_large"], "INCOMPATIBLE")
         self.assertEqual(states["int_powerplant_size4_class5"], "FITS")
         self.assertEqual(states["int_powerplant_size5_class5"], "INCOMPATIBLE")
 
@@ -381,6 +381,23 @@ class ShipyardFinderTests(unittest.TestCase):
         self.assertEqual([(row["system"], row["station"]) for row in result], [
             ("Near", "Large"),
         ])
+
+
+class ModuleSlotRestrictionTests(unittest.TestCase):
+    def test_military_and_unknown_restrictions(self):
+        slots = [{"group": "OPTIONAL INTERNALS", "slot": "Military01", "slotSize": 5, "restriction": "military"}]
+        for family, expected in (("CARGO RACK", "INCOMPATIBLE"), ("SHIELD CELL BANK", "FITS"), ("HULL REINFORCEMENT PACKAGE", "FITS")):
+            row = module_catalog_with_ship_fit([{"moduleGroup": "OPTIONAL", "moduleClass": 3, "moduleFamily": family}], slots)[0]
+            self.assertEqual(row["currentShipFitStatus"], expected)
+        slots[0]["restriction"] = "futureRestriction"
+        row = module_catalog_with_ship_fit([{"moduleGroup": "OPTIONAL", "moduleClass": 3}], slots)[0]
+        self.assertEqual(row["currentShipFitStatus"], "UNKNOWN")
+
+    def test_sensors_and_life_support_need_exact_class(self):
+        for family in ("Radar", "LifeSupport"):
+            for size, expected in ((2, "INCOMPATIBLE"), (3, "FITS"), (4, "INCOMPATIBLE")):
+                row = module_catalog_with_ship_fit([{"moduleGroup": "CORE", "moduleCoreSlot": family, "moduleClass": size}], [{"group": "CORE INTERNALS", "slot": family, "slotSize": 3}])[0]
+                self.assertEqual(row["currentShipFitStatus"], expected)
 
 
 if __name__ == "__main__":

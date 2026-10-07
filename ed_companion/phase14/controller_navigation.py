@@ -393,15 +393,19 @@ class NavigationMixin:
                 str(row.get("slot") or ""),
                 int(row.get("slotSize") or 0),
                 str(row.get("restriction") or ""),
+                str(row.get("moduleId") or ""),
+                bool(row.get("empty")),
+                bool(row.get("engineered")),
             )
             for row in slots if isinstance(row, dict)
         ))
         catalog = getattr(self, "_shipyard_module_catalog", []) or []
         cache_key = (
-            id(catalog), str(state.get("activeShipId") or ""), slot_signature,
+            id(catalog), str(state.get("activeShipId") or ""), str(state.get("activeShipType") or ""), slot_signature,
+            json.dumps(state.get("activeShipFitStats", {}), sort_keys=True),
         )
         if cache_key != getattr(self, "_shipyard_module_fit_cache_key", None):
-            projected = module_catalog_with_ship_fit(catalog, slots)
+            projected = module_catalog_with_ship_fit(catalog, slots, str(state.get("activeShipType") or ""), ship_stats=state.get("activeShipFitStats"))
             self._shipyard_module_fit_cache_key = cache_key
             self._shipyard_module_fit_cache = (
                 projected, build_module_families(projected),

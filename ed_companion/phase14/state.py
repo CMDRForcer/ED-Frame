@@ -1337,6 +1337,13 @@ def build_state(
         "activeShipId": str(fleet_state.get("active_id") or ""),
         "activeShipKnown": active_ship in ships,
         "activeShipSlots": active_ship_slots,
+        "activeShipFitStats": {
+            "unladenMass": active_loadout.get("UnladenMass"),
+            "cargoCapacity": active_loadout.get("CargoCapacity"),
+            "fuelCapacity": active_loadout.get("FuelCapacity"),
+            "modules": {str(row.get("Slot") or ""): str(row.get("Item") or "").casefold()
+                        for row in active_loadout.get("Modules", []) if isinstance(row, dict)},
+        },
         "selectedShipId": selected_ship_id,
         "selectedShipType": selected_ship_type,
         "selectedShipStats": selected_ship_stats,

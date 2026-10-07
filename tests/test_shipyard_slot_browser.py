@@ -52,6 +52,30 @@ class ShipyardSlotBrowserTests(unittest.TestCase):
         self.assertTrue(self.predicate("UTILITY", {
             "slot": "TinyHardpoint1", "slotSize": 0}, {"moduleClass": "0"}))
 
+    def test_backend_slot_evidence_overrides_size_only_guess(self):
+        slot = {"slot": "Slot01_Size3", "slotSize": 3}
+        for status, expected in (("FITS", True), ("UNKNOWN", True), ("INCOMPATIBLE", False)):
+            self.assertEqual(self.predicate("OPTIONAL", slot, {
+                "moduleClass": 2, "currentShipSlotFits": {
+                    "Slot01_Size3": {"status": status}}}), expected)
+        self.assertFalse(self.predicate("OPTIONAL", slot, {
+            "moduleClass": 2, "currentShipSlotFits": {}}))
+
+    def test_comparison_toggle_and_numeric_class_sort(self):
+        start = self.source.index("    function moduleVariantRows()")
+        end = self.source.index("    function slotRows()", start)
+        engine = QJSEngine()
+        rows = [{"moduleFamilyKey": "test", "moduleClass": size, "currentShipFitStatus": status}
+                for size, status in ((8, "INCOMPATIBLE"), (2, "FITS"), (3, "UNKNOWN"))]
+        result = engine.evaluate('var modules=' + json.dumps(rows) + ';'
+            'var moduleFamilyKey="test", moduleClassFilter="ANY", moduleRatingFilter="ANY", moduleMountFilter="ANY";'
+            'var fitCurrentShip=true, showIncompatibleVariants=false;'
+            'function matchesModuleGroup(row){return true;} function slotAllows(row){return row.currentShipFitStatus!=="INCOMPATIBLE";}'
+            + self.source[start:end] + 'moduleVariantRows().map(function(r){return r.moduleClass;}).join(",")')
+        self.assertFalse(result.isError(), result.toString())
+        self.assertEqual(result.toString(), "2,3")
+        self.assertEqual(engine.evaluate('showIncompatibleVariants=true;moduleVariantRows().map(function(r){return r.moduleClass;}).join(",")').toString(), "2,3,8")
+
     def test_mining_tab_spans_groups_but_excludes_combat_mines(self):
         start = self.source.index("    function isMiningModule(row)")
         end = self.source.index("    function moduleFamilyRows()", start)

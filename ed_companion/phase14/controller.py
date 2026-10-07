@@ -852,7 +852,7 @@ class CockpitController(
         )
         self._shipyard_module_catalog = build_module_catalog(read_json(
             self._reference_data_dir / "module_display.json", {}
-        ))
+        ), include_hull_armour=True)
         self._shipyard_module_families = build_module_families(
             self._shipyard_module_catalog
         )

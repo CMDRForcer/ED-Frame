@@ -23,8 +23,14 @@ Item {
     property string moduleRatingFilter: "ANY"
     property string moduleMountFilter: "ANY"
     property bool fitCurrentShip: true
+    property bool showIncompatibleVariants: false
     property string brokerFilter: "ALL BROKERS"
     property var selectedSlot: ({})
+    readonly property string selectedModuleFitStatus: {
+        var evidence = selectedItem.currentShipSlotFits || ({})
+        var fit = evidence[String(selectedSlot.slot || "")]
+        return String(fit ? fit.status : selectedItem.currentShipFitStatus || "UNKNOWN")
+    }
     readonly property var currentShipSlots: cockpit.shipyardCurrentShipSlots || []
     readonly property var suggestions: cockpit.shipyardFinderSuggestions || []
     readonly property var ships: cockpit.shipyardShipCatalog || []
@@ -111,12 +117,11 @@ Item {
         selectedItem = row || ({})
         selectedSymbol = String((row || {}).symbol || "")
         if (String((row || {}).kind || "") === "MODULES") {
-            if (String(selectedSlot.slot || "") && !slotAllows(row)) selectedSlot = ({})
+            if (String(selectedSlot.slot || "") && !slotAllows(row) && !showIncompatibleVariants) selectedSlot = ({})
             moduleGroup = moduleBrowseGroup(row)
             if (moduleGroup === "TECH BROKER" && !matchesModuleGroup(row)) brokerFilter = "ALL BROKERS"
             moduleDepartment = String((row || {}).moduleDepartment || moduleDepartment)
             moduleFamilyKey = String((row || {}).moduleFamilyKey || moduleFamilyKey)
-            Qt.callLater(function() { moduleVariantGrid.positionViewAtBeginning() })
         }
         searchField.text = String((row || {}).displayName || selectedSymbol)
         suggestionPopup.close()
@@ -187,8 +192,8 @@ Item {
         return modules.filter(function(row) {
             if (!matchesModuleGroup(row)) return false
             if (String(row.moduleFamilyKey || "") !== moduleFamilyKey) return false
-            if (!slotAllows(row)) return false
-            if (fitCurrentShip
+            if (!showIncompatibleVariants && !slotAllows(row)) return false
+            if (!showIncompatibleVariants && fitCurrentShip
                     && String(row.currentShipFitStatus || "UNKNOWN") === "INCOMPATIBLE") return false
             if (moduleClassFilter !== "ANY"
                     && String(row.moduleClass || "") !== moduleClassFilter) return false
@@ -197,6 +202,12 @@ Item {
             if (moduleMountFilter !== "ANY"
                     && String(row.mount || "") !== moduleMountFilter) return false
             return true
+        }).sort(function(a, b) {
+            var classDifference = Number(a.moduleClass || 0) - Number(b.moduleClass || 0)
+            if (classDifference) return classDifference
+            var ratingDifference = String(a.moduleRating || "").localeCompare(String(b.moduleRating || ""))
+            if (ratingDifference) return ratingDifference
+            return String(a.mount || "").localeCompare(String(b.mount || ""))
         })
     }
     function slotRows() {
@@ -221,6 +232,11 @@ Item {
     }
     function slotAllows(row) {
         if (!fitCurrentShip || !String(selectedSlot.slot || "")) return true
+        var evidence = row.currentShipSlotFits
+        if (evidence) {
+            var slotFit = evidence[String(selectedSlot.slot || "")]
+            return slotFit !== undefined && String(slotFit.status || "UNKNOWN") !== "INCOMPATIBLE"
+        }
         if (moduleGroup === "CORE"
                 && String(row.moduleCoreSlot || "") !== String(selectedSlot.slot || "")) return false
         var size = Number(row.moduleClass)
@@ -291,6 +307,7 @@ Item {
             Qt.callLater(function() { visualCatalog.positionViewAtBeginning() })
     }
     function runSearch() {
+        if (mode === "MODULES" && fitCurrentShip && selectedModuleFitStatus === "INCOMPATIBLE") return
         cockpit.searchShipyardOffers(
             mode, selectedSymbol, originSystem, rangeLy,
             padFilter, accessFilter, selectedItem)
@@ -552,6 +569,7 @@ Item {
                         ? appWindow.t("shipyard.searching", "SEARCHING…")
                         : appWindow.t("shipyard.find_offers", "FIND OFFERS")
                     selected: true; enabled: !cockpit.shipyardFinderBusy
+                        && !(finder.mode === "MODULES" && finder.fitCurrentShip && finder.selectedModuleFitStatus === "INCOMPATIBLE")
                     onClicked: finder.runSearch()
                 }
             }
@@ -587,7 +605,7 @@ Item {
                         color: textPrimary; font.pixelSize: 12; font.bold: true
                     }
                     CheckBox {
-                        text: "Follow current ship"
+                        text: appWindow.t("shipyard.follow_current", "Follow current ship")
                         checked: finder.fitCurrentShip
                         onToggled: {
                             finder.fitCurrentShip = checked
@@ -696,7 +714,7 @@ Item {
                                             }
                                             Label {
                                                 Layout.fillWidth: true
-                                                text: "CLASS " + String(slotControl.modelData.slotBadge || "—")
+                                                text: appWindow.tf("shipyard.slot_class", "CLASS %1", [String(slotControl.modelData.slotBadge || "—")])
                                                 color: textSecondary; font.pixelSize: 10; elide: Text.ElideRight
                                             }
                                         }
@@ -763,11 +781,11 @@ Item {
                                 Label {
                                     Layout.fillWidth: true
                                     visible: String(finder.selectedSlot.slot || "") !== ""
-                                    text: "INSTALLED: " + (finder.selectedSlot.empty ? "EMPTY"
+                                    text: appWindow.t("shipyard.installed_prefix", "INSTALLED: ") + (finder.selectedSlot.empty ? "EMPTY"
                                         : String(finder.selectedSlot.sizeRating || "") + " "
                                           + String(finder.selectedSlot.module || "UNKNOWN"))
                                         + (finder.selectedSlot.engineered ? " · ENGINEERED (CURRENT ONLY)" : "")
-                                        + " · SIZE FIT ONLY"
+                                        + " · CHECK RESULTS IN COMPARISON"
                                         + (finder.selectedSlot.restriction ? " · " + finder.selectedSlot.restriction : "")
                                     color: green; font.pixelSize: 9; wrapMode: Text.WordWrap
                                 }
@@ -802,6 +820,12 @@ Item {
                                     moduleVariantGrid.positionViewAtBeginning()
                                 }
                             }
+                        }
+                        CheckBox {
+                            visible: finder.moduleFamilyKey !== "" && finder.fitCurrentShip
+                            text: appWindow.t("shipyard.compare_all", "COMPARE ALL CLASSES · SHOW INCOMPATIBLE")
+                            checked: finder.showIncompatibleVariants
+                            onToggled: finder.showIncompatibleVariants = checked
                         }
                         GridView {
                             id: moduleFamilyGrid
@@ -883,31 +907,43 @@ Item {
                             visible: finder.moduleFamilyKey === ""
                                 && (!finder.fitCurrentShip || !finder.currentShipFitKnown
                                     || String(finder.selectedSlot.slot || "") === "")
-                            text: "SELECT A MODULE TYPE OR SLOT ON THE LEFT\nThen choose class, rating and mount.\nOr use the module search above."
+                            text: appWindow.t("shipyard.compare_hint", "SELECT A MODULE TYPE OR SLOT ON THE LEFT\nThen choose class, rating and mount.\nOr use the module search above.")
                             color: textSecondary; font.pixelSize: 13
                             horizontalAlignment: Text.AlignHCenter
                             verticalAlignment: Text.AlignVCenter
                             wrapMode: Text.WordWrap
                         }
-                        GridView {
+                        ListView {
                             id: moduleVariantGrid
+                            objectName: "qa-module-comparison-list"
                             visible: finder.moduleFamilyKey !== ""
                             Layout.fillWidth: true; Layout.fillHeight: true
                             clip: true; boundsBehavior: Flickable.StopAtBounds
-                            cellWidth: Math.max(168, width / 6)
-                            cellHeight: 94
+                            spacing: 6
+                            header: RowLayout {
+                                width: moduleVariantGrid.width; height: 30; spacing: 8
+                                Label { Layout.preferredWidth: 60; text: appWindow.t("shipyard.compare_class", "CLASS"); color: muted; font.pixelSize: 9 }
+                                Label { Layout.fillWidth: true; text: appWindow.t("shipyard.compare_module", "MODULE / MOUNT / ACQUISITION"); color: muted; font.pixelSize: 9 }
+                                Label { Layout.preferredWidth: 150; text: appWindow.t("shipyard.compare_fit", "INSTALLATION CHECK"); color: muted; font.pixelSize: 9 }
+                                Label { Layout.preferredWidth: 120; text: appWindow.t("shipyard.compare_reference", "REFERENCE · NOT STATION"); color: muted; font.pixelSize: 9; wrapMode: Text.WordWrap }
+                            }
                             model: finder.moduleVariantRows()
                             ScrollBar.vertical: CockpitScrollBar {}
                             delegate: Rectangle {
+                                objectName: "qa-module-comparison-row"
+                                id: variantRow
                                 required property var modelData
-                                width: moduleVariantGrid.cellWidth - 8
-                                height: moduleVariantGrid.cellHeight - 7
+                                readonly property var slotEvidence: finder.fitCurrentShip && finder.selectedSlot.slot
+                                    ? (modelData.currentShipSlotFits || ({}))[String(finder.selectedSlot.slot)] : null
+                                width: moduleVariantGrid.width - 12
+                                height: 82
                                 radius: 8; color: panelRaised
                                 border.width: String(modelData.symbol || "") === finder.selectedSymbol ? 2 : 1
                                 border.color: String(modelData.symbol || "") === finder.selectedSymbol
                                               ? orange : variantMouse.containsMouse ? cyan : borderTone
                                 ToolTip.visible: variantMouse.containsMouse
-                                ToolTip.text: String(modelData.currentShipFitReason || "")
+                                ToolTip.text: String(variantRow.slotEvidence ? variantRow.slotEvidence.reason : modelData.currentShipFitReason || "")
+                                    + "\n" + String(variantRow.slotEvidence ? variantRow.slotEvidence.powerWarning : modelData.powerWarning || "Power budget not verified")
                                     + "\n" + String(modelData.purchaseReason || "Acquisition unknown")
                                 RowLayout {
                                     anchors.fill: parent; anchors.margins: 8; spacing: 8
@@ -926,7 +962,7 @@ Item {
                                         Label {
                                             Layout.fillWidth: true
                                             text: String(modelData.displayName || modelData.symbol || "")
-                                            color: textPrimary; font.pixelSize: 9; font.bold: true
+                                            color: textPrimary; font.pixelSize: 11; font.bold: true
                                             elide: Text.ElideRight
                                         }
                                         Label {
@@ -942,6 +978,26 @@ Item {
                                             color: finder.purchaseColor(modelData); font.pixelSize: 8
                                             elide: Text.ElideRight
                                         }
+                                    }
+                                    ColumnLayout {
+                                        Layout.preferredWidth: 150; spacing: 4
+                                        readonly property var fitEvidence: variantRow.slotEvidence
+                                        readonly property string fitStatus: !finder.fitCurrentShip ? "NOT CHECKED"
+                                            : String(fitEvidence ? fitEvidence.status : modelData.currentShipFitStatus || "UNKNOWN")
+                                        Label {
+                                            Layout.fillWidth: true
+                                            text: parent.fitStatus === "FITS" ? appWindow.t("shipyard.fit_yes", "FITS SLOT") : parent.fitStatus === "INCOMPATIBLE" ? appWindow.t("shipyard.fit_no", "DOES NOT FIT") : appWindow.t("shipyard.fit_unknown", "NOT VERIFIED")
+                                            color: parent.fitStatus === "FITS" ? (appWindow.green || "#69e1b5") : parent.fitStatus === "INCOMPATIBLE" ? (appWindow.red || "#ff586f") : orange
+                                            font.pixelSize: 10; font.bold: true; elide: Text.ElideRight
+                                        }
+                                        Label { Layout.fillWidth: true; text: appWindow.t("shipyard.compare_power", "POWER · SEE DETAILS"); color: muted; font.pixelSize: 8 }
+                                    }
+                                    Label {
+                                        Layout.preferredWidth: 120
+                                        text: modelData.referencePrice !== undefined && modelData.referencePrice !== null && Number(modelData.referencePrice) >= 0
+                                            ? finder.formatNumber(modelData.referencePrice) + " CR" : "PRICE UNKNOWN"
+                                        color: modelData.referencePrice !== undefined && modelData.referencePrice !== null ? orange : muted
+                                        font.pixelSize: 11; elide: Text.ElideRight
                                     }
                                 }
                                 MouseArea {

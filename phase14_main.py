@@ -378,6 +378,7 @@ class SmokeTestRunner(QObject):
         ("missions", 14, "qa-page-missions"),
         ("nav", 15, "qa-page-nav"),
         ("exploration", 16, "qa-page-exploration"),
+        ("shipyard", 17, "qa-page-shipyard"),
     ]
     DIALOG_STEPS = [
         ("dialog-build-import", "qa-dialog-build-import"),
@@ -411,6 +412,7 @@ class SmokeTestRunner(QObject):
         for label, page, object_name in self.PAGE_STEPS:
             self.steps.append((label, lambda p=page, n=object_name: self._page(p, n)))
         self.steps.extend([
+            ("shipyard-module-comparison", self._module_comparison),
             ("materials-farm-missing", self._materials_state),
             ("engineers-unlock-guide", lambda: self._engineer_state(True, False)),
             ("engineers-tech-brokers", lambda: self._engineer_state(False, True)),
@@ -428,6 +430,24 @@ class SmokeTestRunner(QObject):
 
     def _find(self, object_name):
         return self.window.findChild(QObject, object_name)
+
+    def _module_comparison(self):
+        self.window.setProperty("currentPage", 17)
+        page = self._find("qa-page-shipyard")
+        if not page:
+            return False
+        page.setProperty("fitCurrentShip", False)
+        page.setProperty("moduleGroup", "CORE")
+        page.setProperty("moduleFamilyKey", "frame-shift-drive")
+        comparison = self._find("qa-module-comparison-list")
+        row = comparison.property("currentItem") if comparison else None
+        ready = bool(comparison and row and int(comparison.property("count") or 0) > 0
+                     and float(row.property("width")) > 0
+                     and float(row.property("width")) <= float(comparison.property("width")))
+        screenshot = os.environ.get("PHASE14_MODULE_SCREENSHOT")
+        if ready and screenshot and not self.window.grabWindow().save(screenshot):
+            raise RuntimeError("Module comparison screenshot failed")
+        return ready
 
     def _page(self, page, object_name):
         self.window.setProperty("currentPage", page)
