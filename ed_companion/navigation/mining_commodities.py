@@ -105,6 +105,24 @@ _ROWS = (
 )
 
 MINING_COMMODITIES = {row["id"]: row for row in _ROWS}
+
+# The combined commodity ring list is not a per-method availability matrix.
+MINING_COMMODITIES["platinum"]["ringTypesByMethod"] = {
+    LASER: ("Metallic",), SUBSURFACE: ("Metallic",), CORE: ("Metal Rich",),
+}
+
+
+def mining_ring_types_for_method(commodity: Any, method: str) -> tuple[str, ...]:
+    selected = MINING_COMMODITIES.get(mining_commodity_id(commodity), {})
+    return tuple(selected.get("ringTypesByMethod", {}).get(
+        str(method or "").upper(), selected.get("ringTypes", ()),
+    ))
+
+
+def mining_ring_type_key(value: Any) -> str:
+    key = re.sub(r"[^a-z]", "", str(value or "").casefold())
+    key = key.removeprefix("eringclass")
+    return "metallic" if key == "metalic" else key
 _ALIASES = {
     "voidopal": "opal", "voidopals": "opal",
     "lowtemperaturediamonds": "lowtemperaturediamond",

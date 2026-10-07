@@ -203,11 +203,11 @@ class QmlInteractionContractTests(unittest.TestCase):
                 )
                 if f"id: {control_id}" in block
             )
-            self.assertRegex(
-                block,
-                rf"onActivated:\s*(?:\{{\s*)?miningFinderPage\."
-                rf"{target}\s*=\s*currentText",
+            action = (
+                r"selectOptimization\(currentText\)"
+                if target == "optimization" else rf"{target}\s*=\s*currentText"
             )
+            self.assertRegex(block, rf"onActivated:\s*(?:\{{\s*)?miningFinderPage\.{action}")
             self.assertNotIn("onCurrentTextChanged:", block)
 
     def test_mining_alternatives_reuse_scroll_delegates(self):

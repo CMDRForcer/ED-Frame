@@ -1,4 +1,5 @@
 import unittest
+from pathlib import Path
 
 from ed_companion.integrations.eddn import supports_event
 from ed_companion.navigation.mining_contract import (
@@ -12,6 +13,18 @@ from ed_companion.navigation.mining_contract import (
 
 
 class MiningFinderContractTests(unittest.TestCase):
+    def test_market_status_keeps_complete_conditional_binding(self):
+        source = (Path(__file__).resolve().parents[1] / 'qml/pages/MiningFinderPage.qml').read_text(encoding='utf-8')
+        self.assertRegex(source, r'text: cockpit\.miningMarketSyncBusy\s+\? appWindow\.t\("mining\.market_checking"')
+
+    def test_search_modes_keep_region_filters_without_quick_search_bar(self):
+        source = (Path(__file__).resolve().parents[1] / 'qml/pages/MiningFinderPage.qml').read_text(encoding='utf-8')
+        self.assertNotIn('objectName: "qa-mining-quick-search"', source)
+        self.assertIn('"MEASURED PLATINUM", "PLATINUM + RES"', source)
+        preset = source.split('function selectOptimization(value) {', 1)[1].split('function resetForMethod', 1)[0]
+        for retained in ('nearbyLy', 'startSystem', 'minDemand', 'powerOverride'):
+            self.assertNotIn(retained + ' =', preset)
+
     def test_evidence_levels_do_not_claim_guaranteed_yield(self):
         self.assertEqual(MINING_EVIDENCE_LEVELS, (
             "LOCAL_CONFIRMED", "LIVE_REPORTED", "CATALOG_CANDIDATE",

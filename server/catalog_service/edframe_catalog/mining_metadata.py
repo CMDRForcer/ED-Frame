@@ -1,6 +1,16 @@
 """Join ring metadata without changing ring/planet IDs or sample ownership."""
 
 
+def canonical_metadata(value, column):
+    text = str(value or '').strip()
+    key = text.casefold().replace(' ', '').replace('eringclass_', '').replace('resources', '')
+    names = ({'metalic': 'Metallic', 'metallic': 'Metallic', 'metalrich': 'Metal Rich',
+              'rocky': 'Rocky', 'icy': 'Icy'} if column == 'ring_type' else
+             {'pristine': 'Pristine', 'major': 'Major', 'common': 'Common',
+              'low': 'Low', 'depleted': 'Depleted'})
+    return names.get(key, text)
+
+
 def enrich_ring_metadata(conn, rows):
     pending = [row for row in rows if row.get("system") and row.get("ring")
                and (not row.get("ringType") or not row.get("reserveLevel"))]
@@ -13,7 +23,11 @@ def enrich_ring_metadata(conn, rows):
            FROM mining_sites
            WHERE LOWER(system_name) = ANY(%s)
              AND (COALESCE(ring_type, '') <> ''
-                  OR COALESCE(reserve_level, '') <> '')""", (names,),
+                  OR COALESCE(reserve_level, '') <> '')
+           UNION ALL
+           SELECT system_address, system_name, ring_name, ring_type,
+                  reserve_level, source, observed_at
+           FROM ring_reference_metadata WHERE LOWER(system_name) = ANY(%s)""", (names, names),
     ).fetchall()
     by_ring = {}
     for item in metadata:
@@ -29,7 +43,7 @@ def enrich_ring_metadata(conn, rows):
         for output, column in (("ringType", "ring_type"), ("reserveLevel", "reserve_level")):
             if row.get(output):
                 continue
-            values = {item[column] for item in candidates if item.get(column)}
+            values = {canonical_metadata(item[column], column) for item in candidates if item.get(column)}
             # Conflicting observations are not silently resolved by fetch time.
             if len(values) != 1:
                 continue
@@ -37,5 +51,5 @@ def enrich_ring_metadata(conn, rows):
             row.setdefault("ringMetadataEvidence", []).extend(
                 {"field": output, "source": item.get("source"),
                  "observedAt": item.get("observed_at")}
-                for item in candidates if item.get(column) == row[output])
+                for item in candidates if canonical_metadata(item.get(column), column) == row[output])
     return rows

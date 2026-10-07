@@ -1,4 +1,6 @@
 {
+  "mining.quick_search": "BÚSQUEDA RÁPIDA",
+  "mining.quick_search_help": "Inicia una búsqueda de platino con láser usando tu sistema, radio y filtros de mercado actuales.",
   "mining.optimize_measured": "PLATINO MEDIDO",
   "mining.optimize_overlap": "PLATINO + RES",
   "mining.overlap_level": "NIVEL RES · COMUNIDAD / FECHA DE VERIFICACIÓN DESCONOCIDA",

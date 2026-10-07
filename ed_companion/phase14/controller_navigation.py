@@ -133,6 +133,7 @@ from ed_companion.navigation.mining_finder import (
     send_edframe_yield_observations,
     yield_observation_key,
 )
+from ed_companion.navigation.mining_commodities import mining_ring_types_for_method, mining_ring_type_key
 from ed_companion.navigation.mining_commodities import (
     MINING_COMMODITIES,
     RHINO_SURFACE,
@@ -1793,6 +1794,14 @@ class NavigationMixin:
                 (target_stat or {}).get("refinedCount", 0) or 0
             )
             local_positive = local_hits > 0 or local_refined > 0
+            if selected and method and method != RHINO_SURFACE:
+                known_ring = mining_ring_type_key(source_row.get("ringType") or source_row.get("ringTypeName"))
+                allowed_rings = {
+                    mining_ring_type_key(value)
+                    for value in mining_ring_types_for_method(commodity_id, method)
+                }
+                if known_ring and known_ring != "unknown" and allowed_rings and known_ring not in allowed_rings:
+                    continue
             community_overlap = bool(selected and method in selected.get("methods", ())) and any(
                 isinstance(report, dict) and report.get("commodity") == commodity_id
                 and report.get("reportedResTypes")
@@ -1818,9 +1827,9 @@ class NavigationMixin:
                         and method in selected.get("methods", ())
                     ):
                         continue
-                    ring_type = normalize(source_row.get("ringTypeName"))
+                    ring_type = mining_ring_type_key(source_row.get("ringType") or source_row.get("ringTypeName"))
                     eligible = {
-                        normalize(value) for value in selected.get("ringTypes", ())
+                        mining_ring_type_key(value) for value in mining_ring_types_for_method(commodity_id, method)
                     }
                     if not ring_type or ring_type not in eligible:
                         continue
@@ -1860,18 +1869,25 @@ class NavigationMixin:
                         for value in catalog_row.get("methods", ())
                     }
                     ring_types = {
-                        normalize(value)
-                        for value in catalog_row.get("ringTypes", ())
+                        mining_ring_type_key(value)
+                        for value in mining_ring_types_for_method(catalog_row.get("id"), method)
                     }
                     if method and method not in methods:
                         continue
-                    if ring_types and ring_type not in ring_types:
+                    if ring_types and mining_ring_type_key(row.get("ringType") or row.get("ringTypeName")) not in ring_types:
                         continue
                     identifier = mining_commodity_id(catalog_row.get("id"))
                     if identifier:
                         commodity_evidence[identifier] = min(
                             commodity_evidence.get(identifier, 9), 2,
                         )
+                known_ring = mining_ring_type_key(row.get("ringType") or row.get("ringTypeName"))
+                if known_ring and known_ring != "unknown" and method != RHINO_SURFACE:
+                    commodity_evidence = {
+                        identifier: rank for identifier, rank in commodity_evidence.items()
+                        if not mining_ring_types_for_method(identifier, method)
+                        or known_ring in {mining_ring_type_key(value) for value in mining_ring_types_for_method(identifier, method)}
+                    }
                 candidates = sorted(
                     commodity_evidence.items(),
                     key=lambda item: (
@@ -2081,7 +2097,7 @@ class NavigationMixin:
             return ["ANY RING"]
 
         selected = MINING_COMMODITIES.get(mining_commodity_id(commodity))
-        ring_types = selected.get("ringTypes", ()) if selected else ()
+        ring_types = mining_ring_types_for_method(commodity, method) if selected else ()
         result = []
         for value in ring_types:
             normalized = str(value or "").strip().upper()

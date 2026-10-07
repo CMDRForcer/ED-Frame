@@ -1,4 +1,6 @@
 {
+  "mining.quick_search": "QUICK SEARCH",
+  "mining.quick_search_help": "Starts a Platinum laser search using your current system, radius and market filters.",
   "mining.optimize_measured": "MEASURED PLATINUM",
   "mining.optimize_overlap": "PLATINUM + RES",
   "mining.overlap_level": "RES LEVEL · COMMUNITY / CHECK DATE UNKNOWN",

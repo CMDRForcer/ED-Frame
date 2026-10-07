@@ -2,6 +2,30 @@
 
 ## Unreleased
 
+## 1.5.38 — 2026-10-07
+
+### Added
+
+- Server-owned populated-system ring baseline: 303,447 attributed rings,
+  including 284,879 newly added records, without overwriting observations.
+- Paginated regional ring retrieval and compatible ring-type candidates;
+  community references no longer displace observed rings from the first page.
+
+### Fixed
+
+- Platinum ring eligibility follows the extraction method: Metallic for
+  laser/subsurface and Metal Rich for core, including enum spelling aliases.
+- Mining filter layout, empty-state placement and market status binding;
+  remove the quick-search bar while retaining all search modes.
+- Preserve ring metadata provenance and select API pages before calculating
+  Prospector statistics. BGS predictions remain unchanged.
+
+### Known limitation
+
+- The complete 250-LY first retrieval took about 3 minutes 42 seconds in the
+  live check. Performance work remains; broader searches have an explicit
+  50-page safety limit. Ring candidates are not confirmed yields or overlaps.
+
 ## 1.5.37 — 2026-10-07
 
 ### Added

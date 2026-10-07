@@ -6,6 +6,42 @@ from edframe_catalog.mining_overlaps import (
 
 
 class MiningOverlapTests(unittest.TestCase):
+    def test_paginated_sites_have_stable_order_and_next_offset(self):
+        from edframe_catalog.api import search_sites
+        connection = MagicMock()
+        conn = connection.return_value.__enter__.return_value
+        conn.execute.return_value.fetchall.return_value = [
+            {'system': 'Test', 'ring': 'Test A Ring', 'ringType': 'Metallic', 'reserveLevel': 'Pristine'},
+            {'system': 'Test', 'ring': 'Test B Ring', 'ringType': 'Metallic', 'reserveLevel': 'Pristine'},
+            {'system': 'Test', 'ring': 'Test C Ring', 'ringType': 'Metallic', 'reserveLevel': 'Pristine'},
+        ]
+        with patch('edframe_catalog.api.connection', connection):
+            result = search_sites(system='Test', limit=2, offset=200)
+        query, values = conn.execute.call_args.args
+        self.assertIn('ORDER BY ms.observed_at DESC, ms.identity', query)
+        self.assertIn('selected_sites AS MATERIALIZED', query)
+        self.assertLess(query.index('LIMIT %s OFFSET %s'), query.index('LEFT JOIN LATERAL'))
+        self.assertEqual(values[-2:], [3, 200])
+        self.assertEqual(len(result['results']), 2)
+        self.assertTrue(result['hasMore'])
+        self.assertEqual(result['nextOffset'], 202)
+
+    def test_ring_candidates_and_community_parameters_stay_in_sql_order(self):
+        from edframe_catalog.api import search_sites
+        connection = MagicMock()
+        conn = connection.return_value.__enter__.return_value
+        conn.execute.return_value.fetchall.side_effect = [
+            [{'identity': 'site', 'system': 'Dubbuennel', 'ring': 'Dubbuennel 3 A Ring'}], [], [],
+        ]
+        with patch('edframe_catalog.api.connection', connection):
+            search_sites(commodity='platinum', system='Dubbuennel',
+                         include_ring_candidates=True, include_community_overlaps=True, limit=20)
+        query, parameters = conn.execute.call_args_list[1].args
+        self.assertEqual(query.count('%s'), len(parameters))
+        self.assertIn('Metallic', parameters[3])
+        self.assertEqual(parameters[5], ['site'])
+        self.assertEqual(parameters[6:], ['Dubbuennel', 20, 0])
+
     def test_community_search_keeps_sql_parameters_in_order(self):
         from edframe_catalog.api import search_sites
         connection = MagicMock()
@@ -21,7 +57,7 @@ class MiningOverlapTests(unittest.TestCase):
                                   include_community_overlaps=True, limit=20)
         query, parameters = conn.execute.call_args_list[1].args
         self.assertEqual(query.count('%s'), len(parameters))
-        self.assertEqual(parameters, [365, 'platinum', 'platinum', ['site'], 'Dubbuennel', 20])
+        self.assertEqual(parameters, [365, 'platinum', 'platinum', ['site'], 'Dubbuennel', 20, 0])
         self.assertTrue(result['results'][0]['communityOverlapReports'])
 
     def test_position_anchors_reference_without_inventing_ring_metadata(self):

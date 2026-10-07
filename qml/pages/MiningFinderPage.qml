@@ -3,7 +3,6 @@ import "../components/UiMetrics.js" as UiMetrics
 import QtQuick.Controls
 import QtQuick.Layouts
 import "../components"
-
 Item {
     id: miningFinderPage
     required property var appWindow
@@ -456,6 +455,15 @@ Item {
         startSystemField.cursorPosition = selected.length
         startSystemField.forceActiveFocus()
     }
+    function selectOptimization(value) {
+        optimization = value
+        if (value === "MEASURED PLATINUM" || value === "PLATINUM + RES") {
+            commodityFilter = "Platinum"
+            miningMethod = "LASER"
+            resetRingFilter()
+            if (value === "PLATINUM + RES") requireHotspot = false
+        }
+    }
     function resetForMethod() {
         let rows = cockpit.miningCommodityFiltersForMethod(miningMethod)
         commodityFilter = rows.indexOf("Platinum") >= 0
@@ -726,20 +734,16 @@ Item {
         }
     }
 
+
     Rectangle {
         objectName: "qa-mining-config"
         Layout.fillWidth: true
         Layout.minimumWidth: 0
         Layout.maximumWidth: miningFinderPage.availableWorkspaceWidth
-        Layout.minimumHeight: miningFinderPage.searchGoalExpanded
-                              ? (miningFinderPage.compactFilters ? 540 : 340)
-                              : 48
+        Layout.minimumHeight: miningFinderPage.searchGoalExpanded ? 260 : 48
         Layout.preferredHeight: miningFinderPage.searchGoalExpanded
-                                ? (miningFinderPage.compactFilters ? 560 : 350)
-                                : 48
-        Layout.maximumHeight: miningFinderPage.searchGoalExpanded
-                              ? (miningFinderPage.compactFilters ? 580 : 350)
-                              : 48
+                                ? Math.min(miningFinderPage.height * 0.62, miningFilterContent.implicitHeight + 86) : 48
+        Layout.maximumHeight: Layout.preferredHeight
         radius: 12
         color: panelRaised
         border.width: 1
@@ -756,6 +760,7 @@ Item {
             contentWidth: availableWidth
             ScrollBar.horizontal.policy: ScrollBar.AlwaysOff
             ColumnLayout {
+            id: miningFilterContent
             width: miningFilterViewport.availableWidth
             spacing: 6
 
@@ -819,7 +824,8 @@ Item {
                 columnSpacing: 9
                 rowSpacing: 8
                 ColumnLayout {
-                    Layout.fillWidth: true; Layout.minimumWidth: 0; Layout.preferredWidth: 1; spacing: 4
+                Layout.alignment: Qt.AlignTop
+                Layout.fillWidth: true; Layout.minimumWidth: 0; Layout.preferredWidth: 1; spacing: 4
                     Label { text: appWindow.t("mining.start_system", "START SYSTEM"); color: muted; font.pixelSize: UiMetrics.caption; font.bold: true }
                     TextField {
                         id: startSystemField
@@ -972,13 +978,7 @@ Item {
                         model: ["POWERPLAY MERITS", "BEST YIELD", "MEASURED PLATINUM", "PLATINUM + RES", "HIGHEST PROFIT", "SHORTEST ROUTE"]
                         currentIndex: model.indexOf(miningFinderPage.optimization)
                         onActivated: {
-                            miningFinderPage.optimization = currentText
-                            if (currentText === "MEASURED PLATINUM" || currentText === "PLATINUM + RES") {
-                                miningFinderPage.commodityFilter = "Platinum"
-                                miningFinderPage.miningMethod = "LASER"
-                                miningFinderPage.resetRingFilter()
-                                if (currentText === "PLATINUM + RES") miningFinderPage.requireHotspot = false
-                            }
+                            miningFinderPage.selectOptimization(currentText)
                         }
                     }
                     Label {
@@ -1240,6 +1240,7 @@ Item {
         Label { Layout.minimumWidth: 0; text: appWindow.t("mining.ring_sources", "RINGS · JOURNAL + EDDN + SPANSH"); color: muted; font.pixelSize: UiMetrics.caption; elide: Text.ElideRight }
         Label {
             Layout.minimumWidth: 0
+            Layout.fillWidth: true
             text: cockpit.miningMarketSyncBusy
                   ? appWindow.t("mining.market_checking", "CHECKING EDDN MARKET DATA…")
                   : (miningFinderPage.searchRevision > 0
@@ -1276,7 +1277,6 @@ Item {
             ToolTip.text: cockpit.miningVerificationStatus
             HoverHandler { id: verificationStatusHover }
         }
-        Item { Layout.fillWidth: true }
         Label { text: readiness.ready ? "✓ " + appWindow.t("mining.loadout_ready", "LOADOUT READY") : "! " + appWindow.t("mining.loadout_incomplete", "LOADOUT INCOMPLETE"); color: readiness.ready ? green : orange; font.pixelSize: UiMetrics.caption; font.bold: true }
         Button {
             id: refreshMiningButton
@@ -1486,14 +1486,15 @@ Item {
     Item {
         objectName: "qa-mining-empty"
         Layout.fillWidth: true
-        Layout.minimumHeight: 180
-        Layout.preferredHeight: 200
-        Layout.maximumHeight: 220
+        Layout.minimumHeight: 160
+        Layout.fillHeight: true
         visible: resultRows.length === 0 || marketQueryPending
 
         EmptyState {
             width: Math.min(parent.width, 720)
-            anchors.centerIn: parent
+            anchors.horizontalCenter: parent.horizontalCenter
+            anchors.top: parent.top
+            anchors.topMargin: 20
             symbol: "◇"
             title: marketQueryPending
                    ? (!Boolean(marketDiagnostics.originKnown)

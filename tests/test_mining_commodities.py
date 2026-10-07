@@ -98,8 +98,9 @@ class MiningCommodityCatalogTests(unittest.TestCase):
 
         self.assertEqual(
             controller.miningRingFiltersForCommodity("Platinum", "LASER"),
-            ["METAL RICH", "METALLIC", "ANY RING"],
+            ["METALLIC", "ANY RING"],
         )
+        self.assertEqual(controller.miningRingFiltersForCommodity("Platinum", "CORE"), ["METAL RICH", "ANY RING"])
         self.assertEqual(
             controller.miningRingFiltersForCommodity("Tritium", "LASER"),
             ["ICY", "ANY RING"],

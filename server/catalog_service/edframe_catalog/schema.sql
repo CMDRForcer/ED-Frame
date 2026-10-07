@@ -248,6 +248,21 @@ CREATE TABLE IF NOT EXISTS mining_sites (
     received_at TIMESTAMPTZ NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS ring_reference_metadata (
+    system_name TEXT NOT NULL,
+    ring_name TEXT NOT NULL,
+    system_address BIGINT NOT NULL,
+    ring_type TEXT,
+    reserve_level TEXT,
+    source TEXT NOT NULL,
+    observed_at TIMESTAMPTZ NOT NULL,
+    provenance JSONB NOT NULL,
+    ring_snapshot JSONB NOT NULL,
+    PRIMARY KEY (system_name, ring_name)
+);
+CREATE INDEX IF NOT EXISTS ring_reference_system_idx
+    ON ring_reference_metadata (LOWER(system_name));
+
 CREATE INDEX IF NOT EXISTS mining_sites_observed_idx
     ON mining_sites (observed_at DESC);
 CREATE INDEX IF NOT EXISTS mining_sites_system_idx

@@ -11,6 +11,7 @@ from typing import Annotated
 
 from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.responses import ORJSONResponse
+from ed_companion.navigation.mining_commodities import MINING_COMMODITIES, mining_commodity_id
 
 from . import __version__
 from .mining_metadata import enrich_ring_metadata
@@ -1343,11 +1344,14 @@ def search_sites(
     y: float | None = None,
     z: float | None = None,
     max_distance: Annotated[float | None, Query(gt=0, le=2000)] = None,
-    limit: Annotated[int, Query(ge=1, le=200)] = 100,
+    limit: Annotated[int, Query(ge=1, le=1000)] = 100,
     include_community_overlaps: bool = False,
+    include_ring_candidates: bool = False,
+    offset: Annotated[int | None, Query(ge=0, le=100000)] = None,
 ) -> dict:
     clauses = ["ms.observed_at >= NOW() - (%s * INTERVAL '1 day')"]
     values: list[object] = [max_age_days]
+    ring_types = []
     if commodity:
         clauses.append(
             "(EXISTS (SELECT 1 FROM jsonb_array_elements(ms.hotspots) h "
@@ -1360,6 +1364,19 @@ def search_sites(
         )
         values.append(commodity.strip())
         values.append(commodity.strip())
+        if include_ring_candidates:
+            ring_types = list(MINING_COMMODITIES.get(mining_commodity_id(commodity), {}).get('ringTypes', ()))
+            if ring_types:
+                aliases = ring_types + ['eRingClass_' + value.replace(' ', '') for value in ring_types]
+                if 'Metallic' in ring_types:
+                    aliases.append('eRingClass_Metalic')
+                clauses[1] = '(' + clauses[1] + " OR (LOWER(ms.ring_name) LIKE '%% ring' AND (ms.ring_type = ANY(%s) OR EXISTS (" \
+                    'SELECT 1 FROM ring_reference_metadata rm WHERE ' \
+                    'LOWER(rm.system_name)=LOWER(ms.system_name) AND ' \
+                    'LOWER(rm.ring_name)=LOWER(ms.ring_name) AND ' \
+                    '(ms.system_address IS NULL OR rm.system_address=ms.system_address) ' \
+                    'AND rm.ring_type = ANY(%s)))))'
+                values.extend((aliases, ring_types))
     if system:
         clauses.append("LOWER(ms.system_name) = LOWER(%s)")
         values.append(system.strip())
@@ -1369,15 +1386,22 @@ def search_sites(
             "POWER(ms.z - %s, 2) <= POWER(%s, 2)"
         )
         values.extend((x, y, z, max_distance))
-    values.append(limit)
+    values.append(limit + 1 if offset is not None else limit)
+    values.append(offset or 0)
     with connection() as conn:
         if commodity and include_community_overlaps:
             identities = overlap_site_identities(conn, commodity.strip().casefold())
             if identities:
                 clauses[1] = '(' + clauses[1] + ' OR ms.identity = ANY(%s))'
-                values.insert(3, identities)
+                values.insert(5 if ring_types else 3, identities)
         rows = conn.execute(
             f"""
+            WITH selected_sites AS MATERIALIZED (
+                SELECT * FROM mining_sites ms
+                WHERE {' AND '.join(clauses)}
+                ORDER BY ms.observed_at DESC, ms.identity
+                LIMIT %s OFFSET %s
+            )
             SELECT ms.system_address AS "systemAddress",
                    ms.system_name AS system, ms.x, ms.y, ms.z,
                    ms.body_id AS "bodyId", ms.body_name AS body,
@@ -1390,7 +1414,7 @@ def search_sites(
                    COALESCE(yield_data.sample_count, 0)
                        AS "prospectorSampleCount",
                    COALESCE(yield_data.stats, '[]'::jsonb) AS "yieldStats"
-            FROM mining_sites ms
+            FROM selected_sites ms
             LEFT JOIN LATERAL (
                 SELECT (
                            SELECT COUNT(*)
@@ -1423,15 +1447,15 @@ def search_sites(
                          ) grouped
                        ) AS stats
             ) yield_data ON TRUE
-            WHERE {' AND '.join(clauses)}
-            ORDER BY ms.observed_at DESC
-            LIMIT %s
+            ORDER BY ms.observed_at DESC, ms.identity
             """,
             values,
         ).fetchall()
-        rows = enrich_ring_metadata(conn, rows)
+        has_more = offset is not None and len(rows) > limit
+        rows = enrich_ring_metadata(conn, rows[:limit])
         rows = attach_overlap_reports(rows)
-        if include_community_overlaps:
+        references = []
+        if include_community_overlaps and not offset:
             references = community_reference_candidates(
                 conn, rows, commodity=commodity, system=system,
                 origin=(x, y, z) if all(v is not None for v in (x, y, z)) else None,
@@ -1439,8 +1463,12 @@ def search_sites(
             )
             # The explicit community opt-in must not starve missing references
             # behind a full page of ordinary observations. Keep the total bounded.
-            rows = references + rows[:max(0, limit - len(references))]
-    return {"generatedAt": _now(), "results": rows}
+            if offset is None:
+                rows = references + rows[:max(0, limit - len(references))]
+    return {"generatedAt": _now(), "results": rows,
+            "communityReferences": references if offset is not None else [],
+            "hasMore": has_more,
+            "nextOffset": (offset or 0) + limit if has_more else None}
 
 
 @app.get("/v1/mining/overlaps")

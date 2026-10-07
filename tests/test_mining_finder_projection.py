@@ -1059,9 +1059,10 @@ class MiningFinderProjectionTests(unittest.TestCase):
             "Cubeo", get, commodity="Platinum", origin=[0, 0, 0],
         ), [])
         self.assertEqual(calls[0][1]["params"], {
-            "system": "Cubeo", "limit": 200, "commodity": "platinum",
+            "system": "Cubeo", "limit": 200, "commodity": "platinum", "offset": 0,
             "max_age_days": 3650,
             "include_community_overlaps": True,
+            "include_ring_candidates": True,
         })
         self.assertNotIn("commander", json.dumps(calls).casefold())
 

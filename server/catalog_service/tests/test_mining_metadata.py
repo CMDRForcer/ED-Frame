@@ -34,3 +34,11 @@ class RingMetadataTests(unittest.TestCase):
         conn = MagicMock()
         enrich_ring_metadata(conn, [dict(system="HIP 1", ring="A", ringType="Metallic", reserveLevel="Pristine")])
         conn.execute.assert_not_called()
+
+    def test_dump_and_journal_enum_aliases_are_not_false_conflicts(self):
+        result = self.enrich(dict(system='HIP 1', ring='A'), [
+            dict(system_name='HIP 1', ring_name='A', ring_type='eRingClass_Metalic', reserve_level='PristineResources'),
+            dict(system_name='HIP 1', ring_name='A', ring_type='Metallic', reserve_level='Pristine'),
+        ])
+        self.assertEqual(result['ringType'], 'Metallic')
+        self.assertEqual(result['reserveLevel'], 'Pristine')

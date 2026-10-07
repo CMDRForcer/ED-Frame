@@ -1392,7 +1392,10 @@ class MiningFinderUiContractTests(unittest.TestCase):
         )
         self.assertNotIn('availableWorkspaceWidth, 1580', qml)
         self.assertIn('anchors.fill: parent', qml)
-        self.assertIn('Layout.maximumHeight: 220', qml)
+        empty = qml.split('objectName: "qa-mining-empty"', 1)[1].split('ColumnLayout {', 1)[0]
+        self.assertIn('Layout.fillHeight: true', empty)
+        self.assertIn('anchors.top: parent.top', empty)
+        self.assertIn('anchors.topMargin: 20', empty)
         self.assertIn('Layout.preferredHeight: childrenRect.height', qml)
         self.assertIn('appWindow.t("mining.landing_pad", "LANDING PAD")', qml)
         self.assertIn(

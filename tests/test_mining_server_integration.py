@@ -76,8 +76,9 @@ class MiningServerIntegrationTests(unittest.TestCase):
         ), [])
         self.assertEqual(calls[0]["params"], {
             "x": 1.0, "y": 2.0, "z": 3.0, "max_distance": 100.0,
-            "max_age_days": 3650, "commodity": "platinum", "limit": 200,
+            "max_age_days": 3650, "commodity": "platinum", "limit": 1000, "offset": 0,
             "include_community_overlaps": True,
+            "include_ring_candidates": True,
         })
 
     def test_regional_ring_query_rejects_missing_position(self):

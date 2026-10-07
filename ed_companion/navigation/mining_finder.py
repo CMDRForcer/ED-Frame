@@ -124,29 +124,45 @@ def fetch_edframe_mining_candidates(
     requested = _text(system)
     if not requested:
         raise ValueError("A system name is required")
-    params: dict[str, Any] = {"system": requested, "limit": 200}
+    params: dict[str, Any] = {"system": requested, "limit": 200, "offset": 0}
     # Physical rings do not disappear when observations become old. Freshness
     # is assessed from observedAt downstream, never from the retrieval time.
     params["max_age_days"] = 3650
     params["include_community_overlaps"] = True
+    params["include_ring_candidates"] = True
     coordinates = _coordinates(origin)
     if max_distance is not None:
         if not coordinates or not 0 < float(max_distance) <= 2000:
             raise ValueError("Regional mining search requires coordinates and radius")
         params.pop("system")
+        params["limit"] = 1000
         params.update(dict(zip(("x", "y", "z"), coordinates)))
         params["max_distance"] = float(max_distance)
     commodity_id = mining_commodity_id(commodity)
     if commodity_id and commodity_id != "allcommodities":
         params["commodity"] = commodity_id
-    response = get(EDFRAME_CATALOG_SITES_URL, params=params, timeout=timeout)
-    response.raise_for_status()
-    payload = response.json()
-    candidates = project_edframe_mining_candidates(payload, origin)
+    candidates = []
+    bounded = False
+    for page in range(50):
+        response = get(EDFRAME_CATALOG_SITES_URL, params=dict(params), timeout=timeout)
+        response.raise_for_status()
+        payload = response.json()
+        candidates.extend(project_edframe_mining_candidates(payload, origin))
+        references = payload.get("communityReferences", [])
+        if page == 0 and references:
+            candidates.extend(project_edframe_mining_candidates({"results": references}, origin))
+        if not payload.get("hasMore"):
+            # Older servers cannot paginate: expose that limit, never pretend complete.
+            bounded = "hasMore" not in payload and len(payload["results"]) >= params["limit"]
+            break
+        next_offset = payload.get("nextOffset")
+        if not isinstance(next_offset, int) or isinstance(next_offset, bool) or next_offset <= params["offset"]:
+            raise ValueError("ED-Frame mining catalog returned an invalid page cursor")
+        params["offset"] = next_offset
+        bounded = True
+    candidates = merge_mining_candidates(candidates)
     if diagnostics is not None:
-        diagnostics.update({"count": len(candidates), "bounded": bool(
-            payload.get("hasMore") or len(payload["results"]) >= 200
-        )})
+        diagnostics.update({"count": len(candidates), "bounded": bounded, "pages": page + 1})
     return candidates
 
 
