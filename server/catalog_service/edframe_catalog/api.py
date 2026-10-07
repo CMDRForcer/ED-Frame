@@ -1348,6 +1348,7 @@ def search_sites(
     include_community_overlaps: bool = False,
     include_ring_candidates: bool = False,
     offset: Annotated[int | None, Query(ge=0, le=100000)] = None,
+    cursor: Annotated[str | None, Query(max_length=1024)] = None,
 ) -> dict:
     clauses = ["ms.observed_at >= NOW() - (%s * INTERVAL '1 day')"]
     values: list[object] = [max_age_days]
@@ -1386,8 +1387,15 @@ def search_sites(
             "POWER(ms.z - %s, 2) <= POWER(%s, 2)"
         )
         values.extend((x, y, z, max_distance))
-    values.append(limit + 1 if offset is not None else limit)
-    values.append(offset or 0)
+    if cursor:
+        cursor_at, cursor_kind, cursor_identity = _decode_state_cursor(cursor)
+        if cursor_kind != "mining-sites" or not cursor_identity:
+            raise HTTPException(status_code=400, detail="Invalid mining sites cursor")
+        clauses.append("(ms.observed_at, ms.identity) < (%s, %s)")
+        values.extend((cursor_at, cursor_identity))
+    paginated = offset is not None or bool(cursor)
+    values.append(limit + 1 if paginated else limit)
+    values.append(0 if cursor else offset or 0)
     with connection() as conn:
         if commodity and include_community_overlaps:
             identities = overlap_site_identities(conn, commodity.strip().casefold())
@@ -1399,10 +1407,10 @@ def search_sites(
             WITH selected_sites AS MATERIALIZED (
                 SELECT * FROM mining_sites ms
                 WHERE {' AND '.join(clauses)}
-                ORDER BY ms.observed_at DESC, ms.identity
+                ORDER BY ms.observed_at DESC, ms.identity DESC
                 LIMIT %s OFFSET %s
             )
-            SELECT ms.system_address AS "systemAddress",
+            SELECT ms.identity AS "siteIdentity", ms.system_address AS "systemAddress",
                    ms.system_name AS system, ms.x, ms.y, ms.z,
                    ms.body_id AS "bodyId", ms.body_name AS body,
                    ms.ring_name AS ring, ms.ring_type AS "ringType",
@@ -1447,15 +1455,19 @@ def search_sites(
                          ) grouped
                        ) AS stats
             ) yield_data ON TRUE
-            ORDER BY ms.observed_at DESC, ms.identity
+            ORDER BY ms.observed_at DESC, ms.identity DESC
             """,
             values,
         ).fetchall()
-        has_more = offset is not None and len(rows) > limit
+        has_more = paginated and len(rows) > limit
+        next_cursor = None
+        if has_more:
+            last = rows[limit - 1]
+            next_cursor = _encode_state_cursor(last["observedAt"], "mining-sites", last["siteIdentity"])
         rows = enrich_ring_metadata(conn, rows[:limit])
         rows = attach_overlap_reports(rows)
         references = []
-        if include_community_overlaps and not offset:
+        if include_community_overlaps and not offset and not cursor:
             references = community_reference_candidates(
                 conn, rows, commodity=commodity, system=system,
                 origin=(x, y, z) if all(v is not None for v in (x, y, z)) else None,
@@ -1463,11 +1475,12 @@ def search_sites(
             )
             # The explicit community opt-in must not starve missing references
             # behind a full page of ordinary observations. Keep the total bounded.
-            if offset is None:
+            if not paginated:
                 rows = references + rows[:max(0, limit - len(references))]
     return {"generatedAt": _now(), "results": rows,
-            "communityReferences": references if offset is not None else [],
+            "communityReferences": references if paginated else [],
             "hasMore": has_more,
+            "nextCursor": next_cursor,
             "nextOffset": (offset or 0) + limit if has_more else None}
 
 

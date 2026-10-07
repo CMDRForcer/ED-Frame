@@ -143,6 +143,7 @@ def fetch_edframe_mining_candidates(
         params["commodity"] = commodity_id
     candidates = []
     bounded = False
+    seen_cursors = set()
     for page in range(50):
         response = get(EDFRAME_CATALOG_SITES_URL, params=dict(params), timeout=timeout)
         response.raise_for_status()
@@ -159,6 +160,12 @@ def fetch_edframe_mining_candidates(
         if not isinstance(next_offset, int) or isinstance(next_offset, bool) or next_offset <= params["offset"]:
             raise ValueError("ED-Frame mining catalog returned an invalid page cursor")
         params["offset"] = next_offset
+        next_cursor = payload.get("nextCursor")
+        if next_cursor is not None:
+            if not isinstance(next_cursor, str) or not next_cursor or next_cursor in seen_cursors:
+                raise ValueError("ED-Frame mining catalog returned an invalid page cursor")
+            seen_cursors.add(next_cursor)
+            params["cursor"] = next_cursor
         bounded = True
     candidates = merge_mining_candidates(candidates)
     if diagnostics is not None:

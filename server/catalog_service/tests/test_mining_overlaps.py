@@ -6,19 +6,34 @@ from edframe_catalog.mining_overlaps import (
 
 
 class MiningOverlapTests(unittest.TestCase):
+    def test_keyset_continues_after_last_row_without_offset_scan(self):
+        from edframe_catalog.api import search_sites, _encode_state_cursor
+        from datetime import datetime, timezone
+        connection = MagicMock()
+        conn = connection.return_value.__enter__.return_value
+        conn.execute.return_value.fetchall.return_value = []
+        stamp = datetime(2026, 10, 7, tzinfo=timezone.utc)
+        cursor = _encode_state_cursor(stamp, 'mining-sites', 'site-b')
+        with patch('edframe_catalog.api.connection', connection):
+            result = search_sites(system='Test', limit=1000, offset=20000, cursor=cursor)
+        query, values = conn.execute.call_args.args
+        self.assertIn('(ms.observed_at, ms.identity) < (%s, %s)', query)
+        self.assertEqual(values[-4:], [stamp, 'site-b', 1001, 0])
+        self.assertFalse(result['hasMore'])
+
     def test_paginated_sites_have_stable_order_and_next_offset(self):
         from edframe_catalog.api import search_sites
         connection = MagicMock()
         conn = connection.return_value.__enter__.return_value
         conn.execute.return_value.fetchall.return_value = [
             {'system': 'Test', 'ring': 'Test A Ring', 'ringType': 'Metallic', 'reserveLevel': 'Pristine'},
-            {'system': 'Test', 'ring': 'Test B Ring', 'ringType': 'Metallic', 'reserveLevel': 'Pristine'},
+            {'system': 'Test', 'ring': 'Test B Ring', 'ringType': 'Metallic', 'reserveLevel': 'Pristine', 'observedAt': '2026-10-07T00:00:00Z', 'siteIdentity': 'site-b'},
             {'system': 'Test', 'ring': 'Test C Ring', 'ringType': 'Metallic', 'reserveLevel': 'Pristine'},
         ]
         with patch('edframe_catalog.api.connection', connection):
             result = search_sites(system='Test', limit=2, offset=200)
         query, values = conn.execute.call_args.args
-        self.assertIn('ORDER BY ms.observed_at DESC, ms.identity', query)
+        self.assertIn('ORDER BY ms.observed_at DESC, ms.identity DESC', query)
         self.assertIn('selected_sites AS MATERIALIZED', query)
         self.assertLess(query.index('LIMIT %s OFFSET %s'), query.index('LEFT JOIN LATERAL'))
         self.assertEqual(values[-2:], [3, 200])

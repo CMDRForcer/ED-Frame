@@ -30,6 +30,14 @@ class MiningPaginationAndMethodsTests(unittest.TestCase):
         with self.assertRaises(ValueError): fetch_edframe_mining_candidates('Test', get)
         self.assertEqual(get.call_count, 1)
 
+    def test_keyset_cursor_is_used_when_available(self):
+        get = Mock(side_effect=[
+            Response({'results': [], 'hasMore': True, 'nextOffset': 200, 'nextCursor': 'cursor-one'}),
+            Response({'results': [], 'hasMore': False}),
+        ])
+        fetch_edframe_mining_candidates('Test', get)
+        self.assertEqual(get.call_args_list[1].kwargs['params']['cursor'], 'cursor-one')
+
     def test_safety_cap_is_explicit_not_reported_as_complete(self):
         def get(url, **kwargs):
             return Response({'results': [], 'hasMore': True,

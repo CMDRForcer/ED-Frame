@@ -42,3 +42,11 @@ ED-Frame shows useful cross-system sale planning and matching fresh market recor
 ### Final live verification
 
 At 18:32 UTC, the 250-LY Shanteneri search retrieved 24,447 merged ring records across 25 pages, `bounded=false`, including BZ Ceti. The real LASER Platinum filter retained 2,060 candidates, and Metal Rich rings no longer appeared in its proposals. The first full ring download took **221.87 seconds**; completeness is fixed, but this first-load latency remains an important performance limitation, not a speed improvement claim. Source-app restart is needed; no release or commit was performed.
+
+## Subsequent performance work
+
+Version 1.5.38 was committed as `3836c9a`, pushed, and published with Windows/source archives and checksums. Its packaged app still uses offset paging.
+
+The subsequent source implementation uses descending timestamp/identity keyset cursors, a matching composite page index and an exact case-insensitive system/ring metadata index. Both indexes were created concurrently; only API was restarted, with backup at `/opt/edframe-deploy-backups/mining-keyset-20261007`. Existing offset clients remain supported. No local-only caching or reduced coverage was used to achieve the improvement.
+
+At 18:46 UTC, the same Shanteneri/250-LY/Platinum live test retrieved **24,447 merged rings across 25 pages in 24.99 seconds**, `bounded=false`, including BZ Ceti. The real laser filter still retained 2,060 candidates. This is approximately 8.9x faster than 221.87 seconds; it is a measured full network retrieval, not a disk-cold benchmark or GUI time-to-first-render measurement. The new client cursor handling is not in the already published Windows 1.5.38 package.

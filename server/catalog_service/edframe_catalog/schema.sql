@@ -265,6 +265,10 @@ CREATE INDEX IF NOT EXISTS ring_reference_system_idx
 
 CREATE INDEX IF NOT EXISTS mining_sites_observed_idx
     ON mining_sites (observed_at DESC);
+CREATE INDEX IF NOT EXISTS mining_sites_page_idx
+    ON mining_sites (observed_at DESC, identity DESC);
+CREATE INDEX IF NOT EXISTS ring_reference_ring_lower_idx
+    ON ring_reference_metadata (LOWER(system_name), LOWER(ring_name));
 CREATE INDEX IF NOT EXISTS mining_sites_system_idx
     ON mining_sites (LOWER(system_name));
 CREATE INDEX IF NOT EXISTS mining_sites_hotspots_idx

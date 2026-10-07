@@ -2,6 +2,21 @@
 
 ## Unreleased
 
+## 1.5.39 — 2026-10-07
+
+### Improved
+
+- Speed up complete regional ring retrieval with keyset cursors and targeted
+  online database indexes. Same 250-LY live check: 24,447 merged rings in 25
+  pages, 24.99 seconds versus 221.87 seconds before; no coverage reduction.
+- Preserve compatibility with offset-only servers and reject invalid or
+  repeated cursors. BGS predictions and mining eligibility remain unchanged.
+
+### Notes
+
+- Matching server API and indexes are already deployed. The measured time is
+  for full network retrieval, not a guarantee for every radius or connection.
+
 ## 1.5.38 — 2026-10-07
 
 ### Added
