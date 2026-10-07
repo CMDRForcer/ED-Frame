@@ -8,6 +8,16 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 class UiConsistencyTests(unittest.TestCase):
+    def test_mining_station_details_are_width_bounded(self):
+        source = (ROOT / "qml/pages/MiningFinderPage.qml").read_text(encoding="utf-8-sig")
+        details = next(line for line in source.splitlines()
+                       if 'text: String(modelData.sellSystem || "")' in line)
+        self.assertIn("Layout.fillWidth: true", details)
+        self.assertIn("Layout.minimumWidth: 0", details)
+        self.assertIn("maximumLineCount: 2", details)
+        status = source.split("id: routeVerificationStatus", 1)[1].split("ToolTip.visible", 1)[0]
+        self.assertIn("wrapMode: Text.WordWrap", status)
+
     def test_material_ready_state_reserves_its_content_height(self):
         main = (ROOT / "Main.qml").read_text(encoding="utf-8-sig")
         self.assertIn("Layout.minimumHeight: materialReadyState.implicitHeight + 24", main)

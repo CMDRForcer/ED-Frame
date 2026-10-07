@@ -204,10 +204,10 @@ Item {
         0, width - sidebarWidth - pageMargin * 2)
     readonly property bool compactFilters: availableWorkspaceWidth < 1180
     readonly property int routeRankWidth: 30
-    readonly property int routeSaleWidth: 250
+    readonly property int routeSaleWidth: Math.max(180, Math.min(480, routesList.width * 0.27))
     readonly property int routePriceWidth: 110
     readonly property int routeDemandWidth: 100
-    readonly property int routeStatusWidth: 126
+    readonly property int routeStatusWidth: 180
     readonly property int routeSelectWidth: 64
 
     objectName: "qa-page-mining-finder"
@@ -1539,7 +1539,8 @@ Item {
                 id: routeRow
                 required property var modelData
                 required property int index
-                width: routesList.width; height: 68; radius: 8
+                width: routesList.width; height: 88; radius: 8
+                clip: true
                 color: routeHover.hovered ? appWindow.hover : panelRaised
                 border.width: routeHover.hovered ? 2 : 1
                 border.color: routeHover.hovered ? cyan
@@ -1548,12 +1549,12 @@ Item {
                     anchors.fill: parent; anchors.leftMargin: 11; anchors.rightMargin: 11; spacing: 10
                     Label { Layout.minimumWidth: routeRankWidth; Layout.preferredWidth: routeRankWidth; Layout.maximumWidth: routeRankWidth; text: String(routeIndex(modelData) + 1); color: orange; font.family: monoFont; font.pixelSize: 12; font.bold: true }
                     ColumnLayout { Layout.fillWidth: true; Layout.minimumWidth: 0; spacing: 2
-                        Label { Layout.fillWidth: true; text: String(modelData.system || "UNKNOWN") + " · " + String(modelData.ring || modelData.body || ""); color: textPrimary; font.pixelSize: 11; font.bold: true; elide: Text.ElideRight }
-                        Label { Layout.fillWidth: true; text: String(modelData.selectedCommodityName || appliedCommodityFilter) + " · " + String(modelData.reserveName || "UNKNOWN") + " · " + String(modelData.targetMatchName || "") + (appliedPreferSecondary && secondaryCompactSummary(modelData) ? " · " + secondaryCompactSummary(modelData) : ""); color: textSecondary; font.pixelSize: UiMetrics.caption; elide: Text.ElideRight }
+                        Label { Layout.fillWidth: true; Layout.minimumWidth: 0; text: String(modelData.system || "UNKNOWN") + " · " + String(modelData.ring || modelData.body || ""); color: textPrimary; font.pixelSize: 13; font.bold: true; elide: Text.ElideRight }
+                        Label { Layout.fillWidth: true; Layout.minimumWidth: 0; text: String(modelData.selectedCommodityName || appliedCommodityFilter) + " · " + String(modelData.reserveName || "UNKNOWN") + " · " + String(modelData.targetMatchName || "") + (appliedPreferSecondary && secondaryCompactSummary(modelData) ? " · " + secondaryCompactSummary(modelData) : ""); color: textSecondary; font.pixelSize: 12; wrapMode: Text.WordWrap; maximumLineCount: 2; elide: Text.ElideRight }
                     }
                     ColumnLayout { Layout.minimumWidth: routeSaleWidth; Layout.preferredWidth: routeSaleWidth; Layout.maximumWidth: routeSaleWidth; spacing: 2
-                        Label { Layout.fillWidth: true; text: marketName(modelData); color: modelData.marketKnown ? textPrimary : orange; font.pixelSize: UiMetrics.caption; font.bold: true; elide: Text.ElideRight }
-                        Label { text: String(modelData.sellSystem || "") + (marketStationSummary(modelData) ? " · " + marketStationSummary(modelData) : ""); color: textSecondary; font.pixelSize: UiMetrics.caption; elide: Text.ElideRight }
+                        Label { Layout.fillWidth: true; Layout.minimumWidth: 0; text: marketName(modelData); color: modelData.marketKnown ? textPrimary : orange; font.pixelSize: 13; font.bold: true; elide: Text.ElideRight }
+                        Label { Layout.fillWidth: true; Layout.minimumWidth: 0; text: String(modelData.sellSystem || "") + (marketStationSummary(modelData) ? " · " + marketStationSummary(modelData) : ""); color: textSecondary; font.pixelSize: 12; wrapMode: Text.WordWrap; maximumLineCount: 2; elide: Text.ElideRight }
                     }
                     Label { Layout.minimumWidth: routePriceWidth; Layout.preferredWidth: routePriceWidth; Layout.maximumWidth: routePriceWidth; text: modelData.marketKnown ? formatNumber(modelData.sellPrice) + " CR" : "—"; color: modelData.marketMatchesFilters ? green : (modelData.marketKnown ? orange : muted); font.pixelSize: UiMetrics.caption; font.bold: true }
                     Label { Layout.minimumWidth: routeDemandWidth; Layout.preferredWidth: routeDemandWidth; Layout.maximumWidth: routeDemandWidth; text: modelData.marketKnown ? (modelData.demandInfinite ? "∞" : formatNumber(modelData.demand) + " T") : "—"; color: textPrimary; font.pixelSize: UiMetrics.caption; font.bold: true }
@@ -1568,8 +1569,9 @@ Item {
                         color: appliedOptimization === "POWERPLAY MERITS"
                                ? verificationColor(modelData)
                                : (modelData.stale ? orange : green)
-                        font.pixelSize: UiMetrics.caption; font.bold: true
-                        elide: Text.ElideRight
+                        font.pixelSize: 12; font.bold: true
+                        wrapMode: Text.WordWrap
+                        maximumLineCount: 3; elide: Text.ElideRight
                         ToolTip.visible: routeVerificationHover.hovered
                                              && verificationReason(modelData) !== ""
                         ToolTip.text: verificationReason(modelData)
