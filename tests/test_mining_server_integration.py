@@ -6,6 +6,7 @@ from unittest.mock import Mock
 
 from ed_companion.navigation.mining_finder import (
     fetch_edframe_mining_candidates, merge_mining_candidates,
+    project_edframe_mining_candidates,
 )
 from ed_companion.navigation.mining_market import fetch_market_imports
 from ed_companion.navigation.mining_planner import _powerplay_index, _secondary_resources
@@ -25,6 +26,22 @@ class Response:
 
 
 class MiningServerIntegrationTests(unittest.TestCase):
+    def test_undated_overlap_provenance_survives_projection_and_merge(self):
+        report = {"commodity": "platinum", "sourceUrl": "https://example.test/data",
+                  "sourceRevision": "abc", "sourceRow": 2, "verifiedAt": None,
+                  "status": "COMMUNITY_REPORTED_UNDATED", "reportedResTypes": ["HIGH"]}
+        projected = project_edframe_mining_candidates({"results": [{
+            "system": "Test", "ring": "Test 1 A Ring", "x": 1, "y": 2, "z": 3,
+            "communityOverlapReports": [report], "observedAt": "2026-10-07T12:00:00Z",
+        }]})
+        merged = merge_mining_candidates([*projected, {
+            "system": "Test", "ring": "Test 1 A Ring", "evidence": "LOCAL_CONFIRMED",
+            "observedAt": "2026-10-07T13:00:00Z",
+        }])
+        self.assertEqual(merged[0]["communityOverlapReports"], [report])
+        self.assertNotIn("resType", merged[0])
+        self.assertEqual(merged[0]["observedAt"], "2026-10-07T13:00:00Z")
+
     def test_ring_and_powerplay_results_survive_market_failure_but_not_profile_switch(self):
         for stale in (False, True):
             controller = CockpitController.__new__(CockpitController)
@@ -60,6 +77,7 @@ class MiningServerIntegrationTests(unittest.TestCase):
         self.assertEqual(calls[0]["params"], {
             "x": 1.0, "y": 2.0, "z": 3.0, "max_distance": 100.0,
             "max_age_days": 3650, "commodity": "platinum", "limit": 200,
+            "include_community_overlaps": True,
         })
 
     def test_regional_ring_query_rejects_missing_position(self):

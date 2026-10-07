@@ -1,0 +1,117 @@
+{
+  "sourceUrl": "https://www.edsm.net/api-v1/system",
+  "retrievedAt": "2026-10-07",
+  "scope": "System coordinates only; no ring or overlap verification",
+  "results": [
+    {
+      "system": "HR 6489",
+      "resolved": false,
+      "error": "HTTPError"
+    },
+    {
+      "system": "HIP 51652",
+      "resolved": false,
+      "error": "HTTPError"
+    },
+    {
+      "system": "HR 5473",
+      "resolved": false,
+      "error": "HTTPError"
+    },
+    {
+      "system": "HIP 113894",
+      "resolved": false,
+      "error": "HTTPError"
+    },
+    {
+      "system": "Palliyan",
+      "resolved": false,
+      "error": "HTTPError"
+    },
+    {
+      "system": "HIP 94582",
+      "resolved": false,
+      "error": "HTTPError"
+    },
+    {
+      "system": "Misthaka",
+      "resolved": false,
+      "error": "HTTPError"
+    },
+    {
+      "system": "HR 1013",
+      "resolved": false,
+      "error": "HTTPError"
+    },
+    {
+      "system": "HIP 115736",
+      "resolved": false,
+      "error": "HTTPError"
+    },
+    {
+      "system": "HIP 35219",
+      "resolved": false,
+      "error": "HTTPError"
+    },
+    {
+      "system": "58 Epsilon Herculis",
+      "resolved": false,
+      "error": "HTTPError"
+    },
+    {
+      "system": "Hun Nik",
+      "resolved": false,
+      "error": "HTTPError"
+    },
+    {
+      "system": "HIP 71572",
+      "resolved": false,
+      "error": "HTTPError"
+    },
+    {
+      "system": "Lalande 34968",
+      "resolved": false,
+      "error": "HTTPError"
+    },
+    {
+      "system": "Clionometes",
+      "resolved": false,
+      "error": "HTTPError"
+    },
+    {
+      "system": "Latjal",
+      "resolved": false,
+      "error": "HTTPError"
+    },
+    {
+      "system": "HIP 109310",
+      "resolved": false,
+      "error": "HTTPError"
+    },
+    {
+      "system": "Lemayak",
+      "resolved": false,
+      "error": "HTTPError"
+    },
+    {
+      "system": "Maidareldi",
+      "resolved": false,
+      "error": "HTTPError"
+    },
+    {
+      "system": "HIP 111173",
+      "resolved": false,
+      "error": "HTTPError"
+    },
+    {
+      "system": "HIP 105408",
+      "resolved": false,
+      "error": "HTTPError"
+    },
+    {
+      "system": "HR 2265",
+      "resolved": false,
+      "error": "HTTPError"
+    }
+  ]
+}

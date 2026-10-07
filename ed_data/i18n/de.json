@@ -1,4 +1,7 @@
 {
+  "mining.optimize_measured": "GEMESSENES PLATINUM",
+  "mining.optimize_overlap": "PLATINUM + RES",
+  "mining.overlap_level": "RES-STUFE · COMMUNITY / PRÜFDATUM UNBEKANNT",
   "connections.edframe_master": "ED-Frame nutzen · Katalog aktualisieren und öffentliche Beobachtungen teilen",
   "connections.eddn_master": "EDDN nutzen · Live-Daten empfangen und öffentliche Beobachtungen teilen",
   "signals.master_privacy": "Der ED-Frame-Schalter steuert auch Signal-Sharing. Übertragen werden nur öffentliches System, Koordinaten, Signaltyp, Fraktion/Zustand, Zeitpunkt und Restlaufzeit. Kein Commandername, Schiff, Fracht oder Journalpfad.",

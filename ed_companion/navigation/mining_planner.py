@@ -17,11 +17,15 @@ from .mining_finder import is_belt_candidate
 
 OPTIMIZE_MERITS = "POWERPLAY MERITS"
 OPTIMIZE_YIELD = "BEST YIELD"
+OPTIMIZE_MEASURED = "MEASURED PLATINUM"
+OPTIMIZE_OVERLAP = "PLATINUM + RES"
 OPTIMIZE_PROFIT = "HIGHEST PROFIT"
 OPTIMIZE_DISTANCE = "SHORTEST ROUTE"
 OPTIMIZATION_MODES = (
     OPTIMIZE_MERITS,
     OPTIMIZE_YIELD,
+    OPTIMIZE_MEASURED,
+    OPTIMIZE_OVERLAP,
     OPTIMIZE_PROFIT,
     OPTIMIZE_DISTANCE,
 )
@@ -999,6 +1003,12 @@ def plan_mining_routes(
     """
     now = now or datetime.now(timezone.utc)
     optimization = str(optimization or OPTIMIZE_YIELD).upper()
+    res_level = "ANY"
+    if optimization.startswith(OPTIMIZE_OVERLAP + ": "):
+        res_level = optimization.split(": ", 1)[1]
+        if res_level not in {"ANY", "LOW", "REGULAR", "HIGH", "HAZARDOUS"}:
+            return []
+        optimization = OPTIMIZE_OVERLAP
     if optimization not in OPTIMIZATION_MODES:
         optimization = OPTIMIZE_YIELD
     commodity_id = mining_commodity_id(commodity)
@@ -1573,6 +1583,15 @@ def plan_mining_routes(
             for item in secondary_resources
         )
         row["yieldScore"] = round(yield_score, 2)
+        if optimization == OPTIMIZE_OVERLAP:
+            reports = [dict(report) for report in row.get("communityOverlapReports") or []
+                       if isinstance(report, dict) and report.get("commodity") == "platinum"
+                       and report.get("reportedResTypes")
+                       and (res_level == "ANY" or res_level in report["reportedResTypes"])]
+            if selected_commodity != "platinum" or not reports:
+                continue
+            row["matchedOverlapReports"] = reports
+            row["overlapStatus"] = "COMMUNITY_REPORTED_UNDATED"
         measured_yield = row.get("localAverageProportion")
         measured_samples = int(row.get("localSampleCount", 0) or 0)
         measured_hits = int(row.get("localYieldHits", 0) or 0)
@@ -1583,14 +1602,36 @@ def plan_mining_routes(
         )
         measured_maximum = None
         measured_scope = row.get("yieldAggregationScope") or "LOCAL"
+        proportion_samples = measured_hits
         for stat in row.get("yieldStats") or []:
             if not isinstance(stat, dict) or mining_commodity_id(
                 stat.get("commodity")
             ) != selected_commodity:
                 continue
             measured_maximum = stat.get("maxProportion")
+            proportion_samples = int(stat.get("proportionSamples", 0) or 0)
             measured_scope = stat.get("yieldAggregationScope", measured_scope)
             break
+        # Stored averages describe hits only. Include zero-Platinum probes,
+        # but never turn hits lacking percentage measurements into zeros.
+        sample_average = (
+            _number(measured_yield) * proportion_samples / measured_samples
+            if measured_known and proportion_samples == measured_hits
+            and 0 < measured_hits <= measured_samples else None
+        )
+        row.update({
+            "yieldSampleAverageProportion": (
+                round(sample_average, 2) if sample_average is not None else None
+            ),
+            "yieldSampleWarning": (
+                "SMALL SAMPLE · NOT A YIELD GUARANTEE"
+                if measured_samples < 30 else "OBSERVED SAMPLE · NOT A YIELD GUARANTEE"
+            ),
+        })
+        if optimization == OPTIMIZE_MEASURED and (
+            selected_commodity != "platinum" or sample_average is None
+        ):
+            continue
         row.update({
             "yieldMeasurementScope": measured_scope,
             "yieldMeasured": measured_known,
@@ -1707,6 +1748,8 @@ def plan_mining_routes(
             OPTIMIZE_PROFIT: {"profit": .45, "yield": .25, "data": .20, "distance": .10},
             OPTIMIZE_DISTANCE: {"distance": .55, "yield": .20, "data": .15, "profit": .10},
             OPTIMIZE_YIELD: {"yield": .55, "data": .25, "distance": .10, "profit": .10},
+            OPTIMIZE_MEASURED: {"yield": .55, "data": .25, "distance": .10, "profit": .10},
+            OPTIMIZE_OVERLAP: {"distance": .55, "data": .25, "profit": .20},
         }[optimization]
         known_weight = sum(
             weight for key, weight in weights.items()
@@ -1743,8 +1786,14 @@ def plan_mining_routes(
         OPTIMIZE_PROFIT: "profitScore",
         OPTIMIZE_DISTANCE: "distanceScore",
         OPTIMIZE_YIELD: "yieldScore",
+        OPTIMIZE_MEASURED: "yieldScore",
+        OPTIMIZE_OVERLAP: "distanceScore",
     }[optimization]
     prepared.sort(key=lambda row: (
+        -_number(row.get("yieldSampleAverageProportion"), -1.0)
+        if optimization == OPTIMIZE_MEASURED else 0.0,
+        -int(row.get("yieldSampleCount", 0) or 0)
+        if optimization == OPTIMIZE_MEASURED else 0,
         int(row.get("powerplayVerificationRank", 0) or 0)
         if optimization == OPTIMIZE_MERITS else 0,
         not bool(row.get("yieldMeasured"))

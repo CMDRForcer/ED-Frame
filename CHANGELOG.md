@@ -2,6 +2,32 @@
 
 ## Unreleased
 
+## 1.5.37 — 2026-10-07
+
+### Added
+
+- Measured Platinum search with sample-wide averages including zero-Platinum
+  probes, sample counts and small-sample warnings. Incomplete percentage
+  measurements are not promoted to measured yield or high-yield guarantees.
+- Platinum + RES search with Low, Regular, High and Hazardous filters, based on
+  attributed community reports with unknown verification dates.
+- Frozen community RES/hotspot baseline with source revision and provenance;
+  30 baseline rings match server observations and 28 additional references have
+  known system positions. The remaining 22 lack coordinates.
+
+### Fixed
+
+- Join ring metadata across differing parent/ring BodyIDs without rewriting
+  observations or Prospector sample ownership.
+- Improve mining result readability and prevent station details from overlapping
+  prices and status labels. Unconfirmed ring references remain clearly labeled.
+
+### Notes
+
+- Community references do not establish confirmed overlaps, ring composition,
+  measured yields or live sightings. No recurring third-party queries added.
+- BGS predictions unchanged. Matching server API changes are already deployed.
+
 ## 1.5.36 — 2026-10-07
 
 ### Added

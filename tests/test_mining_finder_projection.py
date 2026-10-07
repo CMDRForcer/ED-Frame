@@ -1061,6 +1061,7 @@ class MiningFinderProjectionTests(unittest.TestCase):
         self.assertEqual(calls[0][1]["params"], {
             "system": "Cubeo", "limit": 200, "commodity": "platinum",
             "max_age_days": 3650,
+            "include_community_overlaps": True,
         })
         self.assertNotIn("commander", json.dumps(calls).casefold())
 
@@ -1535,6 +1536,27 @@ class MiningFinderProjectionTests(unittest.TestCase):
             controller._known_mining_origin("cubeo")["coordinates"],
             [4, 5, 6],
         )
+
+    def test_community_overlap_is_searchable_without_confirmed_hotspot(self):
+        controller = CockpitController.__new__(CockpitController)
+        controller._mining_rows_cache_key = ("community",)
+        controller._mining_rows = Mock(return_value=[{
+            "system": "Reported", "ring": "Reported 1 A Ring",
+            "distanceLy": 1, "observedAt": datetime.now(timezone.utc).isoformat(),
+            "evidence": "LIVE_REPORTED", "ringTypeName": "Unknown",
+            "hotspots": [], "communityOverlapReports": [{
+                "commodity": "platinum", "reportedResTypes": ["HAZARDOUS"],
+                "verifiedAt": None,
+            }],
+        }])
+        rows = controller.miningFindPageForMethod(
+            "Platinum", 100, "ALL EVIDENCE", "ALL RESERVES", "LASER")
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]["targetMatch"], "COMMUNITY_OVERLAP")
+        self.assertNotIn("CONFIRMED", rows[0]["targetMatchName"])
+        self.assertFalse(rows[0]["hotspots"])
+        self.assertEqual(controller.miningFindPageForMethod(
+            "Platinum", 100, "ALL EVIDENCE", "ALL RESERVES", "UNKNOWN METHOD"), [])
 
     def test_controller_ranks_observed_yield_before_hotspot_and_ring_type(self):
         controller = CockpitController.__new__(CockpitController)

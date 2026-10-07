@@ -92,6 +92,12 @@ def project_edframe_mining_candidates(
                 source.get("prospectorSampleCount", 0) or 0
             ),
             "yieldAggregationScope": "COMMUNITY",
+            "communityOverlapReports": [
+                dict(report) for report in (source.get("communityOverlapReports") or [])
+                if isinstance(report, dict)
+            ],
+            "ringAssociationStatus": _text(source.get("ringAssociationStatus")),
+            "systemPositionEvidence": dict(source.get("systemPositionEvidence") or {}),
             "yieldStats": [
                 dict(stat) for stat in (source.get("yieldStats") or [])
                 if isinstance(stat, dict)
@@ -122,6 +128,7 @@ def fetch_edframe_mining_candidates(
     # Physical rings do not disappear when observations become old. Freshness
     # is assessed from observedAt downstream, never from the retrieval time.
     params["max_age_days"] = 3650
+    params["include_community_overlaps"] = True
     coordinates = _coordinates(origin)
     if max_distance is not None:
         if not coordinates or not 0 < float(max_distance) <= 2000:
@@ -465,6 +472,15 @@ def merge_mining_candidates(
                 if commodity and commodity not in hotspots:
                     hotspots[commodity] = dict(hotspot)
         strongest["hotspots"] = [hotspots[key] for key in sorted(hotspots)]
+        overlap_reports = {}
+        for source in observations:
+            for report in source.get("communityOverlapReports") or []:
+                if not isinstance(report, dict):
+                    continue
+                key = (report.get("sourceUrl"), report.get("sourceRevision"),
+                       report.get("sourceRow"))
+                overlap_reports[key] = dict(report)
+        strongest["communityOverlapReports"] = list(overlap_reports.values())
         strongest["planetaryMiningLocationCount"] = max(
             int(source.get("planetaryMiningLocationCount", 0) or 0)
             for source in observations

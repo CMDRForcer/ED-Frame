@@ -570,6 +570,41 @@ class MiningPlannerTests(unittest.TestCase):
         self.assertFalse(planned[-1]["yieldMeasured"])
         self.assertIn("ESTIMATED", planned[-1]["yieldEvidenceLabel"])
 
+    def test_measured_platinum_includes_zeros_and_excludes_incomplete_samples(self):
+        def measured(name, samples, hits, average, proportions=None):
+            return candidate(name, 5, target="LOCAL_YIELD",
+                localSampleCount=samples, localYieldHits=hits,
+                localAverageProportion=average,
+                yieldStats=[{"commodity": "platinum", "prospectorHits": hits,
+                    "proportionSamples": hits if proportions is None else proportions,
+                    "averageProportion": average}])
+        rows = [measured("One lucky hit", 20, 1, 50),
+                measured("Consistent", 40, 30, 30),
+                measured("Incomplete", 10, 5, 40, 3),
+                candidate("Estimated", 1, target="HOTSPOT")]
+        planned = plan_mining_routes(rows, "Platinum", "MEASURED PLATINUM", now=NOW)
+        self.assertEqual([r["system"] for r in planned], ["Consistent", "One lucky hit"])
+        self.assertEqual(planned[0]["yieldSampleAverageProportion"], 22.5)
+        self.assertEqual(planned[1]["yieldSampleAverageProportion"], 2.5)
+        self.assertIn("SMALL SAMPLE", planned[1]["yieldSampleWarning"])
+        self.assertIn("NOT A YIELD GUARANTEE", planned[0]["yieldSampleWarning"])
+
+    def test_platinum_res_filters_reported_level_without_claiming_verification(self):
+        def report(commodity, level):
+            return {"commodity": commodity, "reportedResTypes": [level],
+                    "reportedOverlap": "Reported", "verifiedAt": None}
+        rows = [candidate("Hazardous", 20, communityOverlapReports=[report("platinum", "HAZARDOUS")]),
+                candidate("High", 5, communityOverlapReports=[report("platinum", "HIGH")]),
+                candidate("Painite only", 1, communityOverlapReports=[report("painite", "HAZARDOUS")]),
+                candidate("RES without overlap", 1, resType="HAZARDOUS")]
+        result = plan_mining_routes(rows, "Platinum", "PLATINUM + RES: HAZARDOUS", now=NOW)
+        self.assertEqual([r["system"] for r in result], ["Hazardous"])
+        self.assertEqual(result[0]["overlapStatus"], "COMMUNITY_REPORTED_UNDATED")
+        self.assertIsNone(result[0]["matchedOverlapReports"][0]["verifiedAt"])
+        all_levels = plan_mining_routes(rows, "Platinum", "PLATINUM + RES: ANY", now=NOW)
+        self.assertEqual([r["system"] for r in all_levels], ["High", "Hazardous"])
+        self.assertEqual(plan_mining_routes(rows, "Platinum", "PLATINUM + RES: INVALID", now=NOW), [])
+
     def test_profit_uses_only_fresh_market_with_required_demand(self):
         rows = [candidate("Fresh", 20, markets=[{
             "commodity": "Platinum", "station": "Fresh Hub",
@@ -1335,7 +1370,9 @@ class MiningFinderUiContractTests(unittest.TestCase):
         self.assertIn('"ALSO AT THIS STATION"', qml)
         self.assertIn('"SYSTEM STATE"', qml)
         self.assertIn("Layout.maximumHeight: 280", qml)
-        self.assertIn("width: routesList.width; height: 68", qml)
+        self.assertIn("width: routesList.width; height: 88", qml)
+        self.assertIn('"MEASURED PLATINUM"', qml)
+        self.assertIn("INCLUDING ZEROS", qml)
         self.assertIn("Layout.minimumHeight: 120", qml)
         self.assertIn("PRICE / T", qml)
         self.assertIn("DATA AGE", qml)

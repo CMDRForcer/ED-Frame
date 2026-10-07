@@ -1,4 +1,7 @@
 {
+  "mining.optimize_measured": "PLATINE MESURÉ",
+  "mining.optimize_overlap": "PLATINE + RES",
+  "mining.overlap_level": "NIVEAU RES · COMMUNAUTÉ / DATE DE VÉRIFICATION INCONNUE",
   "connections.edframe_master": "Utiliser ED-Frame · actualiser le catalogue et partager les observations publiques",
   "connections.eddn_master": "Utiliser EDDN · recevoir les données et partager les observations publiques",
   "signals.master_privacy": "Le commutateur ED-Frame contrôle aussi le partage des signaux. Seuls le système public, les coordonnées, le type, la faction/état, la date et la durée restante sont envoyés. Aucun commandant, vaisseau, fret ou chemin du journal.",

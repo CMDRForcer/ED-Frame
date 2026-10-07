@@ -1793,6 +1793,11 @@ class NavigationMixin:
                 (target_stat or {}).get("refinedCount", 0) or 0
             )
             local_positive = local_hits > 0 or local_refined > 0
+            community_overlap = bool(selected and method in selected.get("methods", ())) and any(
+                isinstance(report, dict) and report.get("commodity") == commodity_id
+                and report.get("reportedResTypes")
+                for report in source_row.get("communityOverlapReports") or []
+            )
             local_samples = int(
                 source_row.get("prospectorSampleCount", 0) or 0
             )
@@ -1807,7 +1812,7 @@ class NavigationMixin:
                     for item in source_row.get("hotspots", [])
                     if isinstance(item, dict)
                 }
-                if commodity_id not in hotspot_ids and not local_positive:
+                if commodity_id not in hotspot_ids and not local_positive and not community_overlap:
                     if not (
                         selected and method
                         and method in selected.get("methods", ())
@@ -1918,6 +1923,9 @@ class NavigationMixin:
                         f"HOTSPOT CONFIRMED · {int(row.get('sourceCount', 1) or 1)} "
                         "SOURCE(S)"
                     )
+                elif community_overlap:
+                    row["targetMatch"] = "COMMUNITY_OVERLAP"
+                    row["targetMatchName"] = "COMMUNITY OVERLAP REPORTED · CHECK DATE UNKNOWN"
                 else:
                     row["targetMatch"] = "RING_TYPE"
                     row["targetMatchName"] = (

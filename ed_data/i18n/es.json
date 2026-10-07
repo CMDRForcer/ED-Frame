@@ -1,4 +1,7 @@
 {
+  "mining.optimize_measured": "PLATINO MEDIDO",
+  "mining.optimize_overlap": "PLATINO + RES",
+  "mining.overlap_level": "NIVEL RES · COMUNIDAD / FECHA DE VERIFICACIÓN DESCONOCIDA",
   "connections.edframe_master": "Usar ED-Frame · actualizar catálogo y compartir observaciones públicas",
   "connections.eddn_master": "Usar EDDN · recibir datos y compartir observaciones públicas",
   "signals.master_privacy": "El interruptor ED-Frame controla también las señales compartidas. Solo se envían sistema público, coordenadas, tipo de señal, facción/estado, fecha y duración restante. Sin comandante, nave, carga ni ruta del diario.",

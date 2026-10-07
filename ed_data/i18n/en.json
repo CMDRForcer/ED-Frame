@@ -1,4 +1,7 @@
 {
+  "mining.optimize_measured": "MEASURED PLATINUM",
+  "mining.optimize_overlap": "PLATINUM + RES",
+  "mining.overlap_level": "RES LEVEL · COMMUNITY / CHECK DATE UNKNOWN",
   "connections.edframe_master": "Use ED-Frame · update catalog and share public observations",
   "connections.eddn_master": "Use EDDN · receive intelligence and share public observations",
   "signals.master_privacy": "The ED-Frame switch also controls signal sharing. Only public system, coordinates, signal type, faction/state, timestamp and lifetime are sent. No Commander name, ship, cargo or Journal path.",

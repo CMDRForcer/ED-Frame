@@ -13,6 +13,11 @@ from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.responses import ORJSONResponse
 
 from . import __version__
+from .mining_metadata import enrich_ring_metadata
+from .mining_overlaps import (
+    attach_overlap_reports, catalog as overlap_catalog, overlap_site_identities,
+    community_reference_candidates,
+)
 from .database import (
     connection,
     ensure_schema,
@@ -1339,6 +1344,7 @@ def search_sites(
     z: float | None = None,
     max_distance: Annotated[float | None, Query(gt=0, le=2000)] = None,
     limit: Annotated[int, Query(ge=1, le=200)] = 100,
+    include_community_overlaps: bool = False,
 ) -> dict:
     clauses = ["ms.observed_at >= NOW() - (%s * INTERVAL '1 day')"]
     values: list[object] = [max_age_days]
@@ -1365,6 +1371,11 @@ def search_sites(
         values.extend((x, y, z, max_distance))
     values.append(limit)
     with connection() as conn:
+        if commodity and include_community_overlaps:
+            identities = overlap_site_identities(conn, commodity.strip().casefold())
+            if identities:
+                clauses[1] = '(' + clauses[1] + ' OR ms.identity = ANY(%s))'
+                values.insert(3, identities)
         rows = conn.execute(
             f"""
             SELECT ms.system_address AS "systemAddress",
@@ -1418,4 +1429,27 @@ def search_sites(
             """,
             values,
         ).fetchall()
+        rows = enrich_ring_metadata(conn, rows)
+        rows = attach_overlap_reports(rows)
+        if include_community_overlaps:
+            references = community_reference_candidates(
+                conn, rows, commodity=commodity, system=system,
+                origin=(x, y, z) if all(v is not None for v in (x, y, z)) else None,
+                radius=max_distance, limit=limit,
+            )
+            # The explicit community opt-in must not starve missing references
+            # behind a full page of ordinary observations. Keep the total bounded.
+            rows = references + rows[:max(0, limit - len(references))]
     return {"generatedAt": _now(), "results": rows}
+
+
+@app.get("/v1/mining/overlaps")
+def community_mining_overlaps(
+    system: Annotated[str | None, Query(max_length=100)] = None,
+    commodity: Annotated[str | None, Query(max_length=80)] = None,
+) -> dict:
+    rows = [dict(row) for row in overlap_catalog()
+            if (not system or row['system'].casefold() == system.strip().casefold())
+            and (not commodity or row['commodity'] == commodity.strip().casefold())]
+    return {"generatedAt": _now(), "status": "COMMUNITY_REPORTED_UNDATED",
+            "verifiedCount": 0, "results": rows}

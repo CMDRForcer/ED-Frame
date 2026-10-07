@@ -13,6 +13,7 @@ Item {
     property string startSystem: String(cockpit.system || "")
     property string miningMethod: "LASER"
     property string optimization: "POWERPLAY MERITS"
+    property string overlapResLevel: "ANY"
     property string ringFilter: "ANY RING"
     property bool ringsOnly: true
     property string reserveFilter: "ALL RESERVES"
@@ -214,6 +215,8 @@ Item {
     anchors.fill: parent
 
     function displayOptimization(value) {
+        if (value.indexOf("PLATINUM + RES") === 0) return appWindow.t("mining.optimize_overlap", "PLATINUM + RES") + value.slice("PLATINUM + RES".length)
+        if (value === "MEASURED PLATINUM") return appWindow.t("mining.optimize_measured", "MEASURED PLATINUM")
         if (value === "POWERPLAY MERITS") return appWindow.t("mining.optimize_merits", "POWERPLAY MERITS")
         if (value === "BEST YIELD") return appWindow.t("mining.optimize_yield", "BEST YIELD")
         if (value === "HIGHEST PROFIT") return appWindow.t("mining.optimize_profit", "HIGHEST PROFIT")
@@ -249,15 +252,39 @@ Item {
     }
     function yieldQuality(row) {
         if (row && row.yieldMeasured) {
-            let average = Number(row.yieldAverageProportion || 0)
+            let average = Number(row.yieldSampleAverageProportion !== null && row.yieldSampleAverageProportion !== undefined
+                                 ? row.yieldSampleAverageProportion : row.yieldAverageProportion || 0)
                     .toLocaleString(Qt.locale(), "f", 1) + "%"
             return average + " · " + formatNumber(row.yieldHitCount)
                     + "/" + formatNumber(row.yieldSampleCount)
         }
         return row && row.yieldStars ? String(row.yieldStars) : "—"
     }
+    function routeMiningEvidence(row) {
+        let evidence = row && row.yieldMeasured ? yieldEvidence(row)
+                                               : String(row.targetMatchName || "")
+        if (row.ringAssociationStatus === "COMMUNITY_REFERENCE_ONLY")
+            evidence = "RING UNCONFIRMED · " + evidence
+        let summary = overlapSummary(row)
+        if (summary) evidence += " · " + summary
+        return evidence
+    }
+    function overlapSummary(row) {
+        let reports = (row.communityOverlapReports || []).filter(function(report) {
+            return report.commodity === row.selectedCommodity
+                    && (report.reportedResTypes || []).length > 0
+        })
+        if (!reports.length) return ""
+        return "COMMUNITY RES: " + reports.map(function(report) {
+            return String(report.reportedOverlap || "")
+        }).join(" / ") + " · CHECK DATE UNKNOWN"
+    }
     function yieldEvidence(row) {
         if (!row) return "—"
+        if (row.yieldSampleAverageProportion !== null && row.yieldSampleAverageProportion !== undefined)
+            return Number(row.yieldSampleAverageProportion).toLocaleString(Qt.locale(), "f", 1)
+                    + "% · " + formatNumber(row.yieldSampleCount) + " PROSPECTORS (INCLUDING ZEROS) · "
+                    + String(row.yieldSampleWarning || "")
         let evidence = String(row.yieldEvidenceLabel || "")
         let mining = String(row.targetMatchName || "")
         return evidence && mining && evidence !== mining
@@ -452,7 +479,8 @@ Item {
         appliedStartSystem = startSystem.trim() || String(cockpit.system || "")
         appliedCommodityFilter = commodityFilter
         appliedMiningMethod = miningMethod
-        appliedOptimization = optimization
+        appliedOptimization = optimization === "PLATINUM + RES"
+                ? optimization + ": " + overlapResLevel : optimization
         appliedRingFilter = ringFilter
         appliedRingsOnly = ringsOnly
         appliedReserveFilter = reserveFilter
@@ -941,9 +969,30 @@ Item {
                     Label { text: appWindow.t("mining.optimize_for", "OPTIMIZE FOR"); color: orange; font.pixelSize: UiMetrics.caption; font.bold: true }
                     CockpitComboBox {
                         id: optimizationBox; Layout.fillWidth: true; Layout.minimumWidth: 0; Layout.preferredWidth: 1; implicitHeight: 34
-                        model: ["POWERPLAY MERITS", "BEST YIELD", "HIGHEST PROFIT", "SHORTEST ROUTE"]
+                        model: ["POWERPLAY MERITS", "BEST YIELD", "MEASURED PLATINUM", "PLATINUM + RES", "HIGHEST PROFIT", "SHORTEST ROUTE"]
                         currentIndex: model.indexOf(miningFinderPage.optimization)
-                        onActivated: miningFinderPage.optimization = currentText
+                        onActivated: {
+                            miningFinderPage.optimization = currentText
+                            if (currentText === "MEASURED PLATINUM" || currentText === "PLATINUM + RES") {
+                                miningFinderPage.commodityFilter = "Platinum"
+                                miningFinderPage.miningMethod = "LASER"
+                                miningFinderPage.resetRingFilter()
+                                if (currentText === "PLATINUM + RES") miningFinderPage.requireHotspot = false
+                            }
+                        }
+                    }
+                    Label {
+                        visible: miningFinderPage.optimization === "PLATINUM + RES"
+                        text: appWindow.t("mining.overlap_level", "RES LEVEL · COMMUNITY / CHECK DATE UNKNOWN")
+                        color: orange; font.pixelSize: UiMetrics.caption; wrapMode: Text.WordWrap
+                        Layout.fillWidth: true
+                    }
+                    CockpitComboBox {
+                        visible: miningFinderPage.optimization === "PLATINUM + RES"
+                        Layout.fillWidth: true; Layout.minimumWidth: 0; implicitHeight: 34
+                        model: ["ANY", "LOW", "REGULAR", "HIGH", "HAZARDOUS"]
+                        currentIndex: model.indexOf(miningFinderPage.overlapResLevel)
+                        onActivated: miningFinderPage.overlapResLevel = currentText
                     }
                 }
                 ColumnLayout {
@@ -1411,6 +1460,7 @@ Item {
                     model: [
                         {"ok": bestRoute.meritKnown, "title": appWindow.t("mining.reason_merit", "Powerplay suitability"), "detail": (bestRoute.meritKnown || (bestRoute.sameSystemSaleRequired && !bestRoute.marketKnown)) ? bestRoute.meritStatus : (miningFinderPage.marketFiltersBlockRoute() ? appWindow.t("mining.reason_merit_filtered", "Unknown — active market filters leave no sell route to verify") : appWindow.t("mining.reason_merit_unknown", "Unknown — no merit claim is made"))},
                         {"ok": bestRoute.targetMatch === "LOCAL_YIELD" || bestRoute.targetMatch === "HOTSPOT", "title": appWindow.t("mining.reason_method", "Mining evidence"), "detail": yieldEvidence(bestRoute)},
+                        {"ok": false, "title": "Community RES reports", "detail": overlapSummary(bestRoute) || "NO COMMUNITY OVERLAP REPORT FOR THIS COMMODITY"},
                         {"ok": bestRoute.marketKnown, "title": appWindow.t("mining.reason_market", "Market demand"), "detail": bestRoute.marketKnown ? String(bestRoute.marketQualityStatus || "MARKET KNOWN") + " · " + (bestRoute.demandInfinite ? "∞" : formatNumber(bestRoute.demand) + " T") + " · " + String(bestRoute.marketSource || "EDDN") : miningFinderPage.marketDetail(bestRoute)},
                         {"ok": !bestRoute.stale, "title": appWindow.t("mining.reason_age", "Data freshness"), "detail": bestRoute.confirmationStatus || "—"}
                     ]
@@ -1550,7 +1600,7 @@ Item {
                     Label { Layout.minimumWidth: routeRankWidth; Layout.preferredWidth: routeRankWidth; Layout.maximumWidth: routeRankWidth; text: String(routeIndex(modelData) + 1); color: orange; font.family: monoFont; font.pixelSize: 12; font.bold: true }
                     ColumnLayout { Layout.fillWidth: true; Layout.minimumWidth: 0; spacing: 2
                         Label { Layout.fillWidth: true; Layout.minimumWidth: 0; text: String(modelData.system || "UNKNOWN") + " · " + String(modelData.ring || modelData.body || ""); color: textPrimary; font.pixelSize: 13; font.bold: true; elide: Text.ElideRight }
-                        Label { Layout.fillWidth: true; Layout.minimumWidth: 0; text: String(modelData.selectedCommodityName || appliedCommodityFilter) + " · " + String(modelData.reserveName || "UNKNOWN") + " · " + String(modelData.targetMatchName || "") + (appliedPreferSecondary && secondaryCompactSummary(modelData) ? " · " + secondaryCompactSummary(modelData) : ""); color: textSecondary; font.pixelSize: 12; wrapMode: Text.WordWrap; maximumLineCount: 2; elide: Text.ElideRight }
+                        Label { Layout.fillWidth: true; Layout.minimumWidth: 0; text: String(modelData.selectedCommodityName || appliedCommodityFilter) + " · " + String(modelData.reserveName || "UNKNOWN") + " · " + routeMiningEvidence(modelData) + (appliedPreferSecondary && secondaryCompactSummary(modelData) ? " · " + secondaryCompactSummary(modelData) : ""); color: textSecondary; font.pixelSize: 12; wrapMode: Text.WordWrap; maximumLineCount: 2; elide: Text.ElideRight; ToolTip.visible: routeHover.hovered && modelData.yieldMeasured; ToolTip.text: yieldEvidence(modelData) }
                     }
                     ColumnLayout { Layout.minimumWidth: routeSaleWidth; Layout.preferredWidth: routeSaleWidth; Layout.maximumWidth: routeSaleWidth; spacing: 2
                         Label { Layout.fillWidth: true; Layout.minimumWidth: 0; text: marketName(modelData); color: modelData.marketKnown ? textPrimary : orange; font.pixelSize: 13; font.bold: true; elide: Text.ElideRight }
