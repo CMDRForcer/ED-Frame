@@ -2,6 +2,7 @@ import QtQuick
 import QtQuick.Controls
 import QtQuick.Layouts
 import "../components"
+import "../components/UiMetrics.js" as UiMetrics
 
 ColumnLayout {
     id: missionsPage
@@ -170,12 +171,12 @@ ColumnLayout {
                             Layout.alignment: Qt.AlignBaseline
                             text: modelData.unit
                             color: muted
-                            font.pixelSize: 10
+                            font.pixelSize: UiMetrics.caption
                             font.bold: true
                         }
                         Item { Layout.fillWidth: true }
                     }
-                    Label { text: modelData.label; color: muted; font.pixelSize: 9; font.bold: true }
+                    Label { text: modelData.label; color: muted; font.pixelSize: UiMetrics.caption; font.bold: true }
                 }
             }
         }
@@ -209,7 +210,7 @@ ColumnLayout {
                         text: showMassacreStacks
                               ? appWindow.tf("missions.stack_count", "%1 TARGET FACTION(S)", [stacks.length])
                               : appWindow.tf("missions.tracked_count", "%1 TRACKED", [missions.length])
-                        color: muted; font.family: monoFont; font.pixelSize: 10
+                        color: muted; font.family: monoFont; font.pixelSize: UiMetrics.caption
                     }
                 }
                 RowLayout {
@@ -227,7 +228,7 @@ ColumnLayout {
                             anchors.centerIn: parent
                             text: appWindow.t("missions.view_stacks", "STACKED KILLS")
                             color: showMassacreStacks ? danger : muted
-                            font.pixelSize: 9; font.bold: true
+                            font.pixelSize: UiMetrics.caption; font.bold: true
                         }
                         MouseArea {
                             anchors.fill: parent; cursorShape: Qt.PointingHandCursor
@@ -246,7 +247,7 @@ ColumnLayout {
                             anchors.centerIn: parent
                             text: appWindow.t("missions.view_all", "ALL MISSIONS")
                             color: !showMassacreStacks ? cyan : muted
-                            font.pixelSize: 9; font.bold: true
+                            font.pixelSize: UiMetrics.caption; font.bold: true
                         }
                         MouseArea {
                             anchors.fill: parent; cursorShape: Qt.PointingHandCursor
@@ -311,7 +312,7 @@ ColumnLayout {
                                                 text: appWindow.tf("missions.stack_summary", "%1 MISSIONS · %2 ISSUERS",
                                                                    [stackRow.modelData.missionCount || 0,
                                                                     stackRow.modelData.issuerCount || 0])
-                                                color: muted; font.pixelSize: 9
+                                                color: muted; font.pixelSize: UiMetrics.caption
                                             }
                                         }
                                         ColumnLayout {
@@ -319,7 +320,7 @@ ColumnLayout {
                                             Label {
                                                 Layout.alignment: Qt.AlignRight
                                                 text: appWindow.t("missions.effective_kills", "EFFECTIVE KILLS")
-                                                color: muted; font.pixelSize: 8; font.bold: true
+                                                color: muted; font.pixelSize: UiMetrics.caption; font.bold: true
                                             }
                                             Label {
                                                 Layout.alignment: Qt.AlignRight
@@ -338,13 +339,13 @@ ColumnLayout {
                                                                [stackRow.modelData.nominalKills === null
                                                                 || stackRow.modelData.nominalKills === undefined
                                                                 ? "—" : stackRow.modelData.nominalKills])
-                                            color: textSecondary; font.family: monoFont; font.pixelSize: 10; font.bold: true
+                                            color: textSecondary; font.family: monoFont; font.pixelSize: UiMetrics.caption; font.bold: true
                                         }
                                         Label {
                                             visible: stackRow.modelData.killsSavedByStacking > 0
                                             text: appWindow.tf("missions.kills_saved", "%1 KILLS SAVED BY STACKING",
                                                                [stackRow.modelData.killsSavedByStacking || 0])
-                                            color: green; font.pixelSize: 9; font.bold: true
+                                            color: green; font.pixelSize: UiMetrics.caption; font.bold: true
                                         }
                                         Item { Layout.fillWidth: true }
                                         Label {
@@ -355,7 +356,7 @@ ColumnLayout {
                                     Rectangle { Layout.fillWidth: true; height: 1; color: borderTone }
                                     Label {
                                         text: appWindow.t("missions.issuer_lanes", "KILLS REQUIRED PER ISSUING FACTION")
-                                        color: muted; font.pixelSize: 8; font.bold: true
+                                        color: muted; font.pixelSize: UiMetrics.caption; font.bold: true
                                     }
                                     Repeater {
                                         model: stackRow.modelData.issuerLanes || []
@@ -365,14 +366,14 @@ ColumnLayout {
                                             Label {
                                                 Layout.fillWidth: true
                                                 text: modelData.issuerFaction
-                                                color: textSecondary; font.pixelSize: 10; font.bold: true
+                                                color: textSecondary; font.pixelSize: UiMetrics.caption; font.bold: true
                                                 elide: Text.ElideRight
                                             }
                                             Label {
                                                 text: appWindow.tf("missions.issuer_lane_kills", "%1 KILLS · %2 MISSION(S)",
                                                                    [modelData.requiredKills || 0,
                                                                     modelData.missionCount || 0])
-                                                color: cyan; font.family: monoFont; font.pixelSize: 10; font.bold: true
+                                                color: cyan; font.family: monoFont; font.pixelSize: UiMetrics.caption; font.bold: true
                                             }
                                         }
                                     }
@@ -380,14 +381,14 @@ ColumnLayout {
                                         Layout.fillWidth: true
                                         visible: !stackRow.modelData.stackEvidenceComplete
                                         text: appWindow.t("missions.stack_incomplete", "Issuer or kill-count evidence is incomplete; no exact effective total is claimed.")
-                                        color: orange; font.pixelSize: 9; wrapMode: Text.WordWrap
+                                        color: orange; font.pixelSize: UiMetrics.caption; wrapMode: Text.WordWrap
                                     }
                                     RowLayout {
                                         Layout.fillWidth: true
                                         Label {
                                             Layout.fillWidth: true
                                             text: appWindow.t("missions.no_live_kill_progress", "Elite does not journal live massacre kill progress.")
-                                            color: muted; font.pixelSize: 9; wrapMode: Text.WordWrap
+                                            color: muted; font.pixelSize: UiMetrics.caption; wrapMode: Text.WordWrap
                                         }
                                         Label {
                                             text: stackRow.modelData.nearestExpiry
@@ -481,7 +482,7 @@ ColumnLayout {
                                             Label {
                                                 text: missionRow.modelData.faction
                                                 color: muted
-                                                font.pixelSize: 10
+                                                font.pixelSize: UiMetrics.caption
                                             }
                                         }
                                         ColumnLayout {
@@ -490,7 +491,7 @@ ColumnLayout {
                                                 Layout.alignment: Qt.AlignRight
                                                 text: appWindow.t("missions.time_left", "TIME LEFT")
                                                 color: muted
-                                                font.pixelSize: 8
+                                                font.pixelSize: UiMetrics.caption
                                                 font.bold: true
                                             }
                                             Label {
@@ -533,7 +534,7 @@ ColumnLayout {
                                             text: missionRow.modelData.progressDone + " / " + missionRow.modelData.progressTotal
                                             color: muted
                                             font.family: monoFont
-                                            font.pixelSize: 10
+                                            font.pixelSize: UiMetrics.caption
                                             font.bold: true
                                         }
                                     }
@@ -552,7 +553,7 @@ ColumnLayout {
                                             visible: missionRow.modelData.reward !== null || missionRow.modelData.donation !== null
                                             text: appWindow.t("missions.currency_cr", "CR")
                                             color: muted
-                                            font.pixelSize: 9
+                                            font.pixelSize: UiMetrics.caption
                                             font.bold: true
                                         }
                                         Item { Layout.fillWidth: true }
@@ -566,7 +567,7 @@ ColumnLayout {
                                                 anchors.centerIn: parent
                                                 text: missionsPage.missionKindLabel(missionRow.kind)
                                                 color: missionRow.kindColor
-                                                font.pixelSize: 8
+                                                font.pixelSize: UiMetrics.caption
                                                 font.bold: true
                                             }
                                         }
@@ -581,7 +582,7 @@ ColumnLayout {
                                                 anchors.centerIn: parent
                                                 text: appWindow.t("missions.wing", "WING")
                                                 color: green
-                                                font.pixelSize: 8
+                                                font.pixelSize: UiMetrics.caption
                                                 font.bold: true
                                             }
                                         }
@@ -612,7 +613,7 @@ ColumnLayout {
                     }
                     Label {
                         text: appWindow.tf("missions.joined_count", "%1 JOINED", [goals.length])
-                        color: muted; font.family: monoFont; font.pixelSize: 10
+                        color: muted; font.family: monoFont; font.pixelSize: UiMetrics.caption
                     }
                 }
                 Rectangle { Layout.fillWidth: true; height: 1; color: borderTone }
@@ -675,7 +676,7 @@ ColumnLayout {
                                         text: cgRow.modelData.system
                                               + (cgRow.modelData.expiry ? " · " + appWindow.t("missions.closes", "closes") + " " + appWindow.timeUntil(cgRow.modelData.expiry) : "")
                                         color: muted
-                                        font.pixelSize: 10
+                                        font.pixelSize: UiMetrics.caption
                                     }
 
                                     RowLayout {
@@ -699,7 +700,7 @@ ColumnLayout {
                                               + (cgRow.modelData.topTierName ? " / " + cgRow.modelData.topTierName : "")
                                         color: cyan
                                         font.family: monoFont
-                                        font.pixelSize: 10
+                                        font.pixelSize: UiMetrics.caption
                                         font.bold: true
                                     }
 
@@ -708,7 +709,7 @@ ColumnLayout {
                                         Label {
                                             text: appWindow.t("missions.your_contribution", "YOUR CONTRIBUTION")
                                             color: muted
-                                            font.pixelSize: 9
+                                            font.pixelSize: UiMetrics.caption
                                             font.bold: true
                                         }
                                         Item { Layout.fillWidth: true }
@@ -745,7 +746,7 @@ ColumnLayout {
                                                 anchors.centerIn: parent
                                                 text: appWindow.tf("missions.percentile_band", "TOP %1%", [cgRow.modelData.percentileBand])
                                                 color: green
-                                                font.pixelSize: 8
+                                                font.pixelSize: UiMetrics.caption
                                                 font.bold: true
                                             }
                                         }
@@ -756,7 +757,7 @@ ColumnLayout {
                                               [Number(cgRow.modelData.numContributors).toLocaleString(Qt.locale(), "f", 0),
                                                Number(cgRow.modelData.currentTotal).toLocaleString(Qt.locale(), "f", 0)])
                                         color: muted
-                                        font.pixelSize: 9
+                                        font.pixelSize: UiMetrics.caption
                                         wrapMode: Text.WordWrap
                                     }
                                 }

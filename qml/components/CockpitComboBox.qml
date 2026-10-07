@@ -1,17 +1,18 @@
 import QtQuick
 import QtQuick.Controls
+import "UiMetrics.js" as UiMetrics
 
 ComboBox {
     id: control
     property var appWindow: ApplicationWindow.window
 
-    implicitHeight: 42
+    implicitHeight: UiMetrics.controlHeight
     leftPadding: 14
     rightPadding: 42
     topPadding: 0
     bottomPadding: 0
     font.family: appWindow ? appWindow.font.family : "Segoe UI Variable Text"
-    font.pixelSize: 11
+    font.pixelSize: UiMetrics.body
     font.bold: true
     hoverEnabled: true
     wheelEnabled: false
@@ -49,7 +50,7 @@ ComboBox {
     }
 
     background: Rectangle {
-        radius: 8
+        radius: UiMetrics.controlRadius
         color: control.down || control.popup.visible
                ? (control.appWindow ? control.appWindow.active : "#214563")
                : control.hovered

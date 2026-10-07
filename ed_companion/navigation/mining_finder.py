@@ -111,19 +111,36 @@ def project_edframe_mining_candidates(
 
 def fetch_edframe_mining_candidates(
     system: str, get: Any, *, commodity: str = "", origin: Any = None,
-    timeout: int = 20,
+    timeout: int = 20, max_distance: float | None = None,
+    diagnostics: dict | None = None,
 ) -> list[dict[str, Any]]:
     """Fetch one system from the central catalog without identity data."""
     requested = _text(system)
     if not requested:
         raise ValueError("A system name is required")
     params: dict[str, Any] = {"system": requested, "limit": 200}
+    # Physical rings do not disappear when observations become old. Freshness
+    # is assessed from observedAt downstream, never from the retrieval time.
+    params["max_age_days"] = 3650
+    coordinates = _coordinates(origin)
+    if max_distance is not None:
+        if not coordinates or not 0 < float(max_distance) <= 2000:
+            raise ValueError("Regional mining search requires coordinates and radius")
+        params.pop("system")
+        params.update(dict(zip(("x", "y", "z"), coordinates)))
+        params["max_distance"] = float(max_distance)
     commodity_id = mining_commodity_id(commodity)
     if commodity_id and commodity_id != "allcommodities":
         params["commodity"] = commodity_id
     response = get(EDFRAME_CATALOG_SITES_URL, params=params, timeout=timeout)
     response.raise_for_status()
-    return project_edframe_mining_candidates(response.json(), origin)
+    payload = response.json()
+    candidates = project_edframe_mining_candidates(payload, origin)
+    if diagnostics is not None:
+        diagnostics.update({"count": len(candidates), "bounded": bool(
+            payload.get("hasMore") or len(payload["results"]) >= 200
+        )})
+    return candidates
 
 
 def project_local_yield_observations(
@@ -483,17 +500,28 @@ def merge_mining_candidates(
                 if not commodity:
                     continue
                 stat_sources.setdefault(commodity, []).append((source, stat))
-        selected_scope = ""
+        selected_scopes = set()
         for commodity, entries in stat_sources.items():
             community_entries = [
                 entry for entry in entries
-                if entry[0].get("yieldAggregationScope") == "COMMUNITY"
+                if entry[1].get("yieldAggregationScope", entry[0].get(
+                    "yieldAggregationScope"
+                )) == "COMMUNITY"
             ]
             local_entries = [
                 entry for entry in entries
-                if entry[0].get("yieldAggregationScope") != "COMMUNITY"
+                if entry not in community_entries
             ]
-            measurement_entries = entries
+            # Server aggregates overlap: snapshots are not independent samples.
+            # Use the newest community snapshot, not their sum (nor a historic
+            # larger snapshot after corrections). Local/community overlap is
+            # handled conservatively below because uploaded samples may recur.
+            community_entries = ([max(community_entries, key=lambda entry: (
+                _text(entry[0].get("learnedAt")),
+                _text(entry[1].get("lastObservedAt")),
+            ))] if community_entries else [])
+            measurement_entries = community_entries or local_entries
+            selected_scope = "COMMUNITY" if community_entries else "LOCAL"
             if community_entries and local_entries:
                 community_best = max(community_entries, key=lambda entry: int(
                     entry[1].get("proportionSamples",
@@ -553,6 +581,8 @@ def merge_mining_candidates(
                     _text(stat.get("lastObservedAt")),
                 )
             combined = yield_stats[commodity]
+            combined["yieldAggregationScope"] = selected_scope
+            selected_scopes.add(selected_scope)
             combined["refinedCount"] = sum(
                 int(stat.get("refinedCount", 0) or 0)
                 for source, stat in entries
@@ -568,8 +598,10 @@ def merge_mining_candidates(
             )
             stat["proportionTotal"] = round(stat["proportionTotal"], 3)
             strongest["yieldStats"].append(stat)
-        if selected_scope:
-            strongest["yieldAggregationScope"] = selected_scope
+        if selected_scopes:
+            strongest["yieldAggregationScope"] = (
+                next(iter(selected_scopes)) if len(selected_scopes) == 1 else "MIXED"
+            )
         strongest["learnedAt"] = max(
             (_text(source.get("learnedAt")) for source in observations),
             default="",

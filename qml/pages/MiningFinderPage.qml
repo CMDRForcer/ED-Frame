@@ -1,4 +1,5 @@
 import QtQuick
+import "../components/UiMetrics.js" as UiMetrics
 import QtQuick.Controls
 import QtQuick.Layouts
 import "../components"
@@ -538,13 +539,13 @@ Item {
             Layout.fillWidth: true
             Label {
                 text: sliderField.labelText
-                color: muted; font.pixelSize: 8; font.bold: true
+                color: muted; font.pixelSize: UiMetrics.caption; font.bold: true
             }
             Item { Layout.fillWidth: true }
             Label {
                 text: miningFinderPage.formatNumber(
                           sliderField.displayedValue) + sliderField.suffix
-                color: orange; font.pixelSize: 9; font.bold: true
+                color: orange; font.pixelSize: UiMetrics.caption; font.bold: true
             }
         }
         Slider {
@@ -596,8 +597,8 @@ Item {
 
     WorkspaceHeader {
         qaName: "qa-mining-header"
-        Layout.minimumHeight: miningFinderPage.compactFilters ? 104 : 76
-        Layout.maximumHeight: miningFinderPage.compactFilters ? 104 : 76
+        Layout.minimumWidth: 0
+        Layout.maximumWidth: miningFinderPage.availableWorkspaceWidth
         appWindow: miningFinderPage.appWindow
         eyebrow: appWindow.t("mining.eyebrow", "UNIVERSAL MINING PLANNER")
         title: appWindow.t("mining.title", "MINING FINDER")
@@ -700,6 +701,8 @@ Item {
     Rectangle {
         objectName: "qa-mining-config"
         Layout.fillWidth: true
+        Layout.minimumWidth: 0
+        Layout.maximumWidth: miningFinderPage.availableWorkspaceWidth
         Layout.minimumHeight: miningFinderPage.searchGoalExpanded
                               ? (miningFinderPage.compactFilters ? 540 : 340)
                               : 48
@@ -714,9 +717,18 @@ Item {
         border.width: 1
         border.color: orange
 
-        ColumnLayout {
+        ScrollView {
+            id: miningFilterViewport
+            objectName: "qa-mining-filter-viewport"
+            implicitWidth: 0
             anchors.fill: parent
             anchors.margins: 10
+            anchors.bottomMargin: miningFinderPage.searchGoalExpanded ? 62 : 10
+            clip: true
+            contentWidth: availableWidth
+            ScrollBar.horizontal.policy: ScrollBar.AlwaysOff
+            ColumnLayout {
+            width: miningFilterViewport.availableWidth
             spacing: 6
 
             RowLayout {
@@ -738,7 +750,7 @@ Item {
                                 [appliedCommodityFilter, appliedMiningMethod,
                                  displayOptimization(appliedOptimization),
                                  appliedNearbyLy, resultRows.length])
-                    color: muted; font.pixelSize: 9; font.bold: true
+                    color: muted; font.pixelSize: UiMetrics.caption; font.bold: true
                     elide: Text.ElideRight
                     horizontalAlignment: Text.AlignRight
                 }
@@ -756,7 +768,7 @@ Item {
                         color: toggleSearchGoalButton.hovered ? cyan : textSecondary
                         horizontalAlignment: Text.AlignHCenter
                         verticalAlignment: Text.AlignVCenter
-                        font.pixelSize: 8; font.bold: true
+                        font.pixelSize: UiMetrics.caption; font.bold: true
                     }
                     background: Rectangle {
                         radius: 6; color: inputBackground
@@ -780,7 +792,7 @@ Item {
                 rowSpacing: 8
                 ColumnLayout {
                     Layout.fillWidth: true; Layout.minimumWidth: 0; Layout.preferredWidth: 1; spacing: 4
-                    Label { text: appWindow.t("mining.start_system", "START SYSTEM"); color: muted; font.pixelSize: 9; font.bold: true }
+                    Label { text: appWindow.t("mining.start_system", "START SYSTEM"); color: muted; font.pixelSize: UiMetrics.caption; font.bold: true }
                     TextField {
                         id: startSystemField
                         Layout.fillWidth: true
@@ -878,7 +890,7 @@ Item {
                                         text: String(
                                             miningFinderPage.systemSuggestions[index])
                                         color: highlighted ? textPrimary : textSecondary
-                                        font.pixelSize: 10
+                                        font.pixelSize: UiMetrics.caption
                                         font.bold: highlighted
                                         verticalAlignment: Text.AlignVCenter
                                         elide: Text.ElideRight
@@ -903,7 +915,7 @@ Item {
                 }
                 ColumnLayout {
                     Layout.fillWidth: true; Layout.minimumWidth: 0; Layout.preferredWidth: 1; spacing: 4
-                    Label { text: appWindow.t("mining.target_commodity", "TARGET COMMODITY"); color: muted; font.pixelSize: 9; font.bold: true }
+                    Label { text: appWindow.t("mining.target_commodity", "TARGET COMMODITY"); color: muted; font.pixelSize: UiMetrics.caption; font.bold: true }
                     CockpitComboBox {
                         id: commodityBox; Layout.fillWidth: true; Layout.minimumWidth: 0; Layout.preferredWidth: 1; implicitHeight: 34
                         model: miningFinderPage.commodityOptions
@@ -916,7 +928,7 @@ Item {
                 }
                 ColumnLayout {
                     Layout.fillWidth: true; Layout.minimumWidth: 0; Layout.preferredWidth: 1; spacing: 4
-                    Label { text: appWindow.t("mining.method", "MINING METHOD"); color: muted; font.pixelSize: 9; font.bold: true }
+                    Label { text: appWindow.t("mining.method", "MINING METHOD"); color: muted; font.pixelSize: UiMetrics.caption; font.bold: true }
                     CockpitComboBox {
                         id: methodBox; Layout.fillWidth: true; Layout.minimumWidth: 0; Layout.preferredWidth: 1; implicitHeight: 34
                         model: ["LASER", "CORE", "SUBSURFACE", "RHINO SURFACE"]
@@ -926,7 +938,7 @@ Item {
                 }
                 ColumnLayout {
                     Layout.fillWidth: true; Layout.minimumWidth: 0; Layout.preferredWidth: 1; spacing: 4
-                    Label { text: appWindow.t("mining.optimize_for", "OPTIMIZE FOR"); color: orange; font.pixelSize: 9; font.bold: true }
+                    Label { text: appWindow.t("mining.optimize_for", "OPTIMIZE FOR"); color: orange; font.pixelSize: UiMetrics.caption; font.bold: true }
                     CockpitComboBox {
                         id: optimizationBox; Layout.fillWidth: true; Layout.minimumWidth: 0; Layout.preferredWidth: 1; implicitHeight: 34
                         model: ["POWERPLAY MERITS", "BEST YIELD", "HIGHEST PROFIT", "SHORTEST ROUTE"]
@@ -936,7 +948,7 @@ Item {
                 }
                 ColumnLayout {
                     Layout.fillWidth: true; Layout.minimumWidth: 0; Layout.preferredWidth: 1; spacing: 4
-                    Label { text: appWindow.t("mining.power_merits", "POWER · FOR MERITS"); color: muted; font.pixelSize: 9; font.bold: true }
+                    Label { text: appWindow.t("mining.power_merits", "POWER · FOR MERITS"); color: muted; font.pixelSize: UiMetrics.caption; font.bold: true }
                     CockpitComboBox {
                         id: powerBox
                         Layout.fillWidth: true; Layout.minimumWidth: 0
@@ -965,7 +977,7 @@ Item {
                     Layout.fillWidth: true; Layout.minimumWidth: 0; Layout.preferredWidth: 1; spacing: 6
                     Label {
                         text: appWindow.t("mining.range_market_group", "2 · RANGE AND MARKET QUALITY")
-                        color: cyan; font.pixelSize: 9; font.bold: true
+                        color: cyan; font.pixelSize: UiMetrics.caption; font.bold: true
                     }
                     GridLayout {
                         Layout.fillWidth: true
@@ -1019,13 +1031,13 @@ Item {
                     Layout.fillWidth: true; Layout.minimumWidth: 0; Layout.preferredWidth: 1; spacing: 6
                     Label {
                         text: appWindow.t("mining.ring_ship_power_group", "3 · RING, SHIP AND POWERPLAY")
-                        color: cyan; font.pixelSize: 9; font.bold: true
+                        color: cyan; font.pixelSize: UiMetrics.caption; font.bold: true
                     }
                     GridLayout {
                         Layout.fillWidth: true; columns: 2; uniformCellWidths: true; columnSpacing: 7; rowSpacing: 7
                         ColumnLayout {
                             Layout.fillWidth: true; Layout.minimumWidth: 0; Layout.preferredWidth: 1; spacing: 2
-                            Label { text: appWindow.t("mining.ring_type", "RING TYPE"); color: muted; font.pixelSize: 8; font.bold: true }
+                            Label { text: appWindow.t("mining.ring_type", "RING TYPE"); color: muted; font.pixelSize: UiMetrics.caption; font.bold: true }
                             CockpitComboBox {
                                 id: ringBox; Layout.fillWidth: true; Layout.minimumWidth: 0; implicitHeight: 30
                                 model: miningFinderPage.ringOptions
@@ -1035,7 +1047,7 @@ Item {
                         }
                         ColumnLayout {
                             Layout.fillWidth: true; Layout.minimumWidth: 0; Layout.preferredWidth: 1; spacing: 2
-                            Label { text: appWindow.t("mining.reserve_quality", "RESERVE QUALITY"); color: muted; font.pixelSize: 8; font.bold: true }
+                            Label { text: appWindow.t("mining.reserve_quality", "RESERVE QUALITY"); color: muted; font.pixelSize: UiMetrics.caption; font.bold: true }
                             CockpitComboBox {
                                 id: reserveBox; Layout.fillWidth: true; Layout.minimumWidth: 0; implicitHeight: 30
                                 model: ["PRISTINE + MAJOR", "PRISTINE", "MAJOR", "ALL RESERVES"]
@@ -1045,7 +1057,7 @@ Item {
                         }
                         ColumnLayout {
                             Layout.fillWidth: true; Layout.minimumWidth: 0; Layout.preferredWidth: 1; spacing: 2
-                            Label { text: appWindow.t("mining.landing_pad", "LANDING PAD"); color: muted; font.pixelSize: 8; font.bold: true }
+                            Label { text: appWindow.t("mining.landing_pad", "LANDING PAD"); color: muted; font.pixelSize: UiMetrics.caption; font.bold: true }
                             CockpitComboBox {
                                 id: padBox; Layout.fillWidth: true; Layout.minimumWidth: 0; implicitHeight: 30
                                 model: ["LARGE", "MEDIUM", "ANY"]
@@ -1055,7 +1067,7 @@ Item {
                         }
                         ColumnLayout {
                             Layout.fillWidth: true; Layout.minimumWidth: 0; Layout.preferredWidth: 1; spacing: 2
-                            Label { text: appWindow.t("mining.powerplay_goal", "POWERPLAY GOAL"); color: muted; font.pixelSize: 8; font.bold: true }
+                            Label { text: appWindow.t("mining.powerplay_goal", "POWERPLAY GOAL"); color: muted; font.pixelSize: UiMetrics.caption; font.bold: true }
                             CockpitComboBox {
                                 id: goalBox; Layout.fillWidth: true; Layout.minimumWidth: 0; implicitHeight: 30
                                 model: ["REINFORCE", "ACQUIRE", "UNDERMINE"]
@@ -1065,7 +1077,7 @@ Item {
                         }
                         ColumnLayout {
                             Layout.fillWidth: true; Layout.minimumWidth: 0; Layout.preferredWidth: 1; spacing: 2
-                            Label { text: appWindow.t("mining.opposing_power", "OPPOSING POWER"); color: muted; font.pixelSize: 8; font.bold: true }
+                            Label { text: appWindow.t("mining.opposing_power", "OPPOSING POWER"); color: muted; font.pixelSize: UiMetrics.caption; font.bold: true }
                             CockpitComboBox {
                                 id: opposingPowerBox; Layout.fillWidth: true; Layout.minimumWidth: 0; implicitHeight: 30
                                 model: miningFinderPage.opposingPowerOptions
@@ -1077,7 +1089,7 @@ Item {
                         }
                         ColumnLayout {
                             Layout.fillWidth: true; Layout.minimumWidth: 0; Layout.preferredWidth: 1; spacing: 2
-                            Label { text: appWindow.t("mining.system_state", "SYSTEM STATE"); color: muted; font.pixelSize: 8; font.bold: true }
+                            Label { text: appWindow.t("mining.system_state", "SYSTEM STATE"); color: muted; font.pixelSize: UiMetrics.caption; font.bold: true }
                             CockpitComboBox {
                                 id: systemStateBox; Layout.fillWidth: true; Layout.minimumWidth: 0; implicitHeight: 30
                                 model: miningFinderPage.systemStateOptions
@@ -1095,7 +1107,7 @@ Item {
                             checkable: true; checked: miningFinderPage.preferRes
                             onClicked: miningFinderPage.preferRes = checked
                             background: Rectangle { radius: 6; color: parent.checked ? orange : inputBackground; border.width: 1; border.color: parent.checked ? orange : borderTone }
-                            contentItem: Label { text: parent.text; color: parent.checked ? "#17100a" : textPrimary; horizontalAlignment: Text.AlignHCenter; verticalAlignment: Text.AlignVCenter; font.pixelSize: 9; font.bold: true }
+                            contentItem: Label { text: parent.text; color: parent.checked ? "#17100a" : textPrimary; horizontalAlignment: Text.AlignHCenter; verticalAlignment: Text.AlignVCenter; font.pixelSize: UiMetrics.caption; font.bold: true }
                         }
                         Button {
                             text: appWindow.t("mining.hotspot_required", "HOTSPOT REQUIRED")
@@ -1104,7 +1116,7 @@ Item {
                             opacity: enabled ? 1.0 : 0.45
                             onClicked: miningFinderPage.requireHotspot = checked
                             background: Rectangle { radius: 6; color: parent.checked ? orange : inputBackground; border.width: 1; border.color: parent.checked ? orange : borderTone }
-                            contentItem: Label { text: parent.text; color: parent.checked ? "#17100a" : textPrimary; horizontalAlignment: Text.AlignHCenter; verticalAlignment: Text.AlignVCenter; font.pixelSize: 9; font.bold: true }
+                            contentItem: Label { text: parent.text; color: parent.checked ? "#17100a" : textPrimary; horizontalAlignment: Text.AlignHCenter; verticalAlignment: Text.AlignVCenter; font.pixelSize: UiMetrics.caption; font.bold: true }
                         }
                         Button {
                             text: appWindow.t("mining.rings_only", "RINGS ONLY")
@@ -1113,32 +1125,42 @@ Item {
                             opacity: enabled ? 1.0 : 0.45
                             onClicked: miningFinderPage.ringsOnly = checked
                             background: Rectangle { radius: 6; color: parent.checked ? orange : inputBackground; border.width: 1; border.color: parent.checked ? orange : borderTone }
-                            contentItem: Label { text: parent.text; color: parent.checked ? "#17100a" : textPrimary; horizontalAlignment: Text.AlignHCenter; verticalAlignment: Text.AlignVCenter; font.pixelSize: 9; font.bold: true }
+                            contentItem: Label { text: parent.text; color: parent.checked ? "#17100a" : textPrimary; horizontalAlignment: Text.AlignHCenter; verticalAlignment: Text.AlignVCenter; font.pixelSize: UiMetrics.caption; font.bold: true }
                         }
                         Button {
                             text: appWindow.t("mining.secondary_preferred", "MORE RESOURCES")
                             checkable: true; checked: miningFinderPage.preferSecondary
                             onClicked: miningFinderPage.preferSecondary = checked
                             background: Rectangle { radius: 6; color: parent.checked ? orange : inputBackground; border.width: 1; border.color: parent.checked ? orange : borderTone }
-                            contentItem: Label { text: parent.text; color: parent.checked ? "#17100a" : textPrimary; horizontalAlignment: Text.AlignHCenter; verticalAlignment: Text.AlignVCenter; font.pixelSize: 9; font.bold: true }
+                            contentItem: Label { text: parent.text; color: parent.checked ? "#17100a" : textPrimary; horizontalAlignment: Text.AlignHCenter; verticalAlignment: Text.AlignVCenter; font.pixelSize: UiMetrics.caption; font.bold: true }
                         }
                     }
                 }
             }
 
+            }
+        }
+
             RowLayout {
-                Layout.fillWidth: true
+                objectName: "qa-mining-search-action"
+                anchors.left: parent.left
+                anchors.right: parent.right
+                anchors.bottom: parent.bottom
+                anchors.margins: 10
+                height: UiMetrics.controlHeight
                 visible: miningFinderPage.searchGoalExpanded
                 Label {
                     Layout.fillWidth: true
                     Layout.minimumWidth: 0
                     Layout.preferredWidth: 1
                     text: appWindow.tf("mining.search_summary", "4 · CALCULATE · %1 · %2 · %3 · %4 LY · DEMAND ≥ %5 T", [commodityFilter, miningMethod, displayOptimization(optimization), nearbyLy, formatNumber(minDemand)])
-                    color: textSecondary; font.pixelSize: 9; elide: Text.ElideRight
+                    color: textSecondary; font.pixelSize: UiMetrics.caption; elide: Text.ElideRight
                 }
                 Button {
                     id: findRouteButton
-                    Layout.minimumWidth: 180; Layout.preferredWidth: 220; Layout.maximumWidth: 220; implicitHeight: 34
+                    Layout.minimumWidth: 180; Layout.preferredWidth: 220; Layout.maximumWidth: 220
+                    Layout.fillHeight: true
+                    implicitHeight: UiMetrics.controlHeight
                     text: appWindow.t("mining.find_best_route", "FIND BEST ROUTE")
                     onClicked: {
                         miningFinderPage.executeSearch()
@@ -1147,7 +1169,7 @@ Item {
                         text: findRouteButton.text; color: "#17100a"
                         horizontalAlignment: Text.AlignHCenter
                         verticalAlignment: Text.AlignVCenter
-                        font.pixelSize: 10; font.bold: true
+                        font.pixelSize: UiMetrics.caption; font.bold: true
                     }
                     background: Rectangle {
                         radius: 7
@@ -1155,17 +1177,18 @@ Item {
                     }
                 }
             }
-        }
     }
 
     RowLayout {
         Layout.fillWidth: true
         Layout.minimumHeight: 30
+        Layout.minimumWidth: 0
+        Layout.maximumWidth: miningFinderPage.availableWorkspaceWidth
         Layout.preferredHeight: 30
         Layout.maximumHeight: 30
         spacing: 15
-        Label { text: "● " + appWindow.t("mining.journal_current", "JOURNAL CURRENT"); color: green; font.pixelSize: 9; font.bold: true }
-        Label { Layout.minimumWidth: 0; text: appWindow.t("mining.ring_sources", "RINGS · JOURNAL + EDDN + SPANSH"); color: muted; font.pixelSize: 9; elide: Text.ElideRight }
+        Label { text: "● " + appWindow.t("mining.journal_current", "JOURNAL CURRENT"); color: green; font.pixelSize: UiMetrics.caption; font.bold: true }
+        Label { Layout.minimumWidth: 0; text: appWindow.t("mining.ring_sources", "RINGS · JOURNAL + EDDN + SPANSH"); color: muted; font.pixelSize: UiMetrics.caption; elide: Text.ElideRight }
         Label {
             Layout.minimumWidth: 0
             text: cockpit.miningMarketSyncBusy
@@ -1180,7 +1203,7 @@ Item {
                     && Number(miningFinderPage.marketDiagnostics.eligible || 0) === 0)
                    || cockpit.miningMarketSyncStatus.toLowerCase().indexOf("fail") >= 0
                    ? orange : muted
-            font.pixelSize: 9; elide: Text.ElideRight
+            font.pixelSize: UiMetrics.caption; elide: Text.ElideRight
             ToolTip.visible: marketStatusHover.hovered && truncated
             ToolTip.text: text
             HoverHandler { id: marketStatusHover }
@@ -1197,7 +1220,7 @@ Item {
                          cockpit.miningVerificationTotal])
                   : cockpit.miningVerificationStatus
             color: cockpit.miningVerificationBusy ? cyan : muted
-            font.pixelSize: 9
+            font.pixelSize: UiMetrics.caption
             font.bold: cockpit.miningVerificationBusy
             elide: Text.ElideRight
             ToolTip.visible: verificationStatusHover.hovered && truncated
@@ -1205,7 +1228,7 @@ Item {
             HoverHandler { id: verificationStatusHover }
         }
         Item { Layout.fillWidth: true }
-        Label { text: readiness.ready ? "✓ " + appWindow.t("mining.loadout_ready", "LOADOUT READY") : "! " + appWindow.t("mining.loadout_incomplete", "LOADOUT INCOMPLETE"); color: readiness.ready ? green : orange; font.pixelSize: 9; font.bold: true }
+        Label { text: readiness.ready ? "✓ " + appWindow.t("mining.loadout_ready", "LOADOUT READY") : "! " + appWindow.t("mining.loadout_incomplete", "LOADOUT INCOMPLETE"); color: readiness.ready ? green : orange; font.pixelSize: UiMetrics.caption; font.bold: true }
         Button {
             id: refreshMiningButton
             implicitWidth: 170; implicitHeight: 28
@@ -1217,7 +1240,7 @@ Item {
                 color: refreshMiningButton.enabled ? textSecondary : muted
                 horizontalAlignment: Text.AlignHCenter
                 verticalAlignment: Text.AlignVCenter
-                font.pixelSize: 8; font.bold: true
+                font.pixelSize: UiMetrics.caption; font.bold: true
             }
             background: Rectangle {
                 radius: 6; color: inputBackground
@@ -1247,7 +1270,7 @@ Item {
                             text: activeRouteIndex === 0
                                   ? appWindow.t("mining.best_for_goal", "BEST ROUTE FOR YOUR GOAL")
                                   : appWindow.t("mining.selected_route", "SELECTED ROUTE")
-                            color: orange; font.pixelSize: 10; font.bold: true
+                            color: orange; font.pixelSize: UiMetrics.caption; font.bold: true
                         }
                         Label { text: String(bestRoute.selectedCommodityName || appliedCommodityFilter) + " · " + appliedMiningMethod + " · " + String(bestRoute.ringTypeName || "UNKNOWN RING"); color: textPrimary; font.pixelSize: 16; font.bold: true; elide: Text.ElideRight; Layout.fillWidth: true }
                     }
@@ -1268,7 +1291,7 @@ Item {
                             anchors.centerIn: parent
                             text: verificationShortLabel(bestRoute)
                             color: verificationColor(bestRoute)
-                            font.pixelSize: 9
+                            font.pixelSize: UiMetrics.caption
                             font.bold: true
                         }
                     }
@@ -1283,7 +1306,7 @@ Item {
                             color: copyBestSystemButton.hovered ? textPrimary : textSecondary
                             horizontalAlignment: Text.AlignHCenter
                             verticalAlignment: Text.AlignVCenter
-                            font.pixelSize: 9; font.bold: true
+                            font.pixelSize: UiMetrics.caption; font.bold: true
                         }
                         background: Rectangle {
                             radius: 6; color: copyBestSystemButton.hovered ? appWindow.hover : inputBackground
@@ -1301,7 +1324,7 @@ Item {
                             color: copySellSystemButton.hovered ? textPrimary : textSecondary
                             horizontalAlignment: Text.AlignHCenter
                             verticalAlignment: Text.AlignVCenter
-                            font.pixelSize: 9; font.bold: true
+                            font.pixelSize: UiMetrics.caption; font.bold: true
                         }
                         background: Rectangle {
                             radius: 6; color: copySellSystemButton.hovered ? appWindow.hover : inputBackground
@@ -1314,20 +1337,20 @@ Item {
                     Rectangle {
                         Layout.fillWidth: true; Layout.preferredHeight: appliedPreferSecondary ? 84 : 66; radius: 8; color: backgroundSecondary
                         ColumnLayout { anchors.fill: parent; anchors.margins: 7; spacing: 2
-                            Label { text: appWindow.t("mining.mine_step", "1 · MINE"); color: cyan; font.pixelSize: 10; font.bold: true }
+                            Label { text: appWindow.t("mining.mine_step", "1 · MINE"); color: cyan; font.pixelSize: UiMetrics.caption; font.bold: true }
                             Label { text: String(bestRoute.system || "UNKNOWN") + " · " + String(bestRoute.ring || bestRoute.body || ""); color: textPrimary; font.pixelSize: 12; font.bold: true; Layout.fillWidth: true; elide: Text.ElideRight }
-                            Label { text: String(bestRoute.selectedCommodityName || appliedCommodityFilter) + " · " + String(bestRoute.reserveName || "UNKNOWN") + " · " + formatDistance(bestRoute.distanceLy); color: textSecondary; font.pixelSize: 10; Layout.fillWidth: true; elide: Text.ElideRight }
-                            Label { visible: appliedPreferSecondary; text: secondaryMiningSummary(bestRoute); color: cyan; font.pixelSize: 9; Layout.fillWidth: true; elide: Text.ElideRight }
+                            Label { text: String(bestRoute.selectedCommodityName || appliedCommodityFilter) + " · " + String(bestRoute.reserveName || "UNKNOWN") + " · " + formatDistance(bestRoute.distanceLy); color: textSecondary; font.pixelSize: UiMetrics.caption; Layout.fillWidth: true; elide: Text.ElideRight }
+                            Label { visible: appliedPreferSecondary; text: secondaryMiningSummary(bestRoute); color: cyan; font.pixelSize: UiMetrics.caption; Layout.fillWidth: true; elide: Text.ElideRight }
                         }
                     }
                     Label { text: appWindow.t("mining.route_arrow", "→"); color: orange; font.pixelSize: 19; font.bold: true }
                     Rectangle {
                         Layout.fillWidth: true; Layout.preferredHeight: appliedPreferSecondary ? 84 : 66; radius: 8; color: backgroundSecondary
                         ColumnLayout { anchors.fill: parent; anchors.margins: 7; spacing: 2
-                            Label { text: appWindow.t("mining.sell_step", "2 · SELL"); color: cyan; font.pixelSize: 10; font.bold: true }
+                            Label { text: appWindow.t("mining.sell_step", "2 · SELL"); color: cyan; font.pixelSize: UiMetrics.caption; font.bold: true }
                             Label { text: marketRouteName(bestRoute); color: bestRoute.marketKnown ? textPrimary : orange; font.pixelSize: 12; font.bold: true; Layout.fillWidth: true; elide: Text.ElideRight }
-                            Label { text: marketDetail(bestRoute); color: textSecondary; font.pixelSize: 10; Layout.fillWidth: true; elide: Text.ElideRight }
-                            Label { visible: appliedPreferSecondary; text: secondarySaleSummary(bestRoute); color: orange; font.pixelSize: 9; Layout.fillWidth: true; elide: Text.ElideRight }
+                            Label { text: marketDetail(bestRoute); color: textSecondary; font.pixelSize: UiMetrics.caption; Layout.fillWidth: true; elide: Text.ElideRight }
+                            Label { visible: appliedPreferSecondary; text: secondarySaleSummary(bestRoute); color: orange; font.pixelSize: UiMetrics.caption; Layout.fillWidth: true; elide: Text.ElideRight }
                         }
                     }
                 }
@@ -1347,7 +1370,7 @@ Item {
                             required property var modelData
                             Layout.fillWidth: true; Layout.preferredHeight: 42; radius: 7; color: inputBackground
                             ColumnLayout { anchors.fill: parent; anchors.margins: 5; spacing: 1
-                                Label { text: modelData.label; color: muted; font.pixelSize: 9; font.bold: true }
+                                Label { text: modelData.label; color: muted; font.pixelSize: UiMetrics.caption; font.bold: true }
                                 Label { text: modelData.value || "—"; color: orange; font.pixelSize: 13; font.bold: true }
                             }
                         }
@@ -1368,7 +1391,7 @@ Item {
                             radius: 7; color: backgroundSecondary
                             ColumnLayout {
                                 anchors.fill: parent; anchors.margins: 5; spacing: 1
-                                Label { text: modelData.label; color: muted; font.pixelSize: 9; font.bold: true }
+                                Label { text: modelData.label; color: muted; font.pixelSize: UiMetrics.caption; font.bold: true }
                                 Label { text: modelData.value; color: textPrimary; font.pixelSize: 11; font.bold: true }
                             }
                         }
@@ -1383,7 +1406,7 @@ Item {
             border.width: 1; border.color: borderTone
             ColumnLayout {
                 anchors.fill: parent; anchors.margins: 10; spacing: 5
-                Label { text: appWindow.t("mining.why_route", "WHY THIS ROUTE?"); color: orange; font.pixelSize: 10; font.bold: true }
+                Label { text: appWindow.t("mining.why_route", "WHY THIS ROUTE?"); color: orange; font.pixelSize: UiMetrics.caption; font.bold: true }
                 Repeater {
                     model: [
                         {"ok": bestRoute.meritKnown, "title": appWindow.t("mining.reason_merit", "Powerplay suitability"), "detail": (bestRoute.meritKnown || (bestRoute.sameSystemSaleRequired && !bestRoute.marketKnown)) ? bestRoute.meritStatus : (miningFinderPage.marketFiltersBlockRoute() ? appWindow.t("mining.reason_merit_filtered", "Unknown — active market filters leave no sell route to verify") : appWindow.t("mining.reason_merit_unknown", "Unknown — no merit claim is made"))},
@@ -1401,7 +1424,7 @@ Item {
                         Label { text: modelData.ok ? "✓" : "!"; color: modelData.ok ? green : orange; font.pixelSize: 14; font.bold: true }
                         ColumnLayout { Layout.fillWidth: true; spacing: 1
                             Label { text: modelData.title; color: textPrimary; font.pixelSize: 11; font.bold: true }
-                            Label { Layout.fillWidth: true; text: modelData.detail; color: textSecondary; font.pixelSize: 10; elide: Text.ElideRight }
+                            Label { Layout.fillWidth: true; text: modelData.detail; color: textSecondary; font.pixelSize: UiMetrics.caption; elide: Text.ElideRight }
                         }
                     }
                 }
@@ -1454,17 +1477,17 @@ Item {
             Layout.fillWidth: true
             Label { text: appWindow.tf("mining.alternatives", "%1 ALTERNATIVES", [alternativeRows.length]); color: orange; font.pixelSize: 12; font.bold: true }
             Item { Layout.fillWidth: true }
-            Label { text: appWindow.t("mining.sort_goal", "SORTED BY SELECTED GOAL · UNKNOWN VALUES LAST"); color: muted; font.pixelSize: 9; font.bold: true }
+            Label { text: appWindow.t("mining.sort_goal", "SORTED BY SELECTED GOAL · UNKNOWN VALUES LAST"); color: muted; font.pixelSize: UiMetrics.caption; font.bold: true }
         }
         Rectangle {
             Layout.fillWidth: true; Layout.preferredHeight: 31; color: panelRaised; radius: 7
             RowLayout {
                 anchors.fill: parent; anchors.leftMargin: 11; anchors.rightMargin: 11; spacing: 10
-                Label { Layout.minimumWidth: routeRankWidth; Layout.preferredWidth: routeRankWidth; Layout.maximumWidth: routeRankWidth; text: appWindow.t("mining.rank", "#"); color: muted; font.pixelSize: 9; font.bold: true }
-                Label { Layout.fillWidth: true; Layout.minimumWidth: 0; text: appWindow.t("mining.location", "MINING LOCATION"); color: muted; font.pixelSize: 9; font.bold: true }
-                Label { Layout.minimumWidth: routeSaleWidth; Layout.preferredWidth: routeSaleWidth; Layout.maximumWidth: routeSaleWidth; text: appWindow.t("mining.sale", "SALE"); color: muted; font.pixelSize: 9; font.bold: true }
-                Label { Layout.minimumWidth: routePriceWidth; Layout.preferredWidth: routePriceWidth; Layout.maximumWidth: routePriceWidth; text: appWindow.t("mining.price_per_tonne", "PRICE / T"); color: muted; font.pixelSize: 9; font.bold: true }
-                Label { Layout.minimumWidth: routeDemandWidth; Layout.preferredWidth: routeDemandWidth; Layout.maximumWidth: routeDemandWidth; text: appWindow.t("mining.demand", "DEMAND"); color: muted; font.pixelSize: 9; font.bold: true }
+                Label { Layout.minimumWidth: routeRankWidth; Layout.preferredWidth: routeRankWidth; Layout.maximumWidth: routeRankWidth; text: appWindow.t("mining.rank", "#"); color: muted; font.pixelSize: UiMetrics.caption; font.bold: true }
+                Label { Layout.fillWidth: true; Layout.minimumWidth: 0; text: appWindow.t("mining.location", "MINING LOCATION"); color: muted; font.pixelSize: UiMetrics.caption; font.bold: true }
+                Label { Layout.minimumWidth: routeSaleWidth; Layout.preferredWidth: routeSaleWidth; Layout.maximumWidth: routeSaleWidth; text: appWindow.t("mining.sale", "SALE"); color: muted; font.pixelSize: UiMetrics.caption; font.bold: true }
+                Label { Layout.minimumWidth: routePriceWidth; Layout.preferredWidth: routePriceWidth; Layout.maximumWidth: routePriceWidth; text: appWindow.t("mining.price_per_tonne", "PRICE / T"); color: muted; font.pixelSize: UiMetrics.caption; font.bold: true }
+                Label { Layout.minimumWidth: routeDemandWidth; Layout.preferredWidth: routeDemandWidth; Layout.maximumWidth: routeDemandWidth; text: appWindow.t("mining.demand", "DEMAND"); color: muted; font.pixelSize: UiMetrics.caption; font.bold: true }
                 Label {
                     Layout.minimumWidth: routeStatusWidth
                     Layout.preferredWidth: routeStatusWidth
@@ -1472,9 +1495,9 @@ Item {
                     text: appliedOptimization === "POWERPLAY MERITS"
                           ? appWindow.t("mining.merit_fit", "MERIT FIT")
                           : appWindow.t("mining.market_age", "DATA AGE")
-                    color: muted; font.pixelSize: 9; font.bold: true
+                    color: muted; font.pixelSize: UiMetrics.caption; font.bold: true
                 }
-                Label { Layout.minimumWidth: routeSelectWidth; Layout.preferredWidth: routeSelectWidth; Layout.maximumWidth: routeSelectWidth; text: appWindow.t("mining.select", "SELECT"); color: muted; font.pixelSize: 9; font.bold: true; horizontalAlignment: Text.AlignHCenter }
+                Label { Layout.minimumWidth: routeSelectWidth; Layout.preferredWidth: routeSelectWidth; Layout.maximumWidth: routeSelectWidth; text: appWindow.t("mining.select", "SELECT"); color: muted; font.pixelSize: UiMetrics.caption; font.bold: true; horizontalAlignment: Text.AlignHCenter }
             }
         }
         ListView {
@@ -1502,7 +1525,7 @@ Item {
                                  || section === "MARKET DATA MISSING / STALE"
                                  || section === "POWERPLAY ROUTE KNOWN · MARKET DATA LIMITED"
                                  ? orange : muted))
-                    font.pixelSize: 10
+                    font.pixelSize: UiMetrics.caption
                     font.bold: true
                 }
             }
@@ -1526,14 +1549,14 @@ Item {
                     Label { Layout.minimumWidth: routeRankWidth; Layout.preferredWidth: routeRankWidth; Layout.maximumWidth: routeRankWidth; text: String(routeIndex(modelData) + 1); color: orange; font.family: monoFont; font.pixelSize: 12; font.bold: true }
                     ColumnLayout { Layout.fillWidth: true; Layout.minimumWidth: 0; spacing: 2
                         Label { Layout.fillWidth: true; text: String(modelData.system || "UNKNOWN") + " · " + String(modelData.ring || modelData.body || ""); color: textPrimary; font.pixelSize: 11; font.bold: true; elide: Text.ElideRight }
-                        Label { Layout.fillWidth: true; text: String(modelData.selectedCommodityName || appliedCommodityFilter) + " · " + String(modelData.reserveName || "UNKNOWN") + " · " + String(modelData.targetMatchName || "") + (appliedPreferSecondary && secondaryCompactSummary(modelData) ? " · " + secondaryCompactSummary(modelData) : ""); color: textSecondary; font.pixelSize: 9; elide: Text.ElideRight }
+                        Label { Layout.fillWidth: true; text: String(modelData.selectedCommodityName || appliedCommodityFilter) + " · " + String(modelData.reserveName || "UNKNOWN") + " · " + String(modelData.targetMatchName || "") + (appliedPreferSecondary && secondaryCompactSummary(modelData) ? " · " + secondaryCompactSummary(modelData) : ""); color: textSecondary; font.pixelSize: UiMetrics.caption; elide: Text.ElideRight }
                     }
                     ColumnLayout { Layout.minimumWidth: routeSaleWidth; Layout.preferredWidth: routeSaleWidth; Layout.maximumWidth: routeSaleWidth; spacing: 2
-                        Label { Layout.fillWidth: true; text: marketName(modelData); color: modelData.marketKnown ? textPrimary : orange; font.pixelSize: 10; font.bold: true; elide: Text.ElideRight }
-                        Label { text: String(modelData.sellSystem || "") + (marketStationSummary(modelData) ? " · " + marketStationSummary(modelData) : ""); color: textSecondary; font.pixelSize: 9; elide: Text.ElideRight }
+                        Label { Layout.fillWidth: true; text: marketName(modelData); color: modelData.marketKnown ? textPrimary : orange; font.pixelSize: UiMetrics.caption; font.bold: true; elide: Text.ElideRight }
+                        Label { text: String(modelData.sellSystem || "") + (marketStationSummary(modelData) ? " · " + marketStationSummary(modelData) : ""); color: textSecondary; font.pixelSize: UiMetrics.caption; elide: Text.ElideRight }
                     }
-                    Label { Layout.minimumWidth: routePriceWidth; Layout.preferredWidth: routePriceWidth; Layout.maximumWidth: routePriceWidth; text: modelData.marketKnown ? formatNumber(modelData.sellPrice) + " CR" : "—"; color: modelData.marketMatchesFilters ? green : (modelData.marketKnown ? orange : muted); font.pixelSize: 10; font.bold: true }
-                    Label { Layout.minimumWidth: routeDemandWidth; Layout.preferredWidth: routeDemandWidth; Layout.maximumWidth: routeDemandWidth; text: modelData.marketKnown ? (modelData.demandInfinite ? "∞" : formatNumber(modelData.demand) + " T") : "—"; color: textPrimary; font.pixelSize: 10; font.bold: true }
+                    Label { Layout.minimumWidth: routePriceWidth; Layout.preferredWidth: routePriceWidth; Layout.maximumWidth: routePriceWidth; text: modelData.marketKnown ? formatNumber(modelData.sellPrice) + " CR" : "—"; color: modelData.marketMatchesFilters ? green : (modelData.marketKnown ? orange : muted); font.pixelSize: UiMetrics.caption; font.bold: true }
+                    Label { Layout.minimumWidth: routeDemandWidth; Layout.preferredWidth: routeDemandWidth; Layout.maximumWidth: routeDemandWidth; text: modelData.marketKnown ? (modelData.demandInfinite ? "∞" : formatNumber(modelData.demand) + " T") : "—"; color: textPrimary; font.pixelSize: UiMetrics.caption; font.bold: true }
                     Label {
                         id: routeVerificationStatus
                         Layout.minimumWidth: routeStatusWidth
@@ -1545,14 +1568,14 @@ Item {
                         color: appliedOptimization === "POWERPLAY MERITS"
                                ? verificationColor(modelData)
                                : (modelData.stale ? orange : green)
-                        font.pixelSize: 9; font.bold: true
+                        font.pixelSize: UiMetrics.caption; font.bold: true
                         elide: Text.ElideRight
                         ToolTip.visible: routeVerificationHover.hovered
                                              && verificationReason(modelData) !== ""
                         ToolTip.text: verificationReason(modelData)
                         HoverHandler { id: routeVerificationHover }
                     }
-                    Label { Layout.minimumWidth: routeSelectWidth; Layout.preferredWidth: routeSelectWidth; Layout.maximumWidth: routeSelectWidth; text: appWindow.t("mining.use_route", "USE"); color: routeHover.hovered ? cyan : textSecondary; font.pixelSize: 10; font.bold: true; horizontalAlignment: Text.AlignHCenter }
+                    Label { Layout.minimumWidth: routeSelectWidth; Layout.preferredWidth: routeSelectWidth; Layout.maximumWidth: routeSelectWidth; text: appWindow.t("mining.use_route", "USE"); color: routeHover.hovered ? cyan : textSecondary; font.pixelSize: UiMetrics.caption; font.bold: true; horizontalAlignment: Text.AlignHCenter }
                 }
                 HoverHandler {
                     id: routeHover

@@ -1,0 +1,712 @@
+{
+  "eraninpearlwhisky": {
+    "name": "Eranin Pearl Whisky",
+    "category": "Legal Drugs",
+    "rare": true
+  },
+  "lavianbrandy": {
+    "name": "Lavian Brandy",
+    "category": "Legal Drugs",
+    "rare": true
+  },
+  "hip10175bushmeat": {
+    "name": "HIP 10175 Bush Meat",
+    "category": "Foods",
+    "rare": true
+  },
+  "albinoquechuamammoth": {
+    "name": "Albino Quechua Mammoth Meat",
+    "category": "Foods",
+    "rare": true
+  },
+  "utgaroarmillenialeggs": {
+    "name": "Utgaroar Millennial Eggs",
+    "category": "Foods",
+    "rare": true
+  },
+  "witchhaulkobebeef": {
+    "name": "Witchhaul Kobe Beef",
+    "category": "Foods",
+    "rare": true
+  },
+  "karsukilocusts": {
+    "name": "Karsuki Locusts",
+    "category": "Foods",
+    "rare": true
+  },
+  "giantirukamasnails": {
+    "name": "Giant Irukama Snails",
+    "category": "Foods",
+    "rare": true
+  },
+  "baltahsinevacuumkrill": {
+    "name": "Baltah'sine Vacuum Krill",
+    "category": "Foods",
+    "rare": true
+  },
+  "cetirabbits": {
+    "name": "Ceti Rabbits",
+    "category": "Foods",
+    "rare": true
+  },
+  "kachiriginleaches": {
+    "name": "Kachirigin Filter Leeches",
+    "category": "Medicines",
+    "rare": true
+  },
+  "lyraeweed": {
+    "name": "Lyrae Weed",
+    "category": "Legal Drugs",
+    "rare": true
+  },
+  "onionhead": {
+    "name": "Onionhead",
+    "category": "Legal Drugs",
+    "rare": true
+  },
+  "tarachtorspice": {
+    "name": "Tarach Spice",
+    "category": "Legal Drugs",
+    "rare": true
+  },
+  "wolf1301fesh": {
+    "name": "Wolf Fesh",
+    "category": "Legal Drugs",
+    "rare": true
+  },
+  "borasetanipathogenetics": {
+    "name": "Borasetani Pathogenetics",
+    "category": "Weapons",
+    "rare": true
+  },
+  "hip118311swarm": {
+    "name": "HIP 118311 Swarm",
+    "category": "Weapons",
+    "rare": true
+  },
+  "konggaale": {
+    "name": "Kongga Ale",
+    "category": "Legal Drugs",
+    "rare": true
+  },
+  "wuthielokufroth": {
+    "name": "Wuthielo Ku Froth",
+    "category": "Legal Drugs",
+    "rare": true
+  },
+  "alacarakmoskinart": {
+    "name": "Alacarakmo Skin Art",
+    "category": "Consumer Items",
+    "rare": true
+  },
+  "eleuthermals": {
+    "name": "Eleu Thermals",
+    "category": "Consumer Items",
+    "rare": true
+  },
+  "eshuumbrellas": {
+    "name": "Eshu Umbrellas",
+    "category": "Consumer Items",
+    "rare": true
+  },
+  "karetiicouture": {
+    "name": "Karetii Couture",
+    "category": "Consumer Items",
+    "rare": true
+  },
+  "njangarisaddles": {
+    "name": "Njangari Saddles",
+    "category": "Consumer Items",
+    "rare": true
+  },
+  "anynacoffee": {
+    "name": "Any Na Coffee",
+    "category": "Foods",
+    "rare": true
+  },
+  "cd75catcoffee": {
+    "name": "CD-75 Kitten Brand Coffee",
+    "category": "Foods",
+    "rare": true
+  },
+  "gomanyauponcoffee": {
+    "name": "Goman Yaupon Coffee",
+    "category": "Foods",
+    "rare": true
+  },
+  "volkhabbeedrones": {
+    "name": "Volkhab Bee Drones",
+    "category": "Machinery",
+    "rare": true
+  },
+  "kinagoinstruments": {
+    "name": "Kinago Violins",
+    "category": "Consumer Items",
+    "rare": true
+  },
+  "ngunamodernantiques": {
+    "name": "Nguna Modern Antiques",
+    "category": "Consumer Items",
+    "rare": true
+  },
+  "rajukrustoves": {
+    "name": "Rajukru Multi-Stoves",
+    "category": "Consumer Items",
+    "rare": true
+  },
+  "tiolcewaste2pasteunits": {
+    "name": "Tiolce Waste2Paste Units",
+    "category": "Consumer Items",
+    "rare": true
+  },
+  "chieridanimarinepaste": {
+    "name": "Chi Eridani Marine Paste",
+    "category": "Foods",
+    "rare": true
+  },
+  "esusekucaviar": {
+    "name": "Esuseku Caviar",
+    "category": "Foods",
+    "rare": true
+  },
+  "livehecateseaworms": {
+    "name": "Live Hecate Sea Worms",
+    "category": "Foods",
+    "rare": true
+  },
+  "helvetitjpearls": {
+    "name": "Helvetitj Pearls",
+    "category": "Metals",
+    "rare": true
+  },
+  "hip41181squid": {
+    "name": "HIP Proto-Squid",
+    "category": "Foods",
+    "rare": true
+  },
+  "coquimspongiformvictuals": {
+    "name": "Coquim Spongiform Victuals",
+    "category": "Foods",
+    "rare": true
+  },
+  "aerialedenapple": {
+    "name": "Eden Apples of Aerial",
+    "category": "Foods",
+    "rare": true
+  },
+  "neritusberries": {
+    "name": "Neritus Berries",
+    "category": "Foods",
+    "rare": true
+  },
+  "ochoengchillies": {
+    "name": "Ochoeng Chillies",
+    "category": "Foods",
+    "rare": true
+  },
+  "deuringastruffles": {
+    "name": "Deuringas Truffles",
+    "category": "Foods",
+    "rare": true
+  },
+  "hr7221wheat": {
+    "name": "HR 7221 Wheat",
+    "category": "Foods",
+    "rare": true
+  },
+  "jarouarice": {
+    "name": "Jaroua Rice",
+    "category": "Foods",
+    "rare": true
+  },
+  "belalansrayleather": {
+    "name": "Belalans Ray Leather",
+    "category": "Textiles",
+    "rare": true
+  },
+  "damnacarapaces": {
+    "name": "Damna Carapaces",
+    "category": "Textiles",
+    "rare": true
+  },
+  "rapabaosnakeskins": {
+    "name": "Rapa Bao Snake Skins",
+    "category": "Textiles",
+    "rare": true
+  },
+  "vanayequirhinofur": {
+    "name": "Vanayequi Ceratomorpha Fur",
+    "category": "Textiles",
+    "rare": true
+  },
+  "bastsnakegin": {
+    "name": "Bast Snake Gin",
+    "category": "Legal Drugs",
+    "rare": true
+  },
+  "thrutiscream": {
+    "name": "Thrutis Cream",
+    "category": "Legal Drugs",
+    "rare": true
+  },
+  "wulpahyperboresystems": {
+    "name": "Wulpa Hyperbore Systems",
+    "category": "Machinery",
+    "rare": true
+  },
+  "aganipperush": {
+    "name": "Aganippe Rush",
+    "category": "Medicines",
+    "rare": true
+  },
+  "terramaterbloodbores": {
+    "name": "Terra Mater Blood Bores",
+    "category": "Medicines",
+    "rare": true
+  },
+  "holvaduellingblades": {
+    "name": "Holva Duelling Blades",
+    "category": "Weapons",
+    "rare": true
+  },
+  "kamorinhistoricweapons": {
+    "name": "Kamorin Historic Weapons",
+    "category": "Weapons",
+    "rare": true
+  },
+  "gilyasignatureweapons": {
+    "name": "Gilya Signature Weapons",
+    "category": "Weapons",
+    "rare": true
+  },
+  "deltaphoenicispalms": {
+    "name": "Delta Phoenicis Palms",
+    "category": "Chemicals",
+    "rare": true
+  },
+  "toxandjivirocide": {
+    "name": "Toxandji Virocide",
+    "category": "Chemicals",
+    "rare": true
+  },
+  "xihecompanions": {
+    "name": "Xihe Biomorphic Companions",
+    "category": "Technology",
+    "rare": true
+  },
+  "sanumameat": {
+    "name": "Sanuma Decorative Meat",
+    "category": "Foods",
+    "rare": true
+  },
+  "ethgrezeteabuds": {
+    "name": "Ethgreze Tea Buds",
+    "category": "Foods",
+    "rare": true
+  },
+  "ceremonialheiketea": {
+    "name": "Ceremonial Heike Tea",
+    "category": "Foods",
+    "rare": true
+  },
+  "tanmarktranquiltea": {
+    "name": "Tanmark Tranquil Tea",
+    "category": "Foods",
+    "rare": true
+  },
+  "azcancriformula42": {
+    "name": "AZ Cancri Formula 42",
+    "category": "Technology",
+    "rare": true
+  },
+  "kamitracigars": {
+    "name": "Kamitra Cigars",
+    "category": "Legal Drugs",
+    "rare": true
+  },
+  "rusanioldsmokey": {
+    "name": "Rusani Old Smokey",
+    "category": "Legal Drugs",
+    "rare": true
+  },
+  "yasokondileaf": {
+    "name": "Yaso Kondi Leaf",
+    "category": "Legal Drugs",
+    "rare": true
+  },
+  "chateaudeaegaeon": {
+    "name": "Chateau De Aegaeon",
+    "category": "Legal Drugs",
+    "rare": true
+  },
+  "watersofshintara": {
+    "name": "The Waters of Shintara",
+    "category": "Medicines",
+    "rare": true
+  },
+  "ophiuchiexinoartefacts": {
+    "name": "Ophiuch Exino Artefacts",
+    "category": "Consumer Items",
+    "rare": true
+  },
+  "bakedgreebles": {
+    "name": "Baked Greebles",
+    "category": "Foods",
+    "rare": true
+  },
+  "cetiaepyornisegg": {
+    "name": "Aepyornis Egg",
+    "category": "Foods",
+    "rare": true
+  },
+  "saxonwine": {
+    "name": "Saxon Wine",
+    "category": "Legal Drugs",
+    "rare": true
+  },
+  "centaurimegagin": {
+    "name": "Centauri Mega Gin",
+    "category": "Legal Drugs",
+    "rare": true
+  },
+  "anduligafireworks": {
+    "name": "Anduliga Fire Works",
+    "category": "Consumer Items",
+    "rare": true
+  },
+  "bankiamphibiousleather": {
+    "name": "Banki Amphibious Leather",
+    "category": "Textiles",
+    "rare": true
+  },
+  "cherbonesbloodcrystals": {
+    "name": "Cherbones Blood Crystals",
+    "category": "Metals",
+    "rare": true
+  },
+  "motronaexperiencejelly": {
+    "name": "Motrona Experience Jelly",
+    "category": "Legal Drugs",
+    "rare": true
+  },
+  "geawendancedust": {
+    "name": "Geawen Dance Dust",
+    "category": "Legal Drugs",
+    "rare": true
+  },
+  "gerasiangueuzebeer": {
+    "name": "Gerasian Gueuze Beer",
+    "category": "Legal Drugs",
+    "rare": true
+  },
+  "haidneblackbrew": {
+    "name": "Haiden Black Brew",
+    "category": "Foods",
+    "rare": true
+  },
+  "havasupaidreamcatcher": {
+    "name": "Havasupai Dream Catcher",
+    "category": "Consumer Items",
+    "rare": true
+  },
+  "burnhambiledistillate": {
+    "name": "Burnham Bile Distillate",
+    "category": "Legal Drugs",
+    "rare": true
+  },
+  "hiporganophosphates": {
+    "name": "HIP Organophosphates",
+    "category": "Chemicals",
+    "rare": true
+  },
+  "jaradharrepuzzlebox": {
+    "name": "Jaradharre Puzzle Box",
+    "category": "Consumer Items",
+    "rare": true
+  },
+  "korrokungpellets": {
+    "name": "Koro Kung Pellets",
+    "category": "Chemicals",
+    "rare": true
+  },
+  "lftvoidextractcoffee": {
+    "name": "Void Extract Coffee",
+    "category": "Foods",
+    "rare": true
+  },
+  "honestypills": {
+    "name": "Honesty Pills",
+    "category": "Medicines",
+    "rare": true
+  },
+  "noneuclidianexotanks": {
+    "name": "Non Euclidian Exotanks",
+    "category": "Machinery",
+    "rare": true
+  },
+  "ltthypersweet": {
+    "name": "LTT Hyper Sweet",
+    "category": "Foods",
+    "rare": true
+  },
+  "mechucoshightea": {
+    "name": "Mechucos High Tea",
+    "category": "Foods",
+    "rare": true
+  },
+  "medbstarlube": {
+    "name": "Medb Starlube",
+    "category": "Chemicals",
+    "rare": true
+  },
+  "mokojingbeastfeast": {
+    "name": "Mokojing Beast Feast",
+    "category": "Foods",
+    "rare": true
+  },
+  "mukusubiichitinos": {
+    "name": "Mukusubii Chitin-os",
+    "category": "Foods",
+    "rare": true
+  },
+  "mulachigiantfungus": {
+    "name": "Mulachi Giant Fungus",
+    "category": "Foods",
+    "rare": true
+  },
+  "ngadandarifireopals": {
+    "name": "Ngadandari Fire Opals",
+    "category": "Metals",
+    "rare": true
+  },
+  "tiegfriessynthsilk": {
+    "name": "Tiegfries Synth Silk",
+    "category": "Textiles",
+    "rare": true
+  },
+  "uzumokulowgwings": {
+    "name": "Uzumoku Low-G Wings",
+    "category": "Consumer Items",
+    "rare": true
+  },
+  "vherculisbodyrub": {
+    "name": "V Herculis Body Rub",
+    "category": "Medicines",
+    "rare": true
+  },
+  "wheemetewheatcakes": {
+    "name": "Wheemete Wheat Cakes",
+    "category": "Foods",
+    "rare": true
+  },
+  "vegaslimweed": {
+    "name": "Vega Slimweed",
+    "category": "Medicines",
+    "rare": true
+  },
+  "altairianskin": {
+    "name": "Altairian Skin",
+    "category": "Consumer Items",
+    "rare": true
+  },
+  "pavoniseargrubs": {
+    "name": "Pavonis Ear Grubs",
+    "category": "Legal Drugs",
+    "rare": true
+  },
+  "jotunmookah": {
+    "name": "Jotun Mookah",
+    "category": "Textiles",
+    "rare": true
+  },
+  "giantverrix": {
+    "name": "Giant Verrix",
+    "category": "Machinery",
+    "rare": true
+  },
+  "indibourbon": {
+    "name": "Indi Bourbon",
+    "category": "Legal Drugs",
+    "rare": true
+  },
+  "aroucaconventualsweets": {
+    "name": "Arouca Conventual Sweets",
+    "category": "Foods",
+    "rare": true
+  },
+  "taurichimes": {
+    "name": "Tauri Chimes",
+    "category": "Consumer Items",
+    "rare": true
+  },
+  "zeesszeantglue": {
+    "name": "Zeessze Ant Grub Glue",
+    "category": "Consumer Items",
+    "rare": true
+  },
+  "pantaaprayersticks": {
+    "name": "Pantaa Prayer Sticks",
+    "category": "Medicines",
+    "rare": true
+  },
+  "fujintea": {
+    "name": "Fujin Tea",
+    "category": "Foods",
+    "rare": true
+  },
+  "chameleoncloth": {
+    "name": "Chameleon Cloth",
+    "category": "Textiles",
+    "rare": true
+  },
+  "orrerianviciousbrew": {
+    "name": "Orrerian Vicious Brew",
+    "category": "Foods",
+    "rare": true
+  },
+  "uszaiantreegrub": {
+    "name": "Uszaian Tree Grub",
+    "category": "Foods",
+    "rare": true
+  },
+  "momusbogspaniel": {
+    "name": "Momus Bog Spaniel",
+    "category": "Consumer Items",
+    "rare": true
+  },
+  "disomacorn": {
+    "name": "Diso Ma Corn",
+    "category": "Foods",
+    "rare": true
+  },
+  "leestianeviljuice": {
+    "name": "Leestian Evil Juice",
+    "category": "Legal Drugs",
+    "rare": true
+  },
+  "bluemilk": {
+    "name": "Azure Milk",
+    "category": "Foods",
+    "rare": true
+  },
+  "alieneggs": {
+    "name": "Leathery Eggs",
+    "category": "Consumer Items",
+    "rare": true
+  },
+  "alyabodilysoap": {
+    "name": "Alya Body Soap",
+    "category": "Medicines",
+    "rare": true
+  },
+  "vidavantianlace": {
+    "name": "Vidavantian Lace",
+    "category": "Consumer Items",
+    "rare": true
+  },
+  "transgeniconionhead": {
+    "name": "Lucan Onionhead",
+    "category": "Legal Drugs",
+    "rare": true
+  },
+  "jaquesquinentianstill": {
+    "name": "Jaques Quinentian Still",
+    "category": "Consumer Items",
+    "rare": true
+  },
+  "soontillrelics": {
+    "name": "Soontill Relics",
+    "category": "Consumer Items",
+    "rare": true
+  },
+  "advert1": {
+    "name": "Ultra-Compact Processor Prototypes",
+    "category": "Consumer Items",
+    "rare": true
+  },
+  "thehuttonmug": {
+    "name": "The Hutton Mug",
+    "category": "Consumer Items",
+    "rare": true
+  },
+  "sothiscrystallinegold": {
+    "name": "Sothis Crystalline Gold",
+    "category": "Metals",
+    "rare": true
+  },
+  "masterchefs": {
+    "name": "Master Chefs",
+    "category": "Slavery",
+    "rare": true
+  },
+  "personalgifts": {
+    "name": "Festive Gifts",
+    "category": "Salvage",
+    "rare": true
+  },
+  "crystallinespheres": {
+    "name": "Crystalline Spheres",
+    "category": "Salvage",
+    "rare": true
+  },
+  "onionheada": {
+    "name": "Onionhead Alpha Strain",
+    "category": "Legal Drugs",
+    "rare": true
+  },
+  "onionheadb": {
+    "name": "Onionhead Beta Strain",
+    "category": "Legal Drugs",
+    "rare": true
+  },
+  "galactictravelguide": {
+    "name": "Galactic Travel Guide",
+    "category": "Salvage",
+    "rare": true
+  },
+  "animaleffigies": {
+    "name": "Crom Silver Fesh",
+    "category": "Legal Drugs",
+    "rare": true
+  },
+  "shanscharisorchid": {
+    "name": "Shan's Charis Orchid",
+    "category": "Consumer Items",
+    "rare": true
+  },
+  "buckyballbeermats": {
+    "name": "Buckyball Beer Mats",
+    "category": "Consumer Items",
+    "rare": true
+  },
+  "harmasilversearum": {
+    "name": "Harma Silver Sea Rum",
+    "category": "Legal Drugs",
+    "rare": true
+  },
+  "platinumaloy": {
+    "name": "Platinum Alloy",
+    "category": "Metals",
+    "rare": true
+  },
+  "nanomedicines": {
+    "name": "Nanomedicines",
+    "category": "Medicines",
+    "rare": true
+  },
+  "duradrives": {
+    "name": "Duradrives",
+    "category": "Consumer Items",
+    "rare": true
+  },
+  "apavietii": {
+    "name": "Apa Vietii",
+    "category": "Legal Drugs",
+    "rare": true
+  },
+  "classifiedexperimentalequipment": {
+    "name": "Classified Experimental Equipment",
+    "category": "Technology",
+    "rare": true
+  }
+}

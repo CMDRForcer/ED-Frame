@@ -1,5 +1,6 @@
 import QtQuick
 import QtQuick.Controls
+import "UiMetrics.js" as UiMetrics
 
 Rectangle {
     id: badge
@@ -20,7 +21,7 @@ Rectangle {
         anchors.centerIn: parent
         text: badge.statusText
         color: badge.tone
-        font.pixelSize: badge.compact ? 9 : 10
+        font.pixelSize: UiMetrics.caption
         font.weight: Font.DemiBold
         font.letterSpacing: 0.4
         elide: Text.ElideRight

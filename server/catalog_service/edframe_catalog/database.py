@@ -543,6 +543,30 @@ def upsert_yield_observations(
     return projected
 
 
+def upsert_powerplay_snapshot(conn: psycopg.Connection, row: dict | None) -> int:
+    if not row:
+        return 0
+    conn.execute("""
+        INSERT INTO mining_powerplay
+            (identity, system_name, system_address, x, y, z,
+             observed_at, received_at, facts)
+        VALUES (%(identity)s, %(system_name)s, %(system_address)s,
+                %(x)s, %(y)s, %(z)s, %(observed_at)s, %(received_at)s,
+                %(facts)s::jsonb)
+        ON CONFLICT (identity) DO UPDATE SET
+            system_name = EXCLUDED.system_name,
+            system_address = COALESCE(EXCLUDED.system_address, mining_powerplay.system_address),
+            x = COALESCE(EXCLUDED.x, mining_powerplay.x),
+            y = COALESCE(EXCLUDED.y, mining_powerplay.y),
+            z = COALESCE(EXCLUDED.z, mining_powerplay.z),
+            observed_at = EXCLUDED.observed_at,
+            received_at = EXCLUDED.received_at,
+            facts = EXCLUDED.facts
+        WHERE EXCLUDED.observed_at >= mining_powerplay.observed_at
+    """, row)
+    return 1
+
+
 def upsert_state_find_batch(
     conn: psycopg.Connection,
     snapshots: Iterable[dict[str, Any]],
@@ -595,6 +619,39 @@ def upsert_state_find_batch(
         )
         projected += 1
     return projected
+
+
+def upsert_signal_systems(conn, rows):
+    """Fill missing public coordinates without replacing existing catalog facts."""
+    for row in rows:
+        observation = json.loads(row["observation"])
+        x, y, z = observation["star_pos"]
+        conn.execute("""
+            INSERT INTO systems (name, system_address, x, y, z, observed_at)
+            VALUES (%s, %s, %s, %s, %s, %s)
+            ON CONFLICT (name) DO UPDATE SET
+                system_address = COALESCE(systems.system_address, EXCLUDED.system_address),
+                x = COALESCE(systems.x, EXCLUDED.x),
+                y = COALESCE(systems.y, EXCLUDED.y),
+                z = COALESCE(systems.z, EXCLUDED.z)
+        """, (row["system_name"], row["system_address"], x, y, z, row["observed_at"]))
+
+
+def upsert_state_sighting_batch(conn, sightings):
+    count = 0
+    for row in sightings:
+        conn.execute("""
+            INSERT INTO state_signal_sightings
+                (identity, system_address, system_name, observed_at, received_at, observation)
+            VALUES (%(identity)s, %(system_address)s, %(system_name)s,
+                    %(observed_at)s, %(received_at)s, %(observation)s::jsonb)
+            ON CONFLICT (identity) DO UPDATE SET
+                observed_at = EXCLUDED.observed_at, received_at = EXCLUDED.received_at,
+                observation = EXCLUDED.observation, updated_at = NOW()
+            WHERE EXCLUDED.observed_at > state_signal_sightings.observed_at
+        """, row)
+        count += 1
+    return count
 
 
 def upsert_station_offer_batch(

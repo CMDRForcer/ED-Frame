@@ -243,6 +243,8 @@ from .controller_engineering import EngineeringMixin
 from .controller_logbook import LogbookMixin
 from .controller_exobiology import ExobiologyMixin
 from .controller_surface_nav import SurfaceNavMixin
+from .controller_station_services import StationServicesMixin
+from .controller_commodities import CommoditiesMixin
 from .controller_frontier_capi import FrontierCapiMixin
 from .controller_inara import InaraMixin
 
@@ -334,7 +336,7 @@ SHUTDOWN_PRIORITY_WORKER_PREFIXES = (
 
 class CockpitController(
     CommanderMixin, EddnMixin, EngineeringMixin, ExobiologyMixin,
-    SurfaceNavMixin,
+    SurfaceNavMixin, StationServicesMixin, CommoditiesMixin,
     FleetMaterialsMixin, FrontierCapiMixin, InaraMixin, JournalHealthMixin,
     LogbookMixin, NavigationMixin, UiSettingsMixin, CoreControllerMixin,
     QObject,
@@ -503,6 +505,10 @@ class CockpitController(
         self._edframe_yield_sharing_enabled = bool(
             ui_config.get("edframe_yield_sharing_enabled", False)
         )
+        self._edframe_signal_sharing_enabled = bool(ui_config.get("edframe_signal_sharing_enabled", False))
+        self._edframe_signal_upload_busy = False
+        self._edframe_signal_uploaded = set()
+        self._edframe_signal_upload_status = ""
         self._edframe_yield_upload_busy = False
         self._edframe_yield_upload_status = (
             "Ready · anonymous Prospector sharing enabled"
@@ -535,6 +541,9 @@ class CockpitController(
         self._edframe_station_price_next_retry_at = 0.0
         self._active_edframe_station_price_upload = None
         self._pending_edframe_station_price_observation = None
+        self._edframe_signal_upload_busy = False
+        self._edframe_signal_uploaded = set()
+        self._edframe_signal_next_upload_at = 0
         self._local_shipyard_snapshot_fingerprint = ""
         self._local_outfitting_snapshot_fingerprint = ""
         self._active_edframe_catalog_request = None
@@ -610,6 +619,11 @@ class CockpitController(
         self.connectionChanged.connect(self._invalidate_connection_cache)
         self.connectionChanged.connect(self.commanderCardsChanged.emit)
         self.stateChanged.connect(self.commanderCardsChanged.emit)
+        self.stateChanged.connect(self.stationServicesChanged.emit)
+        self.stationServicesFinished.connect(self._finish_station_services)
+        self.stateChanged.connect(self.commoditiesChanged.emit)
+        self.commoditiesFinished.connect(self._finish_commodities)
+        self.stateChanged.connect(self._maybe_refresh_regional_state_finds)
         self.hgeChanged.connect(self._invalidate_hge_cache)
         self.operationsChanged.connect(self._invalidate_operations_cache)
         self._selected_ship = ""
@@ -735,6 +749,7 @@ class CockpitController(
         self.edFrameYieldUploadFinished.connect(
             self._finish_edframe_yield_upload
         )
+        self.edFrameSignalUploadFinished.connect(self._finish_edframe_signal_upload)
         self.edFrameStationPriceUploadFinished.connect(
             self._finish_edframe_station_price_upload
         )
@@ -1547,6 +1562,14 @@ class CockpitController(
 
         return {
             "total": len(rows),
+            "serverBgs": sum(
+                row.get("catalog_transport") == "ED-Frame server"
+                and row.get("evidence_kind") == "BGS_PREDICTION" for row in rows
+            ),
+            "serverSignals": sum(
+                row.get("catalog_transport") == "ED-Frame server"
+                and row.get("evidence_kind") == "EDDN_SIGNAL" for row in rows
+            ),
             "bgs": bgs_count,
             "signals": signal_count,
             "other": max(0, len(rows) - bgs_count - signal_count),
@@ -2123,6 +2146,7 @@ class CockpitController(
         self._journal_state_ready = True
         self._publish_full_state(previous)
         self._maybe_share_mining_yields()
+        self._maybe_share_state_signals()
         if (
             isinstance(state_find_rows, list)
             and source_hge_revision == self._hge_revision
@@ -2613,6 +2637,10 @@ class CockpitController(
             if getattr(self, "_edframe_yield_sharing_enabled", False)
             else "Off · measurements remain local"
         )
+        self._edframe_signal_upload_busy = False
+        self._edframe_signal_uploaded = set()
+        self._edframe_signal_next_upload_at = 0
+        self._edframe_signal_upload_status = ""
         self._active_edframe_station_price_upload = None
         self._pending_edframe_station_price_observation = None
         self._edframe_station_price_upload_busy = False

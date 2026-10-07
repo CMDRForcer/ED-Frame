@@ -1,4 +1,5 @@
 import QtQuick
+import "../components/UiMetrics.js" as UiMetrics
 import QtQuick.Controls
 import QtQuick.Layouts
 import "../components"
@@ -169,7 +170,7 @@ ColumnLayout {
                     Label {
                         text: modelData.label
                         color: muted
-                        font.pixelSize: 9
+                        font.pixelSize: UiMetrics.caption
                         font.bold: true
                     }
                 }
@@ -200,7 +201,7 @@ ColumnLayout {
                     }
                     Label {
                         text: String(systems.length)
-                        color: muted; font.family: monoFont; font.pixelSize: 10
+                        color: muted; font.family: monoFont; font.pixelSize: UiMetrics.caption
                     }
                 }
                 Rectangle { Layout.fillWidth: true; height: 1; color: borderTone }
@@ -223,7 +224,7 @@ ColumnLayout {
                             text: explorationPage.formatValueRange(
                                       summary.estimatedValueMin, summary.estimatedValueMax,
                                       summary.valueStatus)
-                            color: muted; font.family: monoFont; font.pixelSize: 9
+                            color: muted; font.family: monoFont; font.pixelSize: UiMetrics.caption
                         }
                     }
                     MouseArea {
@@ -280,13 +281,13 @@ ColumnLayout {
                                                   systemRow.modelData.estimatedValueMin,
                                                   systemRow.modelData.estimatedValueMax,
                                                   systemRow.modelData.unvaluedBodyCount ? "partial" : "range")
-                                        color: orange; font.family: monoFont; font.pixelSize: 10; font.bold: true
+                                        color: orange; font.family: monoFont; font.pixelSize: UiMetrics.caption; font.bold: true
                                     }
                                     Label {
                                         text: appWindow.tf("exploration.system_counts", "%1 BODIES · %2 MAPPED",
                                                            [systemRow.modelData.bodyCount || 0,
                                                             systemRow.modelData.mappedCount || 0])
-                                        color: muted; font.pixelSize: 9
+                                        color: muted; font.pixelSize: UiMetrics.caption
                                     }
                                 }
                                 MouseArea {
@@ -320,7 +321,7 @@ ColumnLayout {
                     }
                     Label {
                         text: appWindow.tf("exploration.shown", "%1 SHOWN", [displayedFindings.length])
-                        color: muted; font.family: monoFont; font.pixelSize: 10
+                        color: muted; font.family: monoFont; font.pixelSize: UiMetrics.caption
                     }
                     Rectangle {
                         implicitWidth: valueSortLabel.implicitWidth + 18
@@ -330,7 +331,7 @@ ColumnLayout {
                         Label {
                             id: valueSortLabel; anchors.centerIn: parent
                             text: appWindow.t("exploration.sort_value", "VALUE FIRST")
-                            color: valueFirst ? orange : muted; font.pixelSize: 9; font.bold: true
+                            color: valueFirst ? orange : muted; font.pixelSize: UiMetrics.caption; font.bold: true
                         }
                         MouseArea {
                             anchors.fill: parent; cursorShape: Qt.PointingHandCursor
@@ -390,7 +391,7 @@ ColumnLayout {
                                                 Layout.fillWidth: true
                                                 text: (findingRow.modelData.systemName || "")
                                                       + "  ·  " + (findingRow.modelData.findingClass || "")
-                                                color: cyan; font.pixelSize: 10; font.bold: true
+                                                color: cyan; font.pixelSize: UiMetrics.caption; font.bold: true
                                                 elide: Text.ElideRight
                                             }
                                         }
@@ -401,7 +402,7 @@ ColumnLayout {
                                                 text: findingRow.modelData.valueStatus === "range"
                                                       ? appWindow.t("exploration.estimate_range", "ESTIMATE RANGE")
                                                       : appWindow.t("exploration.estimate", "ESTIMATE")
-                                                color: muted; font.pixelSize: 8; font.bold: true
+                                                color: muted; font.pixelSize: UiMetrics.caption; font.bold: true
                                             }
                                             Label {
                                                 Layout.alignment: Qt.AlignRight
@@ -418,21 +419,21 @@ ColumnLayout {
                                         Layout.fillWidth: true
                                         visible: explorationPage.findingDetail(findingRow.modelData).length > 0
                                         text: explorationPage.findingDetail(findingRow.modelData)
-                                        color: textSecondary; font.pixelSize: 9
+                                        color: textSecondary; font.pixelSize: UiMetrics.caption
                                         wrapMode: Text.WordWrap
                                     }
                                     Label {
                                         Layout.fillWidth: true
                                         visible: (findingRow.modelData.tags || []).length > 0
                                         text: explorationPage.tagLine(findingRow.modelData.tags)
-                                        color: orange; font.pixelSize: 9; font.bold: true
+                                        color: orange; font.pixelSize: UiMetrics.caption; font.bold: true
                                         wrapMode: Text.WordWrap
                                     }
                                     Label {
                                         Layout.fillWidth: true
                                         visible: findingRow.modelData.valueStatus === "unavailable"
                                         text: appWindow.t("exploration.missing_evidence", "The Journal did not provide enough mass data for a safe estimate.")
-                                        color: muted; font.pixelSize: 9; wrapMode: Text.WordWrap
+                                        color: muted; font.pixelSize: UiMetrics.caption; wrapMode: Text.WordWrap
                                     }
                                 }
                             }
@@ -443,7 +444,7 @@ ColumnLayout {
                 Label {
                     Layout.fillWidth: true
                     text: appWindow.t("exploration.estimate_notice", "ESTIMATES · Final payout can change with first-discovery races. Fleet Carrier reduction is not included.")
-                    color: muted; font.pixelSize: 9; wrapMode: Text.WordWrap
+                    color: muted; font.pixelSize: UiMetrics.caption; wrapMode: Text.WordWrap
                 }
             }
         }

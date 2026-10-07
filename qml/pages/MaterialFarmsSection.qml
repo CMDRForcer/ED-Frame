@@ -2,6 +2,7 @@ import QtQuick
 import QtQuick.Controls
 import QtQuick.Layouts
 import "../components"
+import "../components/UiMetrics.js" as UiMetrics
 
 ColumnLayout {
     id: farmSection
@@ -103,7 +104,7 @@ ColumnLayout {
                 Layout.fillWidth: true
                 text: appWindow.t("nav.farm_coordinates_optional", "Leave both coordinates empty if the location is unknown.")
                 color: appWindow.muted
-                font.pixelSize: 10
+                font.pixelSize: UiMetrics.caption
                 wrapMode: Text.WordWrap
             }
             TextArea {
@@ -264,7 +265,7 @@ ColumnLayout {
                         visible: modelData.edited
                         text: appWindow.t("nav.farm_edited", "EDITED")
                         color: appWindow.orange
-                        font.pixelSize: 10
+                        font.pixelSize: UiMetrics.caption
                         font.bold: true
                     }
                     Label {
@@ -291,7 +292,7 @@ ColumnLayout {
                     Layout.fillWidth: true
                     text: modelData.method
                     color: appWindow.muted
-                    font.pixelSize: 10
+                    font.pixelSize: UiMetrics.caption
                     maximumLineCount: 2
                     elide: Text.ElideRight
                     wrapMode: Text.WordWrap

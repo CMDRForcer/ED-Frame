@@ -1,4 +1,5 @@
 import QtQuick
+import "../components/UiMetrics.js" as UiMetrics
 import QtQuick.Controls
 import QtQuick.Layouts
 import "../components"
@@ -102,7 +103,7 @@ ColumnLayout {
                     text: appWindow.tf(
                         "exobiology.distance_check_title", "DISTANCE TO NEXT SAMPLE · %1",
                         [exobiologyPage.distanceCheck.displayName || ""])
-                    color: muted; font.pixelSize: 10; font.bold: true
+                    color: muted; font.pixelSize: UiMetrics.caption; font.bold: true
                     elide: Text.ElideRight
                     Layout.fillWidth: true
                 }
@@ -159,7 +160,7 @@ ColumnLayout {
                 ColumnLayout {
                     anchors.fill: parent; anchors.margins: 15
                     spacing: 2
-                    Label { text: modelData.label; color: muted; font.pixelSize: 10; font.bold: true }
+                    Label { text: modelData.label; color: muted; font.pixelSize: UiMetrics.caption; font.bold: true }
                     Label {
                         text: modelData.value; color: modelData.tone
                         font.pixelSize: 18; font.bold: true
@@ -169,7 +170,7 @@ ColumnLayout {
                     Label {
                         visible: modelData.detail.length > 0
                         text: modelData.detail
-                        color: muted; font.pixelSize: 9
+                        color: muted; font.pixelSize: UiMetrics.caption
                         elide: Text.ElideRight
                         Layout.fillWidth: true
                     }

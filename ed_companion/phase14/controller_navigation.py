@@ -169,10 +169,13 @@ from ed_companion.navigation.shipyard_finder import (
 from ed_companion.navigation.state_find_catalog import (
     fetch_edframe_state_find_delta,
     merge_edframe_state_find_page,
+    retain_state_find_region,
+    state_find_region,
 )
 from ed_companion.navigation.mining_powerplay import (
     catalog_rows,
     fetch_powerplay_catalog,
+    fetch_edframe_powerplay,
     merge_powerplay_observations,
     powerplay_catalog_is_fresh,
 )
@@ -362,6 +365,7 @@ class NavigationMixin:
     edFrameStationOfferSyncFinished = Signal(object)
 
     edFrameYieldUploadFinished = Signal(object)
+    edFrameSignalUploadFinished = Signal(object)
 
     edFrameStationPriceUploadFinished = Signal(object)
 
@@ -2378,6 +2382,15 @@ class NavigationMixin:
         notify=CoreControllerMixin.connectionChanged,
     )
 
+    edFrameSignalSharingEnabled = Property(
+        bool, lambda self: bool(getattr(self, "_edframe_signal_sharing_enabled", False)),
+        notify=CoreControllerMixin.connectionChanged,
+    )
+    edFrameSignalUploadStatus = Property(
+        str, lambda self: str(getattr(self, "_edframe_signal_upload_status", "")),
+        notify=CoreControllerMixin.connectionChanged,
+    )
+
 
     edFrameStationPriceSharingEnabled = Property(
         bool,
@@ -2881,6 +2894,65 @@ class NavigationMixin:
             self._start_edframe_station_price_upload(*pending)
 
 
+    @Slot(bool)
+    def setEdFrameSignalSharingEnabled(self, enabled):
+        self._edframe_signal_sharing_enabled = bool(enabled)
+        self._edframe_signal_upload_status = "Enabled" if enabled else "Disabled"
+        self._save_ui_config()
+        self.connectionChanged.emit()
+        if enabled:
+            self._maybe_share_state_signals()
+
+    def _maybe_share_state_signals(self):
+        if (not getattr(self, "_edframe_signal_sharing_enabled", False)
+                or getattr(self, "_edframe_signal_upload_busy", False)
+                or getattr(self, "_shutdown_complete", False)
+                or time.monotonic() < getattr(self, "_edframe_signal_next_upload_at", 0)):
+            return
+        from ed_companion.navigation.signal_sharing import public_signal_observations, signal_observation_key, send_signal_observations
+        snapshot = self._state.get("localHgeSightings", [])
+        if not snapshot:
+            return
+        generation = self._profile_generation
+        known = set(getattr(self, "_edframe_signal_uploaded", set()))
+        self._edframe_signal_upload_busy = True
+        self._edframe_signal_next_upload_at = time.monotonic() + 60
+
+        def worker():
+            result = {"generation": generation, "keys": []}
+            try:
+                public = public_signal_observations(snapshot)
+                pending = {signal_observation_key(row): row for row in public
+                           if signal_observation_key(row) not in known}
+                if (pending and self._edframe_signal_sharing_enabled
+                        and self._profile_generation == generation
+                        and not getattr(self, "_shutdown_complete", False)):
+                    send_signal_observations(list(pending.values()), requests.post)
+                    result["keys"] = list(pending)
+                result["success"] = True
+            except Exception:
+                result["success"] = False
+            self.edFrameSignalUploadFinished.emit(result)
+        if not self._start_network_worker(worker, "edframe-signal-upload"):
+            self._edframe_signal_upload_busy = False
+
+    @Slot(object)
+    def _finish_edframe_signal_upload(self, result):
+        if result.get("generation") != self._profile_generation:
+            return
+        self._edframe_signal_upload_busy = False
+        if not getattr(self, "_edframe_signal_sharing_enabled", False):
+            return
+        if result.get("success"):
+            known = getattr(self, "_edframe_signal_uploaded", set())
+            known.update(result.get("keys", []))
+            self._edframe_signal_uploaded = set(sorted(known)[-2000:])
+            self._edframe_signal_upload_status = "Shared" if result.get("keys") else "Ready"
+        else:
+            self._edframe_signal_upload_status = "Retry pending"
+        self.connectionChanged.emit()
+        QTimer.singleShot(60000, self._maybe_share_state_signals)
+
     def _maybe_share_mining_yields(self):
         if (
             not getattr(self, "_edframe_yield_sharing_enabled", False)
@@ -3138,6 +3210,7 @@ class NavigationMixin:
             counts = payload.get("counts") or {}
             completeness = payload.get("completeness") or {}
             collector = payload.get("collector") or {}
+            intake = payload.get("collector24h") or {}
             systems = int(counts.get("systems", 0) or 0)
             station_catalog_supported = "stations" in counts
             stations = (
@@ -3164,6 +3237,11 @@ class NavigationMixin:
                 or datetime.now(timezone.utc).isoformat(timespec="seconds")
             )
             self._edframe_catalog_stats = {
+                "freshMarkets1h": completeness.get("freshMarkets1h"),
+                "freshMarkets24h": completeness.get("freshMarkets24h"),
+                "collector24hMessages": intake.get("messages"),
+                "collector24hUsedPercent": intake.get("usedPercent"),
+                "collector24hErrors": intake.get("errors"),
                 "systems": systems,
                 "stations": stations,
                 "markets": markets,
@@ -3180,6 +3258,7 @@ class NavigationMixin:
                 ) or 0),
                 "stateBgsSnapshots": state_bgs,
                 "stateSignals": state_signals,
+                "stateSightings": counts.get("state_signal_sightings"),
                 "outfittingStations": outfitting_stations,
                 "shipyardStations": shipyard_stations,
                 "moduleOffers": int(counts.get(
@@ -3541,6 +3620,29 @@ class NavigationMixin:
 
 
     @Slot()
+    def _maybe_refresh_regional_state_finds(self):
+        if (not getattr(self, "_edframe_catalog_enabled", True)
+                or getattr(self, "_shutdown_complete", False)
+                or getattr(self, "_edframe_state_find_sync_busy", False)):
+            return
+        region = state_find_region(getattr(self, "_state", {}).get("currentPosition"))
+        meta = getattr(self, "_edframe_state_find_sync_meta", {}) or {}
+        if not region or meta.get("region") == region:
+            return
+        remaining = 60 - (time.monotonic() - getattr(self, "_edframe_state_find_started_at", 0))
+        if remaining > 0:
+            if not getattr(self, "_edframe_state_find_region_retry", False):
+                self._edframe_state_find_region_retry = True
+
+                def retry():
+                    self._edframe_state_find_region_retry = False
+                    self._maybe_refresh_regional_state_finds()
+
+                QTimer.singleShot(max(1, int(remaining * 1000)), retry)
+            return
+        self.syncEdFrameStateFinds()
+
+    @Slot()
     def syncEdFrameStateFinds(self):
         """Merge one resumable server page into the profile-local cache."""
         if (
@@ -3550,7 +3652,12 @@ class NavigationMixin:
         ):
             return
         meta = getattr(self, "_edframe_state_find_sync_meta", {})
-        cursor = str(meta.get("cursor") or "") if isinstance(meta, dict) else ""
+        region = state_find_region(getattr(self, "_state", {}).get("currentPosition"))
+        if not region:
+            self._edframe_state_find_sync_status = "Waiting for Journal position · retained local State Finds active"
+            self.connectionChanged.emit()
+            return
+        cursor = str(meta.get("cursor") or "") if isinstance(meta, dict) and meta.get("region") == region else ""
         continuing = bool(getattr(
             self, "_edframe_state_find_sync_continue", False
         ))
@@ -3560,13 +3667,15 @@ class NavigationMixin:
         request = {
             "id": uuid.uuid4().hex,
             "cursor": cursor,
+            "region": region,
             "generation": getattr(self, "_profile_generation", 0),
         }
         self._active_edframe_state_find_sync_request = request
         self._edframe_state_find_sync_busy = True
+        self._edframe_state_find_started_at = time.monotonic()
         self._edframe_state_find_sync_status = (
-            "Initial State Finds sync…" if not cursor
-            else "Checking for State Finds changes…"
+            "Loading State Finds within 250 LY…" if not cursor
+            else "Checking regional State Finds changes · 250 LY…"
         )
         self.connectionChanged.emit()
 
@@ -3575,6 +3684,7 @@ class NavigationMixin:
             try:
                 result["page"] = fetch_edframe_state_find_delta(
                     cursor=cursor, get=requests.get,
+                    origin=region["origin"], radius_ly=region["radiusLy"],
                 )
                 result["success"] = True
             except Exception as exc:
@@ -3607,6 +3717,13 @@ class NavigationMixin:
             or result.get("generation") != getattr(self, "_profile_generation", 0)
         ):
             return
+        region = request.get("region")
+        if not region or region != state_find_region(getattr(self, "_state", {}).get("currentPosition")):
+            self._edframe_state_find_sync_continue = False
+            self._edframe_state_find_sync_status = "Location changed · regional refresh pending; retained local facts active"
+            self.connectionChanged.emit()
+            self._maybe_refresh_regional_state_finds()
+            return
         if not result.get("success"):
             error = str(result.get("error") or "unknown error")
             self._edframe_state_find_sync_status = (
@@ -3617,21 +3734,23 @@ class NavigationMixin:
             return
         page = result.get("page") or {}
         merged, stats = merge_edframe_state_find_page(
-            self._hge_sightings, page, limit=HGE_OBSERVATION_LIMIT,
+            self._hge_sightings, page, limit=None,
         )
         active, historical = partition_hge_observations(merged)
-        if historical and not self._archive_history(
-            "hge_observations", historical
+        merged = retain_state_find_region(active, origin=region["origin"], limit=HGE_OBSERVATION_LIMIT)
+        retained_ids = {id(row) for row in merged}
+        overflow = [row for row in active if id(row) not in retained_ids]
+        if (historical or overflow) and not self._archive_history(
+            "hge_observations", [*historical, *overflow]
         ):
             self._edframe_state_find_sync_status = (
                 "Sync paused · history archive failed; page will be retried"
             )
             self.connectionChanged.emit()
             return
-        merged = active[-HGE_OBSERVATION_LIMIT:]
         next_cursor = str(page.get("nextCursor") or "").strip()
         stamp = str(page.get("generatedAt") or "")
-        meta = {"cursor": next_cursor, "lastSuccess": stamp}
+        meta = {"cursor": next_cursor, "lastSuccess": stamp, "region": region}
         # The facts are durably written before their cursor. A crash may replay
         # a page, but can never skip a page that was not stored.
         self._hge_save_sequence = int(getattr(
@@ -3671,7 +3790,7 @@ class NavigationMixin:
             QTimer.singleShot(75, self.syncEdFrameStateFinds)
             return
         self._edframe_state_find_sync_status = (
-            f"Up to date · {len(self._hge_sightings):,} active local facts · "
+            f"Region current · 250 LY · {len(self._hge_sightings):,} retained active facts · "
             f"{self._edframe_state_find_sync_rows:,} changes merged"
         )
         self._append_edframe_catalog_log(
@@ -3859,6 +3978,27 @@ class NavigationMixin:
                     except Exception as exc:
                         result["originError"] = str(exc)
             provider_status = {}
+            if getattr(self, "_edframe_catalog_enabled", True) and result.get("origin"):
+                coordinates = result["origin"].get("coordinates")
+                try:
+                    result["siteCoverage"] = {}
+                    result["serverCandidates"] = fetch_edframe_mining_candidates(
+                        query["startSystem"], requests.get,
+                        commodity=query["commodity"], origin=coordinates,
+                        max_distance=max(1, query["nearbyLy"]), timeout=10,
+                        diagnostics=result["siteCoverage"],
+                    )
+                except Exception as exc:
+                    result["siteError"] = str(exc)
+                try:
+                    result["powerplayCoverage"] = {}
+                    result["serverPowerplay"] = fetch_edframe_powerplay(
+                        origin=coordinates, max_distance=max(1, query["nearbyLy"]),
+                        get=requests.get,
+                        diagnostics=result["powerplayCoverage"],
+                    )
+                except Exception as exc:
+                    result["powerplayError"] = str(exc)
             try:
                 hours = max(1, query["maxMarketAgeHours"])
                 result["markets"] = fetch_market_imports(
@@ -3871,6 +4011,7 @@ class NavigationMixin:
                         self, "_edframe_catalog_enabled", True,
                     ),
                     provider_status=provider_status,
+                    origin=result.get("origin"), max_age_hours=hours,
                 )
                 result["providerStatus"] = provider_status
                 result["success"] = True
@@ -4043,6 +4184,15 @@ class NavigationMixin:
             self.miningChanged.emit()
             return
         origin_updated = self._remember_mining_origin(result.get("origin"))
+        # Profile checks above apply to all four independent data domains.
+        # Reuse the bounded observation batch, keeping network work off the UI.
+        for result_key, pending_key in (
+            ("serverCandidates", "_pending_mining_candidates"),
+            ("serverPowerplay", "_pending_mining_powerplay_observations"),
+        ):
+            rows = [row for row in result.get(result_key, []) if isinstance(row, dict)]
+            if rows:
+                setattr(self, pending_key, [*getattr(self, pending_key, []), *rows])
         if not result.get("success"):
             failure_count = int(getattr(
                 self, "_mining_market_failure_count", 0
@@ -4135,6 +4285,17 @@ class NavigationMixin:
             + f" · {len(markets)} nearby · {retained} retained"
             + warm_progress
             + (f" · {provider_summary}" if provider_summary else "")
+            + (f" · server rings {len(result.get('serverCandidates', []))}"
+               if "serverCandidates" in result else "")
+            + (f" · server Powerplay {len(result.get('serverPowerplay', []))}"
+               if "serverPowerplay" in result else "")
+            + (" · server rings unavailable (retained)" if result.get("siteError") else "")
+            + (" · server Powerplay unavailable (Journal/EDSM retained)"
+               if result.get("powerplayError") else "")
+            + (" · bounded server selection (not full coverage)" if any(
+                result.get(key, {}).get("bounded")
+                for key in ("siteCoverage", "powerplayCoverage")
+            ) else "")
         )
         launched_pending = self._launch_pending_mining_market_refresh()
         if not launched_pending and retry_timer is not None and not getattr(
@@ -4932,7 +5093,9 @@ class NavigationMixin:
         try:
             address = int(address)
         except (TypeError, ValueError):
-            self._mining_sync_status = "Current system address unavailable"
+            address = 0
+        if not self._state.get("system") and address <= 0:
+            self._mining_sync_status = "Current system unavailable"
             self.miningChanged.emit()
             return
         request = {
@@ -4945,18 +5108,22 @@ class NavigationMixin:
         }
         self._active_mining_request = request
         self._mining_sync_busy = True
-        self._mining_sync_status = "Refreshing current system from Spansh…"
+        self._mining_sync_status = "Refreshing current system · ED-Frame first…"
         self.miningChanged.emit()
 
         def worker():
             result = dict(request)
+            candidates = []
             if getattr(self, "_edframe_catalog_enabled", True):
                 try:
                     candidates = fetch_edframe_mining_candidates(
                         request["system"], requests.get,
                         origin=request["origin"],
                     )
-                    if candidates:
+                    if candidates and all(
+                        row.get("hotspots") and not mining_candidate_freshness(row).get("stale")
+                        for row in candidates
+                    ):
                         result["candidates"] = candidates
                         result["success"] = True
                         self.miningSyncFinished.emit(result)
@@ -4964,13 +5131,18 @@ class NavigationMixin:
                 except Exception:
                     pass
             try:
+                if address <= 0:
+                    raise ValueError("Spansh fallback requires system address")
                 payload = fetch_spansh_system_dump(address, requests.get)
-                result["candidates"] = project_spansh_mining_candidates(
-                    payload, request["origin"]
+                result["candidates"] = merge_mining_candidates(
+                    [*candidates, *project_spansh_mining_candidates(
+                        payload, request["origin"]
+                    )]
                 )
                 result["success"] = True
             except Exception as exc:
-                result.update({"success": False, "error": str(exc)})
+                result.update({"success": bool(candidates), "candidates": candidates,
+                               "error": str(exc)})
             self.miningSyncFinished.emit(result)
 
         if not self._start_network_worker(worker, "mining-catalog-sync"):

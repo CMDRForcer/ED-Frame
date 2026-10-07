@@ -583,6 +583,7 @@ def _secondary_resources(
             "name": mining_commodity_name(identifier),
             "hotspot": False,
             "localYield": False,
+            "communityYield": False,
             "prospectorHits": 0,
             "refinedCount": 0,
             "averageProportion": None,
@@ -595,7 +596,10 @@ def _secondary_resources(
         if not identifier or identifier == primary_id:
             continue
         item = resource(identifier)
-        item["localYield"] = True
+        community = source.get("yieldAggregationScope", row.get(
+            "yieldAggregationScope"
+        )) == "COMMUNITY"
+        item["communityYield" if community else "localYield"] = True
         item["prospectorHits"] = max(
             int(item["prospectorHits"]),
             int(_number(source.get("prospectorHits"))),
@@ -634,6 +638,8 @@ def _secondary_resources(
         evidence = []
         if item["localYield"]:
             evidence.append("LOCAL YIELD")
+        if item["communityYield"]:
+            evidence.append("COMMUNITY YIELD")
         if item["hotspot"]:
             evidence.append("HOTSPOT")
         matching_markets = markets_by_commodity.get(identifier, [])
@@ -654,7 +660,7 @@ def _secondary_resources(
         result.append(item)
 
     result.sort(key=lambda item: (
-        not bool(item.get("localYield")),
+        not bool(item.get("localYield") or item.get("communityYield")),
         not bool(item.get("hotspot")),
         str(item.get("name") or "").casefold(),
     ))
@@ -702,7 +708,13 @@ def _powerplay_index(
     """
     by_power: dict[tuple[str, str], dict[str, Any]] = {}
     by_system: dict[str, dict[str, Any]] = {}
-    for source in rows or []:
+    # Apply older facts first so a new server control observation cannot be
+    # overwritten by an older cached row merely because of list order.
+    for source in sorted(
+        (row for row in rows or [] if isinstance(row, dict)),
+        key=lambda row: _timestamp(row.get("observedAt"))
+        or datetime.min.replace(tzinfo=timezone.utc),
+    ):
         if not isinstance(source, dict):
             continue
         system = _system_key(source.get("system") or source.get("name"))
@@ -1556,7 +1568,7 @@ def plan_mining_routes(
             row, selected_commodity, market, secondary_route_markets,
         )
         secondary_evidence_score = sum(
-            (2 if item.get("localYield") else 0)
+            (2 if item.get("localYield") or item.get("communityYield") else 0)
             + (1 if item.get("hotspot") else 0)
             for item in secondary_resources
         )
@@ -1570,14 +1582,17 @@ def plan_mining_routes(
             and measured_hits > 0
         )
         measured_maximum = None
+        measured_scope = row.get("yieldAggregationScope") or "LOCAL"
         for stat in row.get("yieldStats") or []:
             if not isinstance(stat, dict) or mining_commodity_id(
                 stat.get("commodity")
             ) != selected_commodity:
                 continue
             measured_maximum = stat.get("maxProportion")
+            measured_scope = stat.get("yieldAggregationScope", measured_scope)
             break
         row.update({
+            "yieldMeasurementScope": measured_scope,
             "yieldMeasured": measured_known,
             "yieldAverageProportion": (
                 round(_number(measured_yield), 2) if measured_known else None
@@ -1595,6 +1610,7 @@ def plan_mining_routes(
             "yieldEvidenceLabel": (
                 f"MEASURED · AVG {_number(measured_yield):.1f}% · "
                 f"{measured_hits}/{measured_samples} PROSPECTORS"
+                + (" · COMMUNITY" if measured_scope == "COMMUNITY" else " · LOCAL")
                 if measured_known else "ESTIMATED · HOTSPOT / RING EVIDENCE"
             ),
         })

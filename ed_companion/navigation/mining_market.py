@@ -883,9 +883,10 @@ def project_edframe_catalog_markets(
 
 def _fetch_edframe_catalog_markets(
     system: str, commodity: str, *, max_distance: int, max_days_ago: int,
-    landing_pad: str, get: Any, timeout: int,
+    landing_pad: str, get: Any, timeout: int, origin: Any = None,
+    max_age_hours: int | None = None,
 ) -> list[dict[str, Any]]:
-    origin = fetch_edframe_system_coordinates(
+    origin = origin or fetch_edframe_system_coordinates(
         system, get=get, timeout=timeout,
     )
     coordinates = origin["coordinates"]
@@ -895,7 +896,9 @@ def _fetch_edframe_catalog_markets(
         f"{EDFRAME_CATALOG_BASE}/v1/markets/search",
         params={
             "commodity": commodity,
-            "max_age_hours": max(1, max_days_ago) * 24,
+            "max_age_hours": max(1, min(2160, int(
+                max_age_hours if max_age_hours is not None else max_days_ago * 24
+            ))),
             "x": coordinates[0],
             "y": coordinates[1],
             "z": coordinates[2],
@@ -921,6 +924,8 @@ def fetch_market_imports(
     include_edframe: bool = True,
     landing_pad: str = "ANY",
     provider_status: dict[str, str] | None = None,
+    origin: Any = None,
+    max_age_hours: int | None = None,
 ) -> list[dict[str, Any]]:
     """Fetch nearby sell markets without sending Commander-identifying data."""
     system = str(start_system or "").strip()
@@ -943,7 +948,8 @@ def fetch_market_imports(
             central_rows = _fetch_edframe_catalog_markets(
                 system, commodity_id, max_distance=distance,
                 max_days_ago=days, landing_pad=landing_pad,
-                get=get, timeout=timeout,
+                get=get, timeout=timeout, origin=origin,
+                max_age_hours=max_age_hours,
             )
             central_succeeded = True
             statuses["ED-Frame"] = f"OK ({len(central_rows)} rows)"

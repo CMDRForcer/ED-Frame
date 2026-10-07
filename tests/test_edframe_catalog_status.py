@@ -250,6 +250,13 @@ class EdFrameCatalogStatusTests(unittest.TestCase):
                     "stationTypePercent": 80,
                     "stationLandingPadPercent": 70,
                     "stationServicesPercent": 60,
+                    "freshMarkets1h": 12,
+                    "freshMarkets24h": 25,
+                },
+                "collector24h": {
+                    "messages": 500,
+                    "usedPercent": 70.5,
+                    "errors": 0,
                 },
                 "collector": {
                     "messages_total": 123,
@@ -267,6 +274,11 @@ class EdFrameCatalogStatusTests(unittest.TestCase):
         )
         self.assertEqual(controller._edframe_catalog_stats["collectorMessages"], 123)
         self.assertEqual(controller._edframe_catalog_stats["collectorErrors"], 2)
+        self.assertEqual(controller._edframe_catalog_stats["freshMarkets1h"], 12)
+        self.assertEqual(controller._edframe_catalog_stats["freshMarkets24h"], 25)
+        self.assertEqual(controller._edframe_catalog_stats["collector24hMessages"], 500)
+        self.assertEqual(controller._edframe_catalog_stats["collector24hUsedPercent"], 70.5)
+        self.assertEqual(controller._edframe_catalog_stats["collector24hErrors"], 0)
         self.assertEqual(
             controller._edframe_catalog_stats["stateBgsSnapshots"], 6
         )

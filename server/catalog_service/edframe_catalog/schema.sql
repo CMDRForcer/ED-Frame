@@ -1,3 +1,15 @@
+-- One latest snapshot per system, not an indefinitely growing event archive.
+CREATE TABLE IF NOT EXISTS mining_powerplay (
+    identity TEXT PRIMARY KEY,
+    system_name TEXT NOT NULL,
+    system_address BIGINT,
+    x DOUBLE PRECISION, y DOUBLE PRECISION, z DOUBLE PRECISION,
+    observed_at TIMESTAMPTZ NOT NULL,
+    received_at TIMESTAMPTZ NOT NULL,
+    facts JSONB NOT NULL
+);
+CREATE INDEX IF NOT EXISTS mining_powerplay_observed_idx ON mining_powerplay (observed_at);
+
 CREATE TABLE IF NOT EXISTS systems (
     name TEXT PRIMARY KEY,
     system_address BIGINT,
@@ -298,6 +310,21 @@ CREATE TABLE IF NOT EXISTS state_signals (
     observation JSONB NOT NULL,
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
+
+-- Latest public sighting per system/type/faction/state; no invented expiry.
+CREATE TABLE IF NOT EXISTS state_signal_sightings (
+    identity TEXT PRIMARY KEY,
+    system_address BIGINT,
+    system_name TEXT NOT NULL,
+    observed_at TIMESTAMPTZ NOT NULL,
+    received_at TIMESTAMPTZ NOT NULL,
+    observation JSONB NOT NULL,
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS state_signal_sightings_sync_idx
+    ON state_signal_sightings (updated_at, identity);
+CREATE INDEX IF NOT EXISTS state_signal_sightings_observed_idx
+    ON state_signal_sightings (observed_at DESC);
 
 CREATE INDEX IF NOT EXISTS state_signals_sync_idx
     ON state_signals (updated_at, identity);

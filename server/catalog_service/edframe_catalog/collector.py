@@ -12,15 +12,20 @@ from ed_companion.integrations.eddn import EddnRelayDecodeError, decode_relay_fr
 from .database import (
     connection, ensure_schema, record_state, upsert_batch,
     upsert_state_find_batch, upsert_station_offer_batch,
+    upsert_powerplay_snapshot,
+    upsert_state_sighting_batch,
+    upsert_signal_systems,
 )
 from .projection import (
     project_markets,
+    project_powerplay_snapshot,
     project_sites,
     project_station_offers,
     project_stations,
     project_system,
     project_state_bgs_snapshot,
     project_state_signals,
+    project_state_sightings,
     projected_systems,
     schema_name,
     utc_now,
@@ -83,6 +88,9 @@ def main() -> None:
                     )
                     snapshot = project_state_bgs_snapshot(payload, received_at)
                     signals = project_state_signals(payload, received_at)
+                    sightings = project_state_sightings(payload, received_at)
+                    upsert_signal_systems(conn, sightings)
+                    projected += upsert_state_sighting_batch(conn, sightings)
                     projected += upsert_state_find_batch(
                         conn,
                         [snapshot] if snapshot else [],
@@ -90,6 +98,9 @@ def main() -> None:
                     )
                     projected += upsert_station_offer_batch(
                         conn, project_station_offers(payload, received_at)
+                    )
+                    projected += upsert_powerplay_snapshot(
+                        conn, project_powerplay_snapshot(payload, received_at)
                     )
                     record_state(
                         conn,
@@ -134,4 +145,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-

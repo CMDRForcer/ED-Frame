@@ -4,6 +4,7 @@ import QtQuick.Dialogs
 import QtQuick.Layouts
 import "qml/components"
 import "qml/pages"
+import "qml/components/UiMetrics.js" as UiMetrics
 
 ApplicationWindow {
     id: window
@@ -145,6 +146,8 @@ ApplicationWindow {
     property bool reducedMotion: cockpit ? cockpit.reducedMotion : true
     property bool enhancedVisuals: cockpit ? cockpit.enhancedVisuals : false
     property int currentPage: cockpit.lastPage
+    property bool navStationServicesOpen: false
+    property bool navCommoditiesOpen: false
     // CMDR is a comparatively rich workspace.  Once opened, keep its QML
     // object tree alive so repeated navigation does not synchronously rebuild
     // charts, cards and Fleet image delegates on the GUI thread.
@@ -621,7 +624,7 @@ ApplicationWindow {
         property bool selected: false
         property string helpText: ""
         property real horizontalContentPadding: 10
-        implicitHeight: 40
+        implicitHeight: UiMetrics.controlHeight
         focusPolicy: Qt.StrongFocus
         Accessible.name: text
         Accessible.description: helpText
@@ -632,7 +635,7 @@ ApplicationWindow {
             enabled: !window.reducedMotion
             NumberAnimation { duration: 100; easing.type: Easing.OutCubic }
         }
-        font.pixelSize: 12
+        font.pixelSize: UiMetrics.body
         font.weight: Font.DemiBold
         contentItem: Label {
             text: control.text
@@ -687,9 +690,10 @@ ApplicationWindow {
         property string qaName: ""
         objectName: qaName
         Layout.fillWidth: true
-        Layout.preferredHeight: window.narrowWorkspace ? 116 : 76
+        Layout.preferredHeight: sharedSettingsHeader.implicitHeight
 
         WorkspaceHeader {
+            id: sharedSettingsHeader
             anchors.fill: parent
             appWindow: window
             eyebrow: window.t("settings.workspace", "SYSTEM CONTROL")
@@ -746,7 +750,10 @@ ApplicationWindow {
             Label {
                 anchors.left: parent.left
                 anchors.leftMargin: 20
+                anchors.right: parent.right
+                anchors.rightMargin: 20
                 anchors.verticalCenter: parent.verticalCenter
+                elide: Text.ElideRight
                 text: dialogControl.title
                 color: textPrimary
                 font.pixelSize: 17
@@ -911,7 +918,7 @@ ApplicationWindow {
             RowLayout {
                 Layout.fillWidth: true
                 spacing: 6
-                    Label { text: window.t("common.sort", "SORT"); color: muted; font.pixelSize: 9; font.bold: true }
+                    Label { text: window.t("common.sort", "SORT"); color: muted; font.pixelSize: UiMetrics.caption; font.bold: true }
                 CockpitButton {
                     text: window.t("common.name", "NAME") + " " + (materialColumn.sortKey === "name"
                                     ? (materialColumn.sortDescending ? "↓" : "↑") : "")
@@ -981,12 +988,12 @@ ApplicationWindow {
                             Label {
                                 visible: modelData.surplus > 0
                                 text: "+" + modelData.surplus + " " + window.t("common.surplus", "SURPLUS")
-                                color: green; font.pixelSize: 9; font.bold: true
+                                color: green; font.pixelSize: UiMetrics.caption; font.bold: true
                             }
                             Label {
                                 text: modelData.capacityKnown ? "G" + modelData.grade : window.t("status.value.unknown", "UNKNOWN")
                                 color: materialColumn.categoryColor
-                                font.pixelSize: 10; font.bold: true
+                                font.pixelSize: UiMetrics.caption; font.bold: true
                             }
                         }
                         ModernProgress { Layout.fillWidth: true; value: modelData.capacityProgress }
@@ -995,7 +1002,7 @@ ApplicationWindow {
                             Label {
                                 text: window.t("common.stock", "STOCK") + "  " + modelData.have + " / "
                                       + (modelData.capacityKnown ? modelData.capacity : "CAPACITY UNKNOWN")
-                                color: muted; font.pixelSize: 10
+                                color: muted; font.pixelSize: UiMetrics.caption
                             }
                             Item { Layout.fillWidth: true }
                             Label {
@@ -1005,7 +1012,7 @@ ApplicationWindow {
                                          ? modelData.missing + " MISSING"
                                          : "READY")
                                 color: modelData.missing > 0 ? orange : (modelData.need > 0 ? green : muted)
-                                font.pixelSize: 10; font.bold: modelData.need > 0
+                                font.pixelSize: UiMetrics.caption; font.bold: modelData.need > 0
                             }
                         }
                         ModernProgress {
@@ -1016,14 +1023,14 @@ ApplicationWindow {
                         Label {
                             visible: !!modelData.warning
                             text: modelData.warning
-                            color: error; font.pixelSize: 10; font.bold: true
+                            color: error; font.pixelSize: UiMetrics.caption; font.bold: true
                             Layout.fillWidth: true; elide: Text.ElideRight
                         }
                         Label {
                             visible: modelData.need > 0
                             text: window.t("common.build", "BUILD") + "  " + modelData.have + " / " + modelData.need
                             color: modelData.missing > 0 ? orange : green
-                            font.pixelSize: 10; font.bold: true
+                            font.pixelSize: UiMetrics.caption; font.bold: true
                         }
                     }
                 }
@@ -1184,7 +1191,7 @@ ApplicationWindow {
                 visible: cockpit.backgroundMode
                 Layout.fillWidth: true
                 text: window.compactSidebar ? "●" : window.t("common.tray_mode", "●  TRAY MODE")
-                color: green; font.pixelSize: 10; font.bold: true
+                color: green; font.pixelSize: UiMetrics.caption; font.bold: true
                 horizontalAlignment: Text.AlignHCenter
                 ToolTip.visible: trayModeMouse.containsMouse
                 ToolTip.text: window.t("common.close_to_tray_help", "Closing the window keeps Journal and EDDN monitoring active")
@@ -1220,7 +1227,8 @@ ApplicationWindow {
         active: window.currentPage === 0
         asynchronous: false
         sourceComponent: Component {
-    ColumnLayout {
+    ScrollView {
+        id: operationsViewport
         objectName: "qa-page-operations"
         visible: true
         anchors.fill: parent
@@ -1228,6 +1236,12 @@ ApplicationWindow {
         anchors.rightMargin: window.compactSidebar ? 18 : 26
         anchors.topMargin: window.compactSidebar ? 18 : 26
         anchors.bottomMargin: window.compactSidebar ? 18 : 26
+        clip: true
+        contentWidth: availableWidth
+        ScrollBar.horizontal.policy: ScrollBar.AlwaysOff
+        ColumnLayout {
+        width: operationsViewport.availableWidth
+        height: Math.max(implicitHeight, operationsViewport.availableHeight)
         spacing: 16
 
         GridLayout {
@@ -1238,14 +1252,33 @@ ApplicationWindow {
             ColumnLayout {
                 objectName: "qa-header-operations"
                 Layout.fillWidth: true
-                spacing: 2
-                Label { text: window.t("operations.title", "COMMANDER OPERATIONS"); color: textPrimary; font.pixelSize: 24; font.bold: true }
-                Label {
-                    text: window.tf("status.wishlist_ship", "WISHLIST · %1", [cockpit.ship])
-                          + (cockpit.activeShip
-                             ? "  ·  FLYING · " + cockpit.activeShip : "")
-                          + "  ·  " + cockpit.system
-                    color: muted; font.pixelSize: 13
+                spacing: UiMetrics.gap
+                WorkspaceHeader {
+                    qaName: "qa-workspace-header-operations"
+                    appWindow: window
+                    eyebrow: window.t("commander.workspace", "COMMANDER PROFILE")
+                    title: window.t("operations.title", "COMMANDER OPERATIONS")
+                    subtitle: window.tf("status.wishlist_ship", "WISHLIST · %1", [cockpit.ship])
+                              + (cockpit.activeShip ? "  ·  FLYING · " + cockpit.activeShip : "")
+                              + "  ·  " + cockpit.system
+                }
+                RowLayout {
+                    CockpitButton {
+                        text: window.t("nav.services.title", "STATION SERVICES")
+                        onClicked: {
+                            window.navStationServicesOpen = true
+                            window.navCommoditiesOpen = false
+                            window.currentPage = 15
+                        }
+                    }
+                    CockpitButton {
+                        text: window.t("commodities.title", "COMMODITIES")
+                        onClicked: {
+                            window.navStationServicesOpen = false
+                            window.navCommoditiesOpen = true
+                            window.currentPage = 15
+                        }
+                    }
                 }
             }
             RowLayout {
@@ -1337,7 +1370,7 @@ ApplicationWindow {
             objectName: "qa-card-operations"
             Layout.fillWidth: true
             Layout.fillHeight: true
-            Layout.minimumWidth: 500
+            Layout.minimumWidth: 0
             accent: actionHover.containsMouse ? cyan : "transparent"
             Behavior on scale { enabled: !window.reducedMotion; NumberAnimation { duration: 150; easing.type: Easing.OutCubic } }
             scale: actionHover.containsMouse ? 1.006 : 1.0
@@ -1394,8 +1427,8 @@ ApplicationWindow {
                     RowLayout {
                         anchors.fill: parent; spacing: 0
                         ColumnLayout {
-                            Layout.preferredWidth: Math.max(420, parent.width * 0.43)
-                            Layout.maximumWidth: Math.max(420, parent.width * 0.43)
+                            Layout.preferredWidth: Math.max(240, parent.width * 0.43)
+                            Layout.maximumWidth: Math.max(240, parent.width * 0.43)
                             Layout.fillHeight: true; spacing: 0
                             Repeater {
                                 model: [{
@@ -1451,7 +1484,7 @@ ApplicationWindow {
                                         ColumnLayout {
                                             Layout.fillWidth: true; spacing: 1
                                             Label { Layout.fillWidth: true; text: modelData.label; color: modelData.tone; font.pixelSize: 14; font.bold: true; elide: Text.ElideRight }
-                                            Label { visible: !!modelData.detail; Layout.fillWidth: true; text: modelData.detail || ""; color: textSecondary; font.pixelSize: 9; font.bold: true; elide: Text.ElideRight }
+                                            Label { visible: !!modelData.detail; Layout.fillWidth: true; text: modelData.detail || ""; color: textSecondary; font.pixelSize: UiMetrics.caption; font.bold: true; elide: Text.ElideRight }
                                         }
                                     }
                                 }
@@ -1459,7 +1492,7 @@ ApplicationWindow {
                         }
                         Rectangle { Layout.preferredWidth: 1; Layout.fillHeight: true; color: borderTone }
                         Item {
-                            Layout.fillWidth: true; Layout.fillHeight: true; Layout.minimumWidth: 520
+                            Layout.fillWidth: true; Layout.fillHeight: true; Layout.minimumWidth: 0
                             clip: true
                             RowLayout {
                                 anchors.fill: parent; spacing: 0
@@ -1698,7 +1731,7 @@ ApplicationWindow {
                 Label {
                     visible: nbaLayout.showEngineerOptions
                     text: window.t("operations.engineers", "ENGINEERS FOR TARGET GRADE · RECOMMENDED FIRST")
-                    color: orange; font.pixelSize: 10; font.bold: true
+                    color: orange; font.pixelSize: UiMetrics.caption; font.bold: true
                 }
                 ListView {
                     visible: nbaLayout.showEngineerOptions
@@ -1742,7 +1775,7 @@ ApplicationWindow {
                                 Label {
                                     Layout.fillWidth: true
                                     text: modelData.name + " · " + modelData.system
-                                    color: textPrimary; font.pixelSize: 10; font.bold: true
+                                    color: textPrimary; font.pixelSize: UiMetrics.caption; font.bold: true
                                     elide: Text.ElideRight
                                 }
                                 Label {
@@ -1750,7 +1783,7 @@ ApplicationWindow {
                                     color: modelData.craftable ? green
                                          : modelData.status === "access_unknown" ? cyan
                                          : modelData.status === "rank_too_low" ? orange : muted
-                                    font.pixelSize: 9; font.bold: true
+                                    font.pixelSize: UiMetrics.caption; font.bold: true
                                 }
                             }
                             CockpitButton {
@@ -1820,7 +1853,7 @@ ApplicationWindow {
                         text: cockpit.serviceStatus.map(function(row) {
                             return row.name + " " + row.status
                         }).join(" · ")
-                        color: muted; font.pixelSize: 10
+                        color: muted; font.pixelSize: UiMetrics.caption
                         elide: Text.ElideLeft; Layout.maximumWidth: 520
                     }
                 }
@@ -1869,12 +1902,12 @@ ApplicationWindow {
                             anchors.fill: parent; anchors.margins: 8; spacing: 1
                             Label {
                                 Layout.fillWidth: true; text: modelData.title
-                                color: danger; font.pixelSize: 10; font.bold: true
+                                color: danger; font.pixelSize: UiMetrics.caption; font.bold: true
                                 elide: Text.ElideRight
                             }
                             Label {
                                 Layout.fillWidth: true; text: modelData.detail
-                                color: textSecondary; font.pixelSize: 9
+                                color: textSecondary; font.pixelSize: UiMetrics.caption
                                 elide: Text.ElideRight
                             }
                         }
@@ -1886,12 +1919,12 @@ ApplicationWindow {
                     Layout.fillWidth: true
                     Label {
                         text: window.t("operations.active_route", "ACTIVE FLIGHT ROUTE")
-                        color: green; font.pixelSize: 10; font.bold: true
+                        color: green; font.pixelSize: UiMetrics.caption; font.bold: true
                     }
                     Item { Layout.fillWidth: true }
                     Label {
                         text: window.tf("operations.stop_count", "%1 STOPS", [cockpit.engineerMissionRoute.length])
-                        color: textPrimary; font.pixelSize: 10; font.bold: true
+                        color: textPrimary; font.pixelSize: UiMetrics.caption; font.bold: true
                     }
                 }
                 Label {
@@ -1902,19 +1935,19 @@ ApplicationWindow {
                             }).join("  ·  ")
                           : window.t("operations.no_active_stops", "NO EXECUTABLE ENGINEER STOP")
                     color: cockpit.engineerMissionRoute.length ? textSecondary : muted
-                    font.pixelSize: 10; wrapMode: Text.WordWrap
+                    font.pixelSize: UiMetrics.caption; wrapMode: Text.WordWrap
                 }
                 Rectangle { Layout.fillWidth: true; height: 1; color: borderTone }
                 RowLayout {
                     Layout.fillWidth: true
                     Label {
                         text: window.t("operations.unlock_tasks_short", "LATER · ACCESS TASKS")
-                        color: orange; font.pixelSize: 10; font.bold: true
+                        color: orange; font.pixelSize: UiMetrics.caption; font.bold: true
                     }
                     Item { Layout.fillWidth: true }
                     Label {
                         text: String(cockpit.engineerUnlockTasks.length)
-                        color: orange; font.pixelSize: 10; font.bold: true
+                        color: orange; font.pixelSize: UiMetrics.caption; font.bold: true
                     }
                 }
                 Label {
@@ -1923,7 +1956,7 @@ ApplicationWindow {
                     text: cockpit.engineerUnlockTasks.map(function(row) {
                         return row.name + " (" + row.openJobs + ")"
                     }).join("  ·  ")
-                    color: textSecondary; font.pixelSize: 10; wrapMode: Text.WordWrap
+                    color: textSecondary; font.pixelSize: UiMetrics.caption; wrapMode: Text.WordWrap
                 }
                 CockpitButton {
                     visible: cockpit.engineerUnlockTasks.length > 0
@@ -1940,12 +1973,12 @@ ApplicationWindow {
                     Layout.fillWidth: true
                     Label {
                         text: window.t("operations.tracked_work", "TRACKED WORK")
-                        color: cyan; font.pixelSize: 10; font.bold: true
+                        color: cyan; font.pixelSize: UiMetrics.caption; font.bold: true
                     }
                     Item { Layout.fillWidth: true }
                     Label {
                         text: window.tf("status.active_count", "%1 ACTIVE", [cockpit.trackedItems.length])
-                        color: orange; font.pixelSize: 9; font.bold: true
+                        color: orange; font.pixelSize: UiMetrics.caption; font.bold: true
                     }
                 }
                 Label {
@@ -1954,7 +1987,7 @@ ApplicationWindow {
                     text: cockpit.trackedItems.map(function(row) {
                         return row.title + " · " + row.status
                     }).join("\n")
-                    color: textSecondary; font.pixelSize: 9
+                    color: textSecondary; font.pixelSize: UiMetrics.caption
                     wrapMode: Text.WordWrap
                     maximumLineCount: 3; elide: Text.ElideRight
                 }
@@ -1963,14 +1996,18 @@ ApplicationWindow {
         }
         }
 
-        RowLayout {
+        GridLayout {
+            objectName: "qa-operations-support-cards"
             Layout.fillWidth: true
             Layout.fillHeight: true
-            spacing: 16
+            columns: window.narrowWorkspace ? 1 : 2
+            columnSpacing: 16
+            rowSpacing: 16
             ShadowCard {
                 Layout.fillWidth: true
                 Layout.fillHeight: true
-                Layout.minimumWidth: window.compactSidebar ? 500 : 650
+                Layout.minimumWidth: 0
+                Layout.minimumHeight: 320
                 ColumnLayout {
                     anchors.fill: parent; anchors.margins: 20; spacing: 10
                     RowLayout {
@@ -1993,6 +2030,8 @@ ApplicationWindow {
                         text: cockpit.trades.length > 0
                               ? "In Elite select WANTED first, then GIVE. Journal checks completed trades automatically."
                               : "Collect these exact amounts. Open MATERIAL DETAILS for verified sources and safe trade options."
+                        Layout.fillWidth: true
+                        wrapMode: Text.WordWrap
                         color: muted; font.pixelSize: 12
                     }
                     RowLayout {
@@ -2061,7 +2100,7 @@ ApplicationWindow {
                                 text: section.toUpperCase()
                                 color: section === "Raw" ? accentSecondary
                                       : (section === "Encoded" ? cyan : orange)
-                                font.pixelSize: 10
+                                font.pixelSize: UiMetrics.caption
                                 font.bold: true
                             }
                         }
@@ -2186,7 +2225,7 @@ ApplicationWindow {
                                         Label {
                                             text: (modelData.category || "").toUpperCase()
                                                   + " · G" + modelData.grade
-                                            color: cyan; font.pixelSize: 10; font.bold: true
+                                            color: cyan; font.pixelSize: UiMetrics.caption; font.bold: true
                                         }
                                     }
                                     Label {
@@ -2200,7 +2239,7 @@ ApplicationWindow {
                                               ? modelData.sourceCards[0].label
                                                 + "  →  " + modelData.sourceCards[0].detail
                                               : "No verified acquisition source stored."
-                                        color: textSecondary; font.pixelSize: 10
+                                        color: textSecondary; font.pixelSize: UiMetrics.caption
                                         wrapMode: Text.WordWrap; Layout.fillWidth: true
                                         maximumLineCount: 2; elide: Text.ElideRight
                                     }
@@ -2214,11 +2253,16 @@ ApplicationWindow {
                     }
                     Item {
                         Layout.fillWidth: true; Layout.fillHeight: true
+                        Layout.minimumHeight: materialReadyState.implicitHeight + 24
+                        implicitHeight: materialReadyState.implicitHeight + 24
+                        clip: true
                         visible: cockpit.trades.length === 0
                                  && cockpit.missingMaterials.length === 0
                         EmptyState {
+                            id: materialReadyState
                             anchors.centerIn: parent
-                            width: Math.min(760, parent.width - 80)
+                            width: Math.max(0, Math.min(760, parent.width - 24))
+                            height: implicitHeight
                             symbol: cockpit.fleetKnown ? "✓" : "⌁"
                             title: cockpit.fleetKnown
                                    ? "READY · ALL REQUIRED MATERIALS"
@@ -2235,7 +2279,10 @@ ApplicationWindow {
 
             ShadowCard {
                 Layout.preferredWidth: window.compactSidebar ? 310 : 380
+                Layout.fillWidth: true
                 Layout.fillHeight: true
+                Layout.minimumWidth: 0
+                Layout.minimumHeight: 320
                 ColumnLayout {
                     anchors.fill: parent; anchors.margins: 20; spacing: 12
                     RowLayout {
@@ -2254,7 +2301,7 @@ ApplicationWindow {
                             contentItem: Label {
                                 leftPadding: 10
                                 text: traderPreferenceChoice.displayText
-                                color: cyan; font.pixelSize: 10; font.bold: true
+                                color: cyan; font.pixelSize: UiMetrics.caption; font.bold: true
                                 verticalAlignment: Text.AlignVCenter
                             }
                             background: Rectangle {
@@ -2315,7 +2362,7 @@ ApplicationWindow {
                                                 text: modelData.station + " · " + modelData.category
                                                       + (typeof modelData.leg_distance_ly === "number"
                                                          ? " · " + modelData.leg_distance_ly.toFixed(1) + " ly" : "")
-                                                color: muted; font.pixelSize: 10
+                                                color: muted; font.pixelSize: UiMetrics.caption
                                                 elide: Text.ElideRight; Layout.fillWidth: true
                                             }
                                         }
@@ -2367,7 +2414,7 @@ ApplicationWindow {
                                     text: window.liveHgeTargets.filter(function(row) { return row.active }).length
                                           + " / " + window.liveHgeTargets.length + " TARGETS"
                                     color: window.liveHgeTargets.some(function(row) { return row.active }) ? green : muted
-                                    font.pixelSize: 10; font.bold: true
+                                    font.pixelSize: UiMetrics.caption; font.bold: true
                                 }
                             }
                             Label {
@@ -2396,6 +2443,7 @@ ApplicationWindow {
             }
         }
     }
+    }
         }
     }
 
@@ -2415,23 +2463,28 @@ ApplicationWindow {
         anchors.bottomMargin: window.compactSidebar ? 18 : 26
         spacing: 16
 
-        RowLayout {
+        ColumnLayout {
             Layout.fillWidth: true
-            ColumnLayout {
-                objectName: "qa-header-wishlist"
-                Label { text: window.t("wishlist.title", "BLUEPRINT WISHLIST"); color: textPrimary; font.pixelSize: 24; font.bold: true }
-                Label {
-                    text: window.tf("status.viewing", "VIEWING · %1", [cockpit.ship])
+            spacing: UiMetrics.gap
+            WorkspaceHeader {
+                qaName: "qa-header-wishlist"
+                appWindow: window
+                eyebrow: window.t("engineering.title", "SHIP ENGINEERING")
+                title: window.t("wishlist.title", "BLUEPRINT WISHLIST")
+                subtitle: window.tf("status.viewing", "VIEWING · %1", [cockpit.ship])
                           + (cockpit.activeShip
                              ? "  ·  FLYING · " + cockpit.activeShip : "")
                           + "  ·  LIVE INVENTORY COVERAGE"
-                    color: muted; font.pixelSize: 13
-                }
             }
-            Item { Layout.fillWidth: true }
+            RowLayout {
+            Layout.fillWidth: true
+            spacing: UiMetrics.gap
             CockpitComboBox {
                 id: wishlistPageShip
                 Layout.preferredWidth: 330
+                Layout.minimumWidth: 0
+                Layout.fillWidth: true
+                Layout.maximumWidth: 520
                 Layout.preferredHeight: 42
                 model: cockpit.ships
                 currentIndex: Math.max(0, cockpit.ships.indexOf(cockpit.ship))
@@ -2466,6 +2519,8 @@ ApplicationWindow {
                     color: cyan; font.bold: true
                 }
             }
+            Item { Layout.fillWidth: true }
+            }
         }
 
         RowLayout {
@@ -2473,7 +2528,7 @@ ApplicationWindow {
             Label {
                 Layout.fillWidth: true
                 text: cockpit.fleetStatus
-                color: muted; font.pixelSize: 10
+                color: muted; font.pixelSize: UiMetrics.caption
                 elide: Text.ElideRight
             }
         }
@@ -2539,7 +2594,7 @@ ApplicationWindow {
                         Label {
                             Layout.fillWidth: true
                             text: window.t("wishlist.material_monitor_warning_title", "MATERIAL MONITOR · PLAN ADAPTED AUTOMATICALLY")
-                            color: orange; font.pixelSize: 10; font.bold: true
+                            color: orange; font.pixelSize: UiMetrics.caption; font.bold: true
                         }
                         Label {
                             Layout.fillWidth: true
@@ -2549,7 +2604,7 @@ ApplicationWindow {
                                   : materialMonitorWarning.issue.recipeChanged
                                     ? window.t("wishlist.material_monitor_recipe", "Elite reported a different recipe. The Journal cost replaced the estimate and remaining materials were recalculated.")
                                     : window.t("wishlist.material_monitor_roll", "The grade still needed progress after the planned roll budget. The next observed roll is reserved; nothing is blocked.")
-                            color: textPrimary; font.pixelSize: 10
+                            color: textPrimary; font.pixelSize: UiMetrics.caption
                             wrapMode: Text.WordWrap
                         }
                     }
@@ -2566,13 +2621,13 @@ ApplicationWindow {
                         anchors.fill: parent; anchors.margins: 9; spacing: 10
                         Label {
                             text: window.t("wishlist.material_monitor_reduction_title", "MATERIAL MONITOR · RESERVE RELEASED")
-                            color: green; font.pixelSize: 10; font.bold: true
+                            color: green; font.pixelSize: UiMetrics.caption; font.bold: true
                         }
                         Rectangle { Layout.preferredWidth: 1; Layout.fillHeight: true; color: borderTone }
                         Label {
                             Layout.fillWidth: true
                             text: window.tf("wishlist.material_monitor_reduction", "%1 roll(s) and %2 material unit(s) are no longer needed. Remaining requirements were reduced automatically.", [materialMonitorReduction.reduction.rollsReleased || 0, materialMonitorReduction.reduction.releasedMaterialUnits || 0])
-                            color: textPrimary; font.pixelSize: 10
+                            color: textPrimary; font.pixelSize: UiMetrics.caption
                             wrapMode: Text.WordWrap
                         }
                     }
@@ -2592,7 +2647,7 @@ ApplicationWindow {
                             text: window.t("wishlist.craft_pending", "CRAFT MATCH PENDING · ")
                                   + cockpit.relevantCraftTrackingIssues.length
                                   + window.t("wishlist.relevant_conflicts_suffix", " RELEVANT CONFLICT(S)")
-                            color: error; font.pixelSize: 10; font.bold: true
+                            color: error; font.pixelSize: UiMetrics.caption; font.bold: true
                         }
                         ListView {
                             Layout.fillWidth: true
@@ -2610,7 +2665,7 @@ ApplicationWindow {
                                           + " / " + (modelData.slot || window.t("status.slot_unknown", "SLOT UNKNOWN"))
                                           + " · " + (modelData.blueprintName || window.t("status.blueprint_unknown", "BLUEPRINT UNKNOWN"))
                                           + " · " + (modelData.reason || window.t("status.no_safe_match", "No safe match"))
-                                    color: error; font.pixelSize: 9; font.bold: true
+                                    color: error; font.pixelSize: UiMetrics.caption; font.bold: true
                                     elide: Text.ElideRight
                                 }
                                 CockpitButton {
@@ -2640,7 +2695,7 @@ ApplicationWindow {
                                 Layout.fillWidth: true
                                 text: cockpit.unrelatedCraftTrackingIssues.length
                                       + window.t("wishlist.unrelated_crafts_suffix", " NEW · NO PLAN / UNRELATED CRAFT(S)")
-                                color: muted; font.pixelSize: 10; font.bold: true
+                                color: muted; font.pixelSize: UiMetrics.caption; font.bold: true
                             }
                             CockpitButton {
                                 text: window.t("common.dismiss_all", "DISMISS ALL"); implicitHeight: 24
@@ -2662,7 +2717,7 @@ ApplicationWindow {
                                           + " · " + (modelData.module || window.t("status.module_unknown", "MODULE UNKNOWN"))
                                           + " / " + (modelData.slot || window.t("status.slot_unknown", "SLOT UNKNOWN"))
                                           + " · " + (modelData.blueprintName || window.t("status.blueprint_unknown", "BLUEPRINT UNKNOWN"))
-                                    color: muted; font.pixelSize: 9
+                                    color: muted; font.pixelSize: UiMetrics.caption
                                     elide: Text.ElideRight
                                 }
                                 CockpitButton {
@@ -2694,7 +2749,7 @@ ApplicationWindow {
                                   + " · " + (historicalIssue.module || "MODULE UNKNOWN")
                                   + " / " + (historicalIssue.slot || "SLOT UNKNOWN")
                                   + " · " + (historicalIssue.blueprintName || "BLUEPRINT UNKNOWN")
-                            color: muted; font.pixelSize: 9
+                            color: muted; font.pixelSize: UiMetrics.caption
                             elide: Text.ElideRight
                         }
                         CockpitButton {
@@ -2832,7 +2887,7 @@ ApplicationWindow {
                                     Label {
                                         Layout.fillWidth: true
                                         text: modelData.targetConflictText
-                                        color: danger; font.pixelSize: 10; font.bold: true
+                                        color: danger; font.pixelSize: UiMetrics.caption; font.bold: true
                                         elide: Text.ElideRight
                                     }
                                     CockpitButton {
@@ -2851,7 +2906,7 @@ ApplicationWindow {
                                           + modelData.craftsDone + " / " + modelData.craftsPlanned
                                     color: modelData.craftsDone >= modelData.craftsPlanned
                                            ? green : cyan
-                                    font.pixelSize: 10; font.bold: true
+                                    font.pixelSize: UiMetrics.caption; font.bold: true
                                 }
                                 Label {
                                     visible: !!modelData.experimental
@@ -2859,14 +2914,14 @@ ApplicationWindow {
                                           ? "✓ EXPERIMENTAL APPLIED"
                                           : "○ EXPERIMENTAL PENDING"
                                     color: modelData.experimentalComplete ? green : orange
-                                    font.pixelSize: 10; font.bold: true
+                                    font.pixelSize: UiMetrics.caption; font.bold: true
                                 }
                                 Item { Layout.fillWidth: true }
                             }
                             Label {
                                 visible: modelData.bindingRequired
                                 text: window.t("wishlist.binding_required", "⚠ BINDING REQUIRED · select the physical module slot")
-                                color: error; font.pixelSize: 10; font.bold: true
+                                color: error; font.pixelSize: UiMetrics.caption; font.bold: true
                             }
                             Label {
                                 visible: modelData.priority || modelData.deferred
@@ -2874,7 +2929,7 @@ ApplicationWindow {
                                       ? "★ PRIORISIERT · MATERIALVORRANG · TRACK NOW"
                                       : "ZURÜCKGESTELLT · BLEIBT IM GESAMTBEDARF"
                                 color: modelData.priority ? orange : muted
-                                font.pixelSize: 10; font.bold: true
+                                font.pixelSize: UiMetrics.caption; font.bold: true
                             }
                             RowLayout {
                                 Layout.fillWidth: true
@@ -2888,12 +2943,12 @@ ApplicationWindow {
                                                modelData.completion,
                                                modelData.completionReliable).status === "READY"
                                            ? green : orange
-                                    font.pixelSize: 10; font.bold: true
+                                    font.pixelSize: UiMetrics.caption; font.bold: true
                                 }
                                 Label {
                                     text: window.tf("status.progress", "PROGRESS · %1", [modelData.progressStatus])
                                     color: modelData.progressStatus === "COMPLETE" ? green : cyan
-                                    font.pixelSize: 10; font.bold: true
+                                    font.pixelSize: UiMetrics.caption; font.bold: true
                                 }
                                 Item { Layout.fillWidth: true }
                             }
@@ -2902,26 +2957,26 @@ ApplicationWindow {
                                 Label {
                                     visible: modelData.targetGrade > 0
                                     text: window.tf("status.grade", "GRADE · %1", [modelData.gradeStatusLabel])
-                                    color: cyan; font.pixelSize: 9
+                                    color: cyan; font.pixelSize: UiMetrics.caption
                                 }
                                 Label {
                                     visible: !!modelData.experimental
                                     text: window.tf("status.experimental", "EXPERIMENTAL · %1", [modelData.experimentalStatusLabel])
-                                    color: green; font.pixelSize: 9
+                                    color: green; font.pixelSize: UiMetrics.caption
                                 }
                                 Item { Layout.fillWidth: true }
                             }
                             Label {
                                 visible: !!modelData.craftReason
                                 text: window.tf("status.last_journal", "LAST JOURNAL UPDATE · %1", [modelData.craftReason])
-                                color: muted; font.pixelSize: 10
+                                color: muted; font.pixelSize: UiMetrics.caption
                                 Layout.fillWidth: true; elide: Text.ElideRight
                             }
                             RowLayout {
                                 Layout.fillWidth: true
                                 Label {
                                     text: window.t("wishlist.material_readiness", "MATERIAL READINESS")
-                                    color: muted; font.pixelSize: 10; font.bold: true
+                                    color: muted; font.pixelSize: UiMetrics.caption; font.bold: true
                                 }
                                 Item { Layout.fillWidth: true }
                                 CockpitButton {
@@ -2998,7 +3053,7 @@ ApplicationWindow {
                                         spacing: 10
                                         Label {
                                             text: modelData.category.toUpperCase()
-                                            color: muted; font.pixelSize: 8; font.bold: true
+                                            color: muted; font.pixelSize: UiMetrics.caption; font.bold: true
                                             Layout.preferredWidth: 92
                                             elide: Text.ElideRight
                                         }
@@ -3018,7 +3073,7 @@ ApplicationWindow {
                                                     visible: modelData.missing > 0
                                                              && modelData.sharedPlanCount > 1
                                                     text: window.tf("status.bottleneck", "BOTTLENECK · %1 PLANS", [modelData.sharedPlanCount])
-                                                    color: orange; font.pixelSize: 8; font.bold: true
+                                                    color: orange; font.pixelSize: UiMetrics.caption; font.bold: true
                                                 }
                                             }
                                             ModernProgress {
@@ -3036,7 +3091,7 @@ ApplicationWindow {
                                                 text: window.tf("status.have_need", "HAVE %1 / NEED %2", [modelData.have, modelData.need])
                                                 color: modelData.status === "ready" ? green
                                                      : modelData.status === "partial" ? orange : error
-                                                font.pixelSize: 10; font.bold: true
+                                                font.pixelSize: UiMetrics.caption; font.bold: true
                                             }
                                             Label {
                                                 text: modelData.missing === 0
@@ -3053,7 +3108,7 @@ ApplicationWindow {
                                                             : ""))
                                                 color: modelData.missing === 0 ? green
                                                      : modelData.status === "partial" ? orange : error
-                                                font.pixelSize: 9; font.bold: true
+                                                font.pixelSize: UiMetrics.caption; font.bold: true
                                             }
                                         }
                                     }
@@ -3063,14 +3118,14 @@ ApplicationWindow {
                                 visible: modelData.hasSafetyReserve
                                 text: window.t("wishlist.reserve_explanation",
                                                "GUARANTEED BUDGET · The reserve is carried only until Elite confirms the next grade.")
-                                color: orange; font.pixelSize: 10; font.bold: true
+                                color: orange; font.pixelSize: UiMetrics.caption; font.bold: true
                                 Layout.fillWidth: true; wrapMode: Text.WordWrap
                             }
                             Label {
                                 visible: !!modelData.calculationWarning
                                 text: modelData.calculationWarning
                                 color: modelData.completionReliable ? orange : error
-                                font.pixelSize: 10; font.bold: true
+                                font.pixelSize: UiMetrics.caption; font.bold: true
                                 Layout.fillWidth: true; wrapMode: Text.WordWrap
                             }
                             RowLayout {
@@ -3148,29 +3203,31 @@ ApplicationWindow {
         anchors.bottomMargin: window.compactSidebar ? 18 : 26
         spacing: 16
 
-        RowLayout {
+        ColumnLayout {
             Layout.fillWidth: true
-            ColumnLayout {
-                objectName: "qa-header-materials"
-                Label { text: window.t("materials.title", "MATERIAL INVENTORY"); color: textPrimary; font.pixelSize: 24; font.bold: true }
-                Label {
-                text: window.tf("materials.inventory_summary", "%1 ENGINEERING MATERIALS · LIVE JOURNAL STOCK", [cockpit.materials.length])
-                    color: muted; font.pixelSize: 13
-                }
+            spacing: UiMetrics.gap
+            WorkspaceHeader {
+                qaName: "qa-header-materials"
+                appWindow: window
+                eyebrow: window.t("engineering.title", "SHIP ENGINEERING")
+                title: window.t("materials.title", "MATERIAL INVENTORY")
+                subtitle: window.tf("materials.inventory_summary", "%1 ENGINEERING MATERIALS · LIVE JOURNAL STOCK", [cockpit.materials.length])
             }
-            Item { Layout.fillWidth: true }
             TextField {
                 id: materialSearch
                 text: window.materialsSearchState
                 onTextChanged: window.materialsSearchState = text
+                Layout.fillWidth: true
+                Layout.minimumWidth: 0
                 Layout.preferredWidth: 340
                 Layout.preferredHeight: 42
+                font.pixelSize: UiMetrics.body
                 placeholderText: window.t("materials.search", "Search material or category…")
                 color: textPrimary
                 placeholderTextColor: muted
                 leftPadding: 16; rightPadding: 16
                 background: Rectangle {
-                    radius: 12; color: inputBackground
+                    radius: UiMetrics.controlRadius; color: inputBackground
                     border.width: materialSearch.activeFocus ? 2 : 1
                     border.color: materialSearch.activeFocus ? cyan : borderTone
                 }
@@ -3186,7 +3243,7 @@ ApplicationWindow {
                 anchors.left: parent.left
                 anchors.verticalCenter: parent.verticalCenter
                 visible: !materialsPage.compactFilters
-                text: window.t("materials.show", "SHOW"); color: muted; font.pixelSize: 10; font.bold: true
+                text: window.t("materials.show", "SHOW"); color: muted; font.pixelSize: UiMetrics.caption; font.bold: true
             }
             Flow {
                 id: materialFilterFlow
@@ -3229,7 +3286,7 @@ ApplicationWindow {
                 anchors.verticalCenter: parent.verticalCenter
                 visible: !materialsPage.compactFilters
                 text: window.t("materials.stock_protected", "Protected build stock is never offered for trade.")
-                color: green; font.pixelSize: 10; font.bold: true
+                color: green; font.pixelSize: UiMetrics.caption; font.bold: true
             }
         }
 
@@ -3325,7 +3382,7 @@ ApplicationWindow {
                                 Label {
                                     text: modelData.rawTraderCategory > 0
                                           ? "RAW TRADER CAT " + modelData.rawTraderCategory : ""
-                                    color: muted; font.pixelSize: 10
+                                    color: muted; font.pixelSize: UiMetrics.caption
                                 }
                             }
                             ColumnLayout {
@@ -3348,7 +3405,7 @@ ApplicationWindow {
                                            ? farmRow.source.role.replace("_", " ") + " · "
                                            : "")
                                           + (farmRow.source.label || "SOURCE GUIDANCE")
-                                    color: muted; font.pixelSize: 10
+                                    color: muted; font.pixelSize: UiMetrics.caption
                                 }
                             }
                             ColumnLayout {
@@ -3500,19 +3557,19 @@ ApplicationWindow {
         anchors.rightMargin: window.compactSidebar ? 18 : 26
         anchors.topMargin: window.compactSidebar ? 18 : 26
         anchors.bottomMargin: window.compactSidebar ? 18 : 26
-        Item {
+        ColumnLayout {
             Layout.fillWidth: true
-            Layout.preferredHeight: 104
-            ColumnLayout {
-                anchors.left: parent.left
-                anchors.top: parent.top
-                Label { text: window.t("engineering.title", "SHIP ENGINEERING"); color: textPrimary; font.pixelSize: 24; font.bold: true }
-                Label { text: window.t("engineering.subtitle", "Ship → physical module → modification → target"); color: muted; font.pixelSize: 13 }
+            spacing: UiMetrics.gap
+            WorkspaceHeader {
+                qaName: "qa-header-engineering"
+                appWindow: window
+                eyebrow: window.t("commander.workspace", "COMMANDER PROFILE")
+                title: window.t("engineering.title", "SHIP ENGINEERING")
+                subtitle: window.t("engineering.subtitle", "Ship → physical module → modification → target")
             }
             RowLayout {
-                anchors.horizontalCenter: parent.horizontalCenter
-                anchors.bottom: parent.bottom
-                spacing: 8
+                Layout.fillWidth: true
+                spacing: UiMetrics.gap
                 CockpitButton {
                     text: window.t("engineering.export", "EXPORT OUTFITTING")
                     enabled: cockpit.ships.length > 0
@@ -3527,25 +3584,24 @@ ApplicationWindow {
                         buildImportDialog.open()
                     }
                 }
-            }
             TextField {
                 id: blueprintSearch
                 text: window.engineeringSearchState
                 onTextChanged: window.engineeringSearchState = text
-                anchors.right: parent.right
-                anchors.top: parent.top
-                width: 360
-                height: 42
-                Layout.preferredHeight: 42
+                Layout.fillWidth: true
+                Layout.minimumWidth: 0
+                Layout.preferredWidth: 360
+                Layout.preferredHeight: UiMetrics.controlHeight
                 placeholderText: window.t("engineering.search", "Search modification…")
                 font.pixelSize: 13
                 color: textPrimary; placeholderTextColor: muted
                 leftPadding: 16; rightPadding: 16
                 background: Rectangle {
-                    radius: 12; color: inputBackground
+                    radius: UiMetrics.controlRadius; color: inputBackground
                     border.width: blueprintSearch.activeFocus ? 2 : 1
                     border.color: blueprintSearch.activeFocus ? cyan : borderTone
                 }
+            }
             }
         }
         RowLayout {
@@ -3622,7 +3678,7 @@ ApplicationWindow {
                         Layout.fillWidth: true
                         text: (engineeringPage.selectedShipData.manufacturer || window.t("engineering.unknown_manufacturer", "UNKNOWN MANUFACTURER"))
                               + " · " + String(engineeringPage.selectedShipData.size || "").toUpperCase()
-                        color: muted; font.pixelSize: 10; font.bold: true
+                        color: muted; font.pixelSize: UiMetrics.caption; font.bold: true
                         horizontalAlignment: Text.AlignHCenter
                         elide: Text.ElideRight
                     }
@@ -3651,7 +3707,7 @@ ApplicationWindow {
                                 ColumnLayout {
                                     anchors.fill: parent; anchors.margins: 9; spacing: 2
                                     Label { text: modelData.value; color: textPrimary; font.pixelSize: 15; font.bold: true }
-                                    Label { text: modelData.label; color: muted; font.pixelSize: 9; font.bold: true }
+                                    Label { text: modelData.label; color: muted; font.pixelSize: UiMetrics.caption; font.bold: true }
                                 }
                             }
                         }
@@ -3679,14 +3735,14 @@ ApplicationWindow {
                             Label {
                                 Layout.fillWidth: true
                                 text: window.t("engineering.power_budget", "POWER PLANT")
-                                color: muted; font.pixelSize: 9; font.bold: true
+                                color: muted; font.pixelSize: UiMetrics.caption; font.bold: true
                             }
                         }
                         RowLayout {
                             Layout.fillWidth: true
                             Label {
                                 text: window.t("engineering.power_actual", "NOW")
-                                color: muted; font.pixelSize: 10; font.bold: true
+                                color: muted; font.pixelSize: UiMetrics.caption; font.bold: true
                             }
                             Label {
                                 Layout.fillWidth: true
@@ -3724,7 +3780,7 @@ ApplicationWindow {
                             visible: powerBudgetPanel.planned.hasPlan === true
                             Label {
                                 text: window.t("engineering.power_plan", "PLAN")
-                                color: muted; font.pixelSize: 10; font.bold: true
+                                color: muted; font.pixelSize: UiMetrics.caption; font.bold: true
                             }
                             Label {
                                 Layout.fillWidth: true
@@ -3779,7 +3835,7 @@ ApplicationWindow {
                                             Layout.alignment: Qt.AlignHCenter
                                             text: window.tf("engineering.power_priority_label", "P%1", [modelData.priorityGroup])
                                             color: modelData.shedByCascade ? danger : muted
-                                            font.pixelSize: 9; font.bold: true
+                                            font.pixelSize: UiMetrics.caption; font.bold: true
                                         }
                                     }
                                 }
@@ -3790,14 +3846,14 @@ ApplicationWindow {
                             visible: powerBudgetPanel.actual.overloaded === true
                             text: window.t("engineering.power_overloaded",
                                 "Power draw exceeds Power Plant capacity — Priority 5 modules shut down first, then 4, 3, 2.")
-                            color: danger; font.pixelSize: 9; wrapMode: Text.WordWrap
+                            color: danger; font.pixelSize: UiMetrics.caption; wrapMode: Text.WordWrap
                         }
                         Label {
                             Layout.fillWidth: true
                             visible: (powerBudgetPanel.actual.unknownModuleSlots || []).length > 0
                             text: window.t("engineering.power_unknown_modules",
                                 "Power draw unknown for one or more installed modules — this budget may be understated.")
-                            color: muted; font.pixelSize: 9; wrapMode: Text.WordWrap
+                            color: muted; font.pixelSize: UiMetrics.caption; wrapMode: Text.WordWrap
                         }
                         Label {
                             Layout.fillWidth: true
@@ -3805,7 +3861,7 @@ ApplicationWindow {
                                      && powerBudgetPanel.planned.overloaded === true
                             text: window.t("engineering.power_plan_overloaded",
                                 "Planned load exceeds Power Plant output; lower-priority groups will shut down.")
-                            color: danger; font.pixelSize: 9; wrapMode: Text.WordWrap
+                            color: danger; font.pixelSize: UiMetrics.caption; wrapMode: Text.WordWrap
                         }
                         Label {
                             Layout.fillWidth: true
@@ -3813,14 +3869,14 @@ ApplicationWindow {
                                      && !powerBudgetPanel.planned.capacityKnown
                             text: window.t("engineering.power_plan_unknown_capacity",
                                 "Planned Power Plant output is unknown; no reliable reserve can be shown.")
-                            color: orange; font.pixelSize: 9; wrapMode: Text.WordWrap
+                            color: orange; font.pixelSize: UiMetrics.caption; wrapMode: Text.WordWrap
                         }
                         Label {
                             Layout.fillWidth: true
                             visible: (powerBudgetPanel.planned.unknownModuleSlots || []).length > 0
                             text: window.t("engineering.power_plan_unknown_modules",
                                 "Planned module power is unknown; reserve may be overstated.")
-                            color: orange; font.pixelSize: 9; wrapMode: Text.WordWrap
+                            color: orange; font.pixelSize: UiMetrics.caption; wrapMode: Text.WordWrap
                         }
                         Label {
                             Layout.fillWidth: true
@@ -3828,14 +3884,14 @@ ApplicationWindow {
                                      || (powerBudgetPanel.planned.unknownEngineeringSlots || []).length > 0
                             text: window.t("engineering.power_plan_unresolved",
                                 "Some planned engineering could not be matched to the target module or recipe.")
-                            color: orange; font.pixelSize: 9; wrapMode: Text.WordWrap
+                            color: orange; font.pixelSize: UiMetrics.caption; wrapMode: Text.WordWrap
                         }
                         Label {
                             Layout.fillWidth: true
                             visible: (powerBudgetPanel.planned.assumedStockSlots || []).length > 0
                             text: window.t("engineering.power_plan_stock",
                                 "Replacement modules without a planned engineering grade use stock values and are assumed switched on.")
-                            color: orange; font.pixelSize: 9; wrapMode: Text.WordWrap
+                            color: orange; font.pixelSize: UiMetrics.caption; wrapMode: Text.WordWrap
                         }
                         Label {
                             Layout.fillWidth: true
@@ -3843,20 +3899,20 @@ ApplicationWindow {
                                      && (powerBudgetPanel.planned.poweredOffSlots || []).length > 0
                             text: window.t("engineering.power_plan_off",
                                 "Currently switched-off modules remain off in the plan; turning them on can reduce the reserve.")
-                            color: orange; font.pixelSize: 9; wrapMode: Text.WordWrap
+                            color: orange; font.pixelSize: UiMetrics.caption; wrapMode: Text.WordWrap
                         }
                         Label {
                             Layout.fillWidth: true
                             visible: powerBudgetPanel.planned.hasPlan === true
                             text: window.t("engineering.power_plan_caveat",
                                 "Plan uses catalog grade values; actual engineering rolls and deployed state may differ.")
-                            color: muted; font.pixelSize: 9; wrapMode: Text.WordWrap
+                            color: muted; font.pixelSize: UiMetrics.caption; wrapMode: Text.WordWrap
                         }
                     }
                     Label {
                         Layout.fillWidth: true
                         text: window.t("engineering.ship_help", "Select any ship in your fleet to plan without switching ships in-game.")
-                        color: muted; font.pixelSize: 10; wrapMode: Text.WordWrap
+                        color: muted; font.pixelSize: UiMetrics.caption; wrapMode: Text.WordWrap
                     }
                     Item { Layout.fillHeight: true }
                 }
@@ -3957,7 +4013,7 @@ ApplicationWindow {
                                             + " · " + modelData.planBlueprint
                                             + (modelData.planExperimental
                                                ? " · " + modelData.planExperimental : "")
-                                    color: orange; font.pixelSize: 9; font.bold: true
+                                    color: orange; font.pixelSize: UiMetrics.caption; font.bold: true
                                     wrapMode: Text.Wrap
                                     maximumLineCount: 2
                                     elide: Text.ElideRight
@@ -3977,7 +4033,7 @@ ApplicationWindow {
                                     text: window.t(
                                         "engineering.accept_current", "ACCEPT"
                                     )
-                                    font.pixelSize: 8; font.bold: true
+                                    font.pixelSize: UiMetrics.caption; font.bold: true
                                     onClicked: cockpit.acceptCurrentOutfittingSlot(
                                         String(modelData.slot || "")
                                     )
@@ -3998,7 +4054,7 @@ ApplicationWindow {
                                     color: modelData.moduleChange ? orange
                                          : modelData.engineered ? orange
                                          : modelData.engineerable ? green : muted
-                                    font.pixelSize: 9; font.bold: true
+                                    font.pixelSize: UiMetrics.caption; font.bold: true
                                 }
                                 MouseArea {
                                     id: slotMouse
@@ -4168,7 +4224,7 @@ ApplicationWindow {
                                             + " · " + engineeringPage.selectedModule.toUpperCase()
                                           : "NOT YET BOUND · JOURNAL CONFIRMATION REQUIRED"
                                     color: cockpit.selectedModuleSlot ? cyan : orange
-                                    font.pixelSize: 10; font.bold: true
+                                    font.pixelSize: UiMetrics.caption; font.bold: true
                                     verticalAlignment: Text.AlignVCenter
                                     elide: Text.ElideRight
                                 }
@@ -4183,9 +4239,9 @@ ApplicationWindow {
                         Label { text: window.t("engineering.plan_mode", "PLAN MODE"); color: cyan; font.pixelSize: 12; font.bold: true }
                         RowLayout {
                             Layout.fillWidth: true; spacing: 6
-                            CockpitButton { Layout.fillWidth: true; font.pixelSize: 10; text: window.t("engineering.grade_only", "GRADE ONLY"); selected: cockpit.planMode === "grade_only"; onClicked: cockpit.setPlanMode("grade_only") }
-                            CockpitButton { Layout.fillWidth: true; font.pixelSize: 10; text: window.t("engineering.experimental_only", "EXPERIMENTAL ONLY"); selected: cockpit.planMode === "experimental_only"; onClicked: cockpit.setPlanMode("experimental_only") }
-                            CockpitButton { Layout.fillWidth: true; font.pixelSize: 10; text: window.t("engineering.combined", "GRADE + EXPERIMENTAL"); selected: cockpit.planMode === "combined"; onClicked: cockpit.setPlanMode("combined") }
+                            CockpitButton { Layout.fillWidth: true; font.pixelSize: UiMetrics.caption; text: window.t("engineering.grade_only", "GRADE ONLY"); selected: cockpit.planMode === "grade_only"; onClicked: cockpit.setPlanMode("grade_only") }
+                            CockpitButton { Layout.fillWidth: true; font.pixelSize: UiMetrics.caption; text: window.t("engineering.experimental_only", "EXPERIMENTAL ONLY"); selected: cockpit.planMode === "experimental_only"; onClicked: cockpit.setPlanMode("experimental_only") }
+                            CockpitButton { Layout.fillWidth: true; font.pixelSize: UiMetrics.caption; text: window.t("engineering.combined", "GRADE + EXPERIMENTAL"); selected: cockpit.planMode === "combined"; onClicked: cockpit.setPlanMode("combined") }
                         }
                         GridLayout {
                             visible: cockpit.planMode !== "experimental_only"
@@ -4340,13 +4396,13 @@ ApplicationWindow {
                                         Label {
                                             Layout.fillWidth: true
                                             text: window.tf("status.benefit", "BENEFIT · %1", [modelData.benefits || window.t("engineering.no_benefit", "No listed benefit")])
-                                            color: green; font.pixelSize: 9
+                                            color: green; font.pixelSize: UiMetrics.caption
                                             elide: Text.ElideRight
                                         }
                                         Label {
                                             Layout.fillWidth: true
                                             text: window.tf("status.tradeoff", "TRADE-OFF · %1", [modelData.tradeoffs || window.t("engineering.no_drawback", "No listed drawback")])
-                                            color: orange; font.pixelSize: 9
+                                            color: orange; font.pixelSize: UiMetrics.caption
                                             elide: Text.ElideRight
                                         }
                                     }
@@ -4367,7 +4423,7 @@ ApplicationWindow {
                                 anchors.fill: parent; anchors.margins: 11; spacing: 3
                                 Label {
                                     text: window.t("engineering.craft_confirmed", "✓ LAST JOURNAL CRAFT CONFIRMED")
-                                    color: green; font.pixelSize: 10; font.bold: true
+                                    color: green; font.pixelSize: UiMetrics.caption; font.bold: true
                                 }
                                 Label {
                                     Layout.fillWidth: true
@@ -4498,22 +4554,19 @@ ApplicationWindow {
             return engineersPage.guardianRows.length ? engineersPage.guardianRows[0] : {}
         }
 
-        Item {
+        ColumnLayout {
             Layout.fillWidth: true
-            Layout.preferredHeight: 104
-            ColumnLayout {
-                anchors.left: parent.left
-                anchors.top: parent.top
-                Label { text: window.t("engineers.title", "ENGINEER NAVIGATION"); color: textPrimary; font.pixelSize: 24; font.bold: true }
-                Label {
-                text: window.tf("engineers.subtitle", "%1 · JOURNAL UNLOCK STATE · OFFLINE SYSTEM COORDINATES", [cockpit.system])
-                    color: muted; font.pixelSize: 13
-                }
+            spacing: UiMetrics.gap
+            WorkspaceHeader {
+                qaName: "qa-header-engineers"
+                appWindow: window
+                eyebrow: window.t("engineering.title", "SHIP ENGINEERING")
+                title: window.t("engineers.title", "ENGINEER NAVIGATION")
+                subtitle: window.tf("engineers.subtitle", "%1 · JOURNAL UNLOCK STATE · OFFLINE SYSTEM COORDINATES", [cockpit.system])
             }
             RowLayout {
-                anchors.horizontalCenter: parent.horizontalCenter
-                anchors.bottom: parent.bottom
-                spacing: 8
+                Layout.fillWidth: true
+                spacing: UiMetrics.gap
                 CockpitButton {
                     text: window.t("engineers.overview", "OVERVIEW")
                     selected: !engineersPage.unlockMode && !engineersPage.guardianMode
@@ -4543,16 +4596,26 @@ ApplicationWindow {
                 }
             }
             RowLayout {
-                anchors.right: parent.right
-                anchors.top: parent.top
-                spacing: 8
+                Layout.fillWidth: true
+                spacing: UiMetrics.gap
                 TextField {
                     id: engineerSearch
                     text: window.engineersSearchState
                     onTextChanged: window.engineersSearchState = text
+                    Layout.fillWidth: true
+                    Layout.minimumWidth: 0
                     Layout.preferredWidth: 330
                     Layout.preferredHeight: 42
                     placeholderText: window.t("engineers.search", "Engineer, system, module or blueprint…")
+                    font.pixelSize: UiMetrics.body
+                    color: textPrimary
+                    placeholderTextColor: muted
+                    leftPadding: 16; rightPadding: 16
+                    background: Rectangle {
+                        radius: UiMetrics.controlRadius; color: inputBackground
+                        border.width: engineerSearch.activeFocus ? 2 : 1
+                        border.color: engineerSearch.activeFocus ? cyan : borderTone
+                    }
                 }
                 CockpitComboBox {
                     id: engineerStatus
@@ -4588,7 +4651,7 @@ ApplicationWindow {
                     Layout.fillWidth: true; Layout.preferredHeight: 88
                     ColumnLayout {
                         anchors.fill: parent; anchors.margins: 15
-                        Label { text: modelData.label; color: muted; font.pixelSize: 10; font.bold: true }
+                        Label { text: modelData.label; color: muted; font.pixelSize: UiMetrics.caption; font.bold: true }
                         Label { text: modelData.value; color: modelData.tone; font.pixelSize: 23; font.bold: true }
                     }
                 }
@@ -4604,7 +4667,7 @@ ApplicationWindow {
                     Layout.fillWidth: true
                         Label { text: window.t("engineers.index", "ENGINEER INDEX"); color: textPrimary; font.pixelSize: 16; font.bold: true }
                     Item { Layout.fillWidth: true }
-                        Label { text: window.t("engineers.sort_order", "STATUS → DISTANCE → NAME"); color: muted; font.pixelSize: 10; font.bold: true }
+                        Label { text: window.t("engineers.sort_order", "STATUS → DISTANCE → NAME"); color: muted; font.pixelSize: UiMetrics.caption; font.bold: true }
                 }
                 ListView {
                     id: engineerList
@@ -4666,9 +4729,9 @@ ApplicationWindow {
                                         color: modelData.statusGroup === "unlocked" ? green
                                                : modelData.statusGroup === "invited" ? orange
                                                : modelData.statusGroup === "known" ? cyan : muted
-                                        font.pixelSize: 10; font.bold: true
+                                        font.pixelSize: UiMetrics.caption; font.bold: true
                                     }
-                                    Label { text: modelData.rank > 0 ? window.tf("powerplay.rank_value", "RANK %1", [modelData.rank]) : ""; color: cyan; font.pixelSize: 10; font.bold: true }
+                                    Label { text: modelData.rank > 0 ? window.tf("powerplay.rank_value", "RANK %1", [modelData.rank]) : ""; color: cyan; font.pixelSize: UiMetrics.caption; font.bold: true }
                                 }
                                 Label {
                                     text: modelData.system
@@ -4683,7 +4746,7 @@ ApplicationWindow {
                                 }
                                 Label {
                                     text: modelData.modules.join(" · ")
-                                    color: textSecondary; font.pixelSize: 10
+                                    color: textSecondary; font.pixelSize: UiMetrics.caption
                                     Layout.fillWidth: true; elide: Text.ElideRight
                                 }
                             }
@@ -4780,7 +4843,7 @@ ApplicationWindow {
                         anchors.fill: parent; anchors.margins: 15; spacing: 6
                         RowLayout {
                             Layout.fillWidth: true
-                            Label { text: window.t("engineers.chain_columns", "PREREQUISITE → STATUS → NEXT STEP"); color: cyan; font.pixelSize: 10; font.bold: true }
+                            Label { text: window.t("engineers.chain_columns", "PREREQUISITE → STATUS → NEXT STEP"); color: cyan; font.pixelSize: UiMetrics.caption; font.bold: true }
                             Item { Layout.fillWidth: true }
                             Label {
                                 text: engineersPage.selectedRow.unlockGuide
@@ -4791,7 +4854,7 @@ ApplicationWindow {
                         }
                         RowLayout {
                             Layout.fillWidth: true
-                                                Label { text: window.t("engineers.prerequisite", "PREREQUISITE"); color: muted; font.pixelSize: 9; font.bold: true; Layout.preferredWidth: 118 }
+                                                Label { text: window.t("engineers.prerequisite", "PREREQUISITE"); color: muted; font.pixelSize: UiMetrics.caption; font.bold: true; Layout.preferredWidth: 118 }
                             Label {
                                 Layout.fillWidth: true
                                 text: (engineersPage.selectedRow.unlockGuide
@@ -4803,7 +4866,7 @@ ApplicationWindow {
                         }
                         RowLayout {
                             Layout.fillWidth: true
-                                                Label { text: window.t("common.status", "STATUS"); color: muted; font.pixelSize: 9; font.bold: true; Layout.preferredWidth: 118 }
+                                                Label { text: window.t("common.status", "STATUS"); color: muted; font.pixelSize: UiMetrics.caption; font.bold: true; Layout.preferredWidth: 118 }
                             Label {
                                 text: window.localizedStatus(
                                           engineersPage.selectedRow.statusGroup || "unknown")
@@ -4815,7 +4878,7 @@ ApplicationWindow {
                         }
                         RowLayout {
                             Layout.fillWidth: true
-                                                Label { text: window.t("engineers.next_step", "NEXT STEP"); color: muted; font.pixelSize: 9; font.bold: true; Layout.preferredWidth: 118 }
+                                                Label { text: window.t("engineers.next_step", "NEXT STEP"); color: muted; font.pixelSize: UiMetrics.caption; font.bold: true; Layout.preferredWidth: 118 }
                             Label {
                                 Layout.fillWidth: true
                                 text: engineersPage.selectedRow.unlockGuide
@@ -4834,7 +4897,7 @@ ApplicationWindow {
                                     return "DESTINATION · " + guide.navigationSystem
                                            + (guide.navigationStation ? " · " + guide.navigationStation : "")
                                 }
-                                color: cyan; font.pixelSize: 10; font.bold: true
+                                color: cyan; font.pixelSize: UiMetrics.caption; font.bold: true
                             }
                             Label {
                                 visible: {
@@ -4847,7 +4910,7 @@ ApplicationWindow {
                                            + guide.cargoRequired + " t still required · "
                                            + guide.cargoCapacity + " t capacity"
                                 }
-                                color: orange; font.pixelSize: 10; font.bold: true
+                                color: orange; font.pixelSize: UiMetrics.caption; font.bold: true
                             }
                         }
                         Rectangle {
@@ -4913,7 +4976,7 @@ ApplicationWindow {
                                       : window.t("status.value.missing", "MISSING")
                                 color: modelData.state === "complete" ? green
                                      : modelData.state === "active" ? orange : muted
-                                font.pixelSize: 10; font.bold: true
+                                font.pixelSize: UiMetrics.caption; font.bold: true
                             }
                         }
                     }
@@ -4921,7 +4984,7 @@ ApplicationWindow {
                 Label {
                     Layout.fillWidth: true
                     text: window.t("engineers.unlock_evidence", "Journal evidence updates unlock progress. Unknown history remains PENDING.")
-                    color: muted; font.pixelSize: 10; wrapMode: Text.WordWrap
+                    color: muted; font.pixelSize: UiMetrics.caption; wrapMode: Text.WordWrap
                 }
             }
         }
@@ -4950,14 +5013,14 @@ ApplicationWindow {
                                   + " WEAPONS · "
                                   + cockpit.techBrokerGuide.filter(function(row) { return row.category === "FIGHTERS" }).length
                                   + " FIGHTERS"
-                            color: cyan; font.pixelSize: 10; font.bold: true
+                            color: cyan; font.pixelSize: UiMetrics.caption; font.bold: true
                             wrapMode: Text.WordWrap
                         }
                     }
                     Label {
                         Layout.fillWidth: true
                         text: window.t("engineers.broker_intro", "One-time Human and Guardian Technology Broker unlocks")
-                        color: muted; font.pixelSize: 10; wrapMode: Text.WordWrap
+                        color: muted; font.pixelSize: UiMetrics.caption; wrapMode: Text.WordWrap
                     }
                     Flow {
                         Layout.fillWidth: true
@@ -5003,7 +5066,7 @@ ApplicationWindow {
                                         text: (modelData.isTracked ? window.t("engineers.tracked_prefix", "★ TRACKED · ") : "")
                                               + modelData.broker + " · #" + modelData.sequence
                                         color: modelData.isTracked ? cyan : muted
-                                        font.pixelSize: 9; font.bold: true
+                                        font.pixelSize: UiMetrics.caption; font.bold: true
                                     }
                                     Label { Layout.fillWidth: true; text: modelData.name; color: textPrimary; font.pixelSize: 12; font.bold: true; elide: Text.ElideRight }
                                     Label {
@@ -5011,16 +5074,16 @@ ApplicationWindow {
                                         color: modelData.status === "unlocked" ? green
                                              : modelData.status === "ready" ? cyan
                                              : modelData.status === "pending" ? orange : muted
-                                        font.pixelSize: 9; font.bold: true
+                                        font.pixelSize: UiMetrics.caption; font.bold: true
                                     }
                                 }
                                 Label {
                                     text: modelData.category + " · " + modelData.readyMaterials
                                           + " / " + modelData.totalMaterials + " "
                                           + (modelData.totalMaterials === 1 ? "MATERIAL" : "MATERIALS") + " READY"
-                                    color: muted; font.pixelSize: 9
+                                    color: muted; font.pixelSize: UiMetrics.caption
                                 }
-                                            Label { text: window.tf("engineers.next_step_value", "NEXT STEP · %1", [modelData.nextAction]); color: cyan; font.pixelSize: 9; font.bold: true }
+                                            Label { text: window.tf("engineers.next_step_value", "NEXT STEP · %1", [modelData.nextAction]); color: cyan; font.pixelSize: UiMetrics.caption; font.bold: true }
                             }
                         }
                     }
@@ -5085,7 +5148,7 @@ ApplicationWindow {
                                 Layout.fillWidth: true
                                 text: window.t("engineers.active_track", "★ ACTIVE TRACK · MATERIAL PRIORITY · NEXT: ")
                                       + (engineersPage.selectedGuardian.nextAction || "PENDING")
-                                color: cyan; font.pixelSize: 10; font.bold: true
+                                color: cyan; font.pixelSize: UiMetrics.caption; font.bold: true
                                 elide: Text.ElideRight
                             }
                             CockpitButton {
@@ -5100,30 +5163,30 @@ ApplicationWindow {
                         Layout.fillWidth: true; spacing: 4
                         RowLayout {
                             Layout.fillWidth: true
-                                        Label { text: window.t("engineers.prerequisite", "PREREQUISITE"); color: muted; font.pixelSize: 9; font.bold: true; Layout.preferredWidth: 128 }
-                            Label { Layout.fillWidth: true; text: engineersPage.selectedGuardian.prerequisite || "Guardian Blueprint Segment"; color: textSecondary; font.pixelSize: 10 }
+                                        Label { text: window.t("engineers.prerequisite", "PREREQUISITE"); color: muted; font.pixelSize: UiMetrics.caption; font.bold: true; Layout.preferredWidth: 128 }
+                            Label { Layout.fillWidth: true; text: engineersPage.selectedGuardian.prerequisite || "Guardian Blueprint Segment"; color: textSecondary; font.pixelSize: UiMetrics.caption }
                         }
                         RowLayout {
                             Layout.fillWidth: true
-                                        Label { text: window.t("common.status", "STATUS"); color: muted; font.pixelSize: 9; font.bold: true; Layout.preferredWidth: 128 }
+                                        Label { text: window.t("common.status", "STATUS"); color: muted; font.pixelSize: UiMetrics.caption; font.bold: true; Layout.preferredWidth: 128 }
                             Label {
                                 text: window.localizedStatus(engineersPage.selectedGuardian.statusText || "LOCKED")
                                 color: engineersPage.selectedGuardian.status === "unlocked" ? green
                                      : engineersPage.selectedGuardian.status === "ready" ? cyan
                                      : engineersPage.selectedGuardian.status === "pending" ? orange : muted
-                                font.pixelSize: 10; font.bold: true
+                                font.pixelSize: UiMetrics.caption; font.bold: true
                             }
                         }
                         RowLayout {
                             Layout.fillWidth: true
-                                        Label { text: window.t("engineers.next_step", "NEXT STEP"); color: muted; font.pixelSize: 9; font.bold: true; Layout.preferredWidth: 128 }
-                            Label { Layout.fillWidth: true; text: engineersPage.selectedGuardian.nextAction || window.t("status.value.pending", "PENDING"); color: cyan; font.pixelSize: 10; font.bold: true; elide: Text.ElideRight }
+                                        Label { text: window.t("engineers.next_step", "NEXT STEP"); color: muted; font.pixelSize: UiMetrics.caption; font.bold: true; Layout.preferredWidth: 128 }
+                            Label { Layout.fillWidth: true; text: engineersPage.selectedGuardian.nextAction || window.t("status.value.pending", "PENDING"); color: cyan; font.pixelSize: UiMetrics.caption; font.bold: true; elide: Text.ElideRight }
                         }
                     }
                     Label {
                         Layout.fillWidth: true
                         text: engineersPage.selectedGuardian.nextActionDetail || ""
-                        color: muted; font.pixelSize: 9; elide: Text.ElideRight
+                        color: muted; font.pixelSize: UiMetrics.caption; elide: Text.ElideRight
                     }
                     Label {
                         Layout.fillWidth: true
@@ -5139,7 +5202,7 @@ ApplicationWindow {
                                 : engineersPage.selectedGuardian.broker === "GUARDIAN"
                                   ? "WHERE · Station service: Guardian Technology Broker · use the Galaxy Map services filter"
                                   : ""
-                        color: cyan; font.pixelSize: 9; font.bold: true
+                        color: cyan; font.pixelSize: UiMetrics.caption; font.bold: true
                         wrapMode: Text.WordWrap
                     }
 
@@ -5148,12 +5211,12 @@ ApplicationWindow {
                         Label {
                             text: window.t("engineers.broker_catalog", "BROKER CATALOG · ")
                                   + (engineersPage.selectedGuardian.brokerSubtype || "")
-                            color: orange; font.pixelSize: 10; font.bold: true
+                            color: orange; font.pixelSize: UiMetrics.caption; font.bold: true
                         }
                         Item { Layout.fillWidth: true }
                         Label {
                             text: cockpit.techBrokerSyncStatus
-                            color: muted; font.pixelSize: 8
+                            color: muted; font.pixelSize: UiMetrics.caption
                             elide: Text.ElideRight; Layout.maximumWidth: 420
                         }
                     }
@@ -5175,7 +5238,7 @@ ApplicationWindow {
                                     Label {
                                         Layout.fillWidth: true
                                         text: modelData.system + " · " + modelData.station
-                                        color: textPrimary; font.pixelSize: 10; font.bold: true
+                                        color: textPrimary; font.pixelSize: UiMetrics.caption; font.bold: true
                                         elide: Text.ElideRight
                                     }
                                     Label {
@@ -5184,7 +5247,7 @@ ApplicationWindow {
                                               + (modelData.distance_ls !== undefined
                                                  ? modelData.distance_ls + " ls · " : "")
                                               + (modelData.source || "Broker catalog")
-                                        color: muted; font.pixelSize: 8
+                                        color: muted; font.pixelSize: UiMetrics.caption
                                     }
                                 }
                                 CockpitButton {
@@ -5199,7 +5262,7 @@ ApplicationWindow {
                         Layout.fillWidth: true
                         Label {
                             text: window.t("engineers.inventory_progress", "INVENTORY PROGRESS")
-                            color: muted; font.pixelSize: 9; font.bold: true
+                            color: muted; font.pixelSize: UiMetrics.caption; font.bold: true
                         }
                         Item { Layout.fillWidth: true }
                         Label {
@@ -5211,7 +5274,7 @@ ApplicationWindow {
                             color: engineersPage.selectedGuardian.status === "ready"
                                    || engineersPage.selectedGuardian.status === "unlocked"
                                    ? green : orange
-                            font.pixelSize: 9; font.bold: true
+                            font.pixelSize: UiMetrics.caption; font.bold: true
                         }
                     }
                     Rectangle {
@@ -5244,9 +5307,9 @@ ApplicationWindow {
                                 anchors.fill: parent; anchors.margins: 9
                                 ColumnLayout {
                                     Layout.fillWidth: true; spacing: 2
-                                    Label { Layout.fillWidth: true; text: modelData.name; color: textPrimary; font.pixelSize: 10; font.bold: true; elide: Text.ElideRight }
-                                    Label { text: modelData.blueprint ? window.t("engineers.guardian_blueprint", "GUARDIAN BLUEPRINT") : window.t("common.material", "MATERIAL"); color: muted; font.pixelSize: 8 }
-                                    Label { Layout.fillWidth: true; text: modelData.origin; color: muted; font.pixelSize: 8; elide: Text.ElideRight }
+                                    Label { Layout.fillWidth: true; text: modelData.name; color: textPrimary; font.pixelSize: UiMetrics.caption; font.bold: true; elide: Text.ElideRight }
+                                    Label { text: modelData.blueprint ? window.t("engineers.guardian_blueprint", "GUARDIAN BLUEPRINT") : window.t("common.material", "MATERIAL"); color: muted; font.pixelSize: UiMetrics.caption }
+                                    Label { Layout.fillWidth: true; text: modelData.origin; color: muted; font.pixelSize: UiMetrics.caption; elide: Text.ElideRight }
                                 }
                                 Label {
                                     text: window.tf("status.have_need_dot", "HAVE %1 · NEED %2", [modelData.have, modelData.need])
@@ -5283,7 +5346,7 @@ ApplicationWindow {
                                 ColumnLayout {
                                     Layout.fillWidth: true; spacing: 3
                                     Label { text: modelData.label; color: textPrimary; font.pixelSize: 12; font.bold: true }
-                                    Label { Layout.fillWidth: true; text: modelData.detail; color: textSecondary; font.pixelSize: 10; wrapMode: Text.WordWrap }
+                                    Label { Layout.fillWidth: true; text: modelData.detail; color: textSecondary; font.pixelSize: UiMetrics.caption; wrapMode: Text.WordWrap }
                                 }
                                 Label {
                                     text: modelData.state === "complete" ? window.t("status.value.ready", "READY")
@@ -5291,7 +5354,7 @@ ApplicationWindow {
                                           : window.t("status.value.locked", "LOCKED")
                                     color: modelData.state === "complete" ? green
                                          : modelData.state === "active" ? orange : muted
-                                    font.pixelSize: 9; font.bold: true
+                                    font.pixelSize: UiMetrics.caption; font.bold: true
                                 }
                             }
                         }
@@ -5299,7 +5362,7 @@ ApplicationWindow {
                     Label {
                         Layout.fillWidth: true
                         text: window.t("engineers.chain_note", "Journal and inventory evidence update this chain; unknown unlock history remains LOCKED.")
-                        color: muted; font.pixelSize: 9; wrapMode: Text.WordWrap
+                        color: muted; font.pixelSize: UiMetrics.caption; wrapMode: Text.WordWrap
                     }
                 }
             }
@@ -5362,11 +5425,14 @@ ApplicationWindow {
             eyebrow: window.t("state.workspace", "GALAXY INTELLIGENCE")
             title: window.t("state.title", "STATE FINDS FINDER")
             subtitle: window.tf("status.state_system", "State-dependent signal intelligence · %1", [cockpit.system])
-            statusText: cockpit.eddnListenerStatus
-            statusTone: cockpit.eddnListenerStatus.indexOf("Connected") === 0 ? green : orange
+            statusText: cockpit.edFrameCatalogOnline
+                        ? window.t("state.server_online", "FRAME SERVER ONLINE")
+                        : cockpit.eddnListenerStatus
+            statusTone: cockpit.edFrameCatalogOnline
+                        || cockpit.eddnListenerStatus.indexOf("Connected") === 0 ? green : orange
             CockpitButton {
                 text: window.t("state.refresh", "REFRESH NOW")
-                helpText: window.t("state.refresh_help", "Read new Journal evidence, flush live EDDN reports and remove expired finds")
+                helpText: window.t("state.refresh_sources_help", "Synchronize server BGS and signal data, read Journal evidence and remove expired finds")
                 onClicked: cockpit.refreshStateFinds()
             }
         }
@@ -5395,7 +5461,7 @@ ApplicationWindow {
                     Item { Layout.fillWidth: true }
                     Label {
                         text: window.t("state.sort", "FRESHEST FIRST · THEN DISTANCE")
-                        color: muted; font.pixelSize: 10; font.bold: true
+                        color: muted; font.pixelSize: UiMetrics.caption; font.bold: true
                     }
                 }
                 RowLayout {
@@ -5403,7 +5469,7 @@ ApplicationWindow {
                     spacing: 10
                     Label {
                         text: window.t("state.filter_material", "FILTER MATERIAL")
-                        color: muted; font.pixelSize: 10; font.bold: true
+                        color: muted; font.pixelSize: UiMetrics.caption; font.bold: true
                     }
                     CockpitComboBox {
                         id: hgeMaterialFilter
@@ -5480,7 +5546,7 @@ ApplicationWindow {
                         text: hgeFinderPage.materialFilter === "ALL HGE MATERIALS"
                               ? window.t("state.showing_all", "SHOWING ALL FINDS")
                               : window.t("state.prediction_matches", "PREDICTION MATCHES ONLY")
-                        color: orange; font.pixelSize: 9; font.bold: true
+                        color: orange; font.pixelSize: UiMetrics.caption; font.bold: true
                     }
                     Item { Layout.fillWidth: true }
                 }
@@ -5489,7 +5555,7 @@ ApplicationWindow {
                     spacing: 10
                     Label {
                         text: window.t("state.range_quality", "RANGE & QUALITY")
-                        color: muted; font.pixelSize: 10; font.bold: true
+                        color: muted; font.pixelSize: UiMetrics.caption; font.bold: true
                     }
                     CockpitComboBox {
                         id: nearbyFilter
@@ -5592,7 +5658,7 @@ ApplicationWindow {
                 Label {
                     Layout.fillWidth: true
                     text: window.t("state.evidence_help", "Local Journal evidence updates matching finds: LOCAL LIVE and LOCAL ENTERED are direct evidence. EDDN LIVE has verified remaining lifetime; RECENT REPORT and BGS CANDIDATE are weaker.")
-                    color: muted; font.pixelSize: 10; wrapMode: Text.WordWrap
+                    color: muted; font.pixelSize: UiMetrics.caption; wrapMode: Text.WordWrap
                 }
                 Label {
                     Layout.fillWidth: true
@@ -5605,7 +5671,18 @@ ApplicationWindow {
                                cockpit.stateFindCacheSummary.oldestAt,
                                cockpit.stateFindCacheSummary.newestAt,
                                cockpit.stateFindCacheSummary.retentionHours])
-                    color: cyan; font.pixelSize: 10; font.bold: true
+                    color: cyan; font.pixelSize: UiMetrics.caption; font.bold: true
+                    elide: Text.ElideRight
+                }
+                Label {
+                    Layout.fillWidth: true
+                    text: window.tf("state.server_sources",
+                              "FRAME SERVER · %1 BGS PREDICTIONS · %2 SIGNAL REPORTS · %3",
+                              [cockpit.stateFindCacheSummary.serverBgs || 0,
+                               cockpit.stateFindCacheSummary.serverSignals || 0,
+                               cockpit.edFrameStateFindSyncStatus || ""])
+                    color: cockpit.edFrameStateFindSyncBusy ? orange : muted
+                    font.pixelSize: UiMetrics.caption
                     elide: Text.ElideRight
                 }
                 Label {
@@ -5618,7 +5695,7 @@ ApplicationWindow {
                                cockpit.stateFindRefreshSummary.bgsApplied,
                                cockpit.stateFindRefreshSummary.signalsMerged,
                                cockpit.stateFindRefreshSummary.expiredRemoved])
-                    color: green; font.pixelSize: 10
+                    color: green; font.pixelSize: UiMetrics.caption
                     elide: Text.ElideRight
                 }
                 ListView {
@@ -5677,7 +5754,7 @@ ApplicationWindow {
                                     Label {
                                         text: modelData.findLabel.toUpperCase()
                                         color: backgroundPrimary
-                                        font.pixelSize: 9; font.bold: true
+                                        font.pixelSize: UiMetrics.caption; font.bold: true
                                         padding: 5
                                         background: Rectangle { radius: 5; color: orange }
                                     }
@@ -5691,7 +5768,7 @@ ApplicationWindow {
                                               : window.t("status.unresolved", "UNRESOLVED")
                                         color: modelData.matchClass === "EXACT MATCH" ? green
                                                : modelData.matchClass === "FAMILY MATCH" ? orange : muted
-                                        font.pixelSize: 9; font.bold: true
+                                        font.pixelSize: UiMetrics.caption; font.bold: true
                                     }
                                     Item { Layout.fillWidth: true }
                                     Label {
@@ -5708,7 +5785,7 @@ ApplicationWindow {
                                         text: window.localizedStatus(modelData.freshness || "STALE")
                                         color: modelData.freshness === "LIVE" ? green
                                                : modelData.freshness === "RECENT" ? orange : muted
-                                        font.pixelSize: 10; font.bold: true
+                                        font.pixelSize: UiMetrics.caption; font.bold: true
                                     }
                                     Label {
                                         text: window.localizedStatus(modelData.status || "UNKNOWN")
@@ -5716,7 +5793,7 @@ ApplicationWindow {
                                                : (modelData.evidenceKind === "LOCAL_JOURNAL"
                                                   || modelData.evidenceKind === "ENTERED") ? green
                                                : modelData.status === "EDDN LIVE" ? orange : muted
-                                        font.pixelSize: 10; font.bold: true
+                                        font.pixelSize: UiMetrics.caption; font.bold: true
                                     }
                                     Label {
                                         visible: Boolean(modelData.eddnDelivery)
@@ -5727,7 +5804,7 @@ ApplicationWindow {
                                                   || modelData.eddnDelivery === "EDDN RETRY"
                                                   || modelData.eddnDelivery === "EDDN SENDING") ? orange
                                                : muted
-                                        font.pixelSize: 10; font.bold: true
+                                        font.pixelSize: UiMetrics.caption; font.bold: true
                                     }
                                 }
                                 Label {
@@ -5746,7 +5823,7 @@ ApplicationWindow {
                                           + (modelData.intensity !== "UNKNOWN"
                                              ? window.tf("state.intensity", " · INTENSITY: %1", [modelData.intensity]) : "")
                                     color: orange
-                                    font.pixelSize: 10; font.bold: true
+                                    font.pixelSize: UiMetrics.caption; font.bold: true
                                     wrapMode: Text.WordWrap; Layout.fillWidth: true
                                 }
                                 Label {
@@ -5754,7 +5831,7 @@ ApplicationWindow {
                                     text: modelData.findType === "HGE"
                                           ? window.tf("state.hge_materials", "HGE MATERIALS: %1", [modelData.materials || window.t("state.no_prediction", "No reliable material prediction")])
                                           : window.tf("state.evidence", "EVIDENCE: %1", [hgeFinderPage.evidenceLabel(modelData.evidenceKind)])
-                                    color: muted; font.pixelSize: 9
+                                    color: muted; font.pixelSize: UiMetrics.caption
                                     wrapMode: Text.WordWrap; Layout.fillWidth: true
                                 }
                                 Label {
@@ -5773,7 +5850,7 @@ ApplicationWindow {
                                               + " · " + modelData.allegiance
                                               + (modelData.materials
                                                  ? " → " + modelData.materials : "")
-                                        color: orange; font.pixelSize: 10
+                                        color: orange; font.pixelSize: UiMetrics.caption
                                         wrapMode: Text.WordWrap; Layout.fillWidth: true
                                     }
                                 }
@@ -5804,6 +5881,8 @@ ApplicationWindow {
                                       "ALL ALLEGIANCES", 0,
                                       "ALL HGE MATERIALS", "ALL EVIDENCE") > 0
                                   ? window.t("state.no_matches_help", "Cached finds exist, but none match the active filters. Use Reset Filters to show everything.")
+                                  : cockpit.edFrameCatalogEnabled
+                                    ? window.t("state.server_waiting_help", "Waiting for server BGS predictions or signal reports. Refresh synchronizes the catalog; BGS data alone does not confirm an active HGE.")
                                   : cockpit.eddnListenerEnabled
                                     ? window.t("state.listening_help", "Listening for EDDN BGS and signal reports. Findings appear when relevant data arrives.")
                                     : window.t("state.enable_help", "Enable live State Finds intelligence under Settings → Connections.")
@@ -6054,7 +6133,7 @@ ApplicationWindow {
                                 font.pixelSize: 11; font.bold: true
                                 elide: Text.ElideRight
                             }
-                                Label { text: window.t("common.drag", "⠿ DRAG"); color: muted; font.pixelSize: 9; font.bold: true }
+                                Label { text: window.t("common.drag", "⠿ DRAG"); color: muted; font.pixelSize: UiMetrics.caption; font.bold: true }
                         }
                         Rectangle { Layout.fillWidth: true; height: 1; color: borderTone }
                         GridLayout {
@@ -6078,9 +6157,9 @@ ApplicationWindow {
                                         }
                                         ColumnLayout {
                                             Layout.fillWidth: true; spacing: 2
-                                            Label { Layout.fillWidth: true; text: modelData.label || "RANK"; color: cyan; font.pixelSize: 7; font.bold: true; elide: Text.ElideRight }
-                                            Label { Layout.fillWidth: true; text: modelData.known ? window.tf("powerplay.rank_value", "RANK %1", [modelData.rank]) : window.t("status.value.unknown", "UNKNOWN"); color: textPrimary; font.pixelSize: 10; font.bold: true; elide: Text.ElideRight }
-                                            Label { Layout.fillWidth: true; text: modelData.progressKnown ? modelData.progress + "%" : "—"; color: muted; font.pixelSize: 7 }
+                                            Label { Layout.fillWidth: true; text: modelData.label || "RANK"; color: cyan; font.pixelSize: UiMetrics.caption; font.bold: true; elide: Text.ElideRight }
+                                            Label { Layout.fillWidth: true; text: modelData.known ? window.tf("powerplay.rank_value", "RANK %1", [modelData.rank]) : window.t("status.value.unknown", "UNKNOWN"); color: textPrimary; font.pixelSize: UiMetrics.caption; font.bold: true; elide: Text.ElideRight }
+                                            Label { Layout.fillWidth: true; text: modelData.progressKnown ? modelData.progress + "%" : "—"; color: muted; font.pixelSize: UiMetrics.caption }
                                             ModernProgress {
                                                 Layout.fillWidth: true; implicitHeight: 5
                                                 value: modelData.progressKnown ? modelData.progress / 100 : 0
@@ -6105,8 +6184,8 @@ ApplicationWindow {
                                         anchors.fill: parent; anchors.margins: 9; spacing: 5
                                         RowLayout {
                                             Layout.fillWidth: true; spacing: 6
-                                            Label { Layout.fillWidth: true; text: modelData.label || "FACTION"; color: textSecondary; font.pixelSize: 9; font.bold: true; elide: Text.ElideRight }
-                                            Label { text: modelData.value || window.t("status.value.unknown", "UNKNOWN"); color: textPrimary; font.pixelSize: 10; font.bold: true }
+                                            Label { Layout.fillWidth: true; text: modelData.label || "FACTION"; color: textSecondary; font.pixelSize: UiMetrics.caption; font.bold: true; elide: Text.ElideRight }
+                                            Label { text: modelData.value || window.t("status.value.unknown", "UNKNOWN"); color: textPrimary; font.pixelSize: UiMetrics.caption; font.bold: true }
                                         }
                                         ModernProgress {
                                             Layout.fillWidth: true; implicitHeight: 7
@@ -6129,9 +6208,9 @@ ApplicationWindow {
                                     radius: 9; color: panelRaised
                                     ColumnLayout {
                                         anchors.fill: parent; anchors.margins: 10; spacing: 3
-                                        Label { text: modelData.label || "SNAPSHOT"; color: textSecondary; font.pixelSize: 9; font.bold: true }
+                                        Label { text: modelData.label || "SNAPSHOT"; color: textSecondary; font.pixelSize: UiMetrics.caption; font.bold: true }
                                         Label { Layout.fillWidth: true; text: modelData.value || window.t("status.value.unknown", "UNKNOWN"); color: textPrimary; font.pixelSize: 16; font.bold: true; elide: Text.ElideRight }
-                                        Label { Layout.fillWidth: true; text: modelData.detail || ""; color: muted; font.pixelSize: 8; elide: Text.ElideRight }
+                                        Label { Layout.fillWidth: true; text: modelData.detail || ""; color: muted; font.pixelSize: UiMetrics.caption; elide: Text.ElideRight }
                                     }
                                 }
                             }
@@ -6141,15 +6220,15 @@ ApplicationWindow {
                             visible: modelData === "current-ship"
                             Label { Layout.fillWidth: true; text: commanderTile.firstRow.label || commanderTile.cardData.empty; color: textSecondary; font.pixelSize: 11; font.bold: true; elide: Text.ElideRight }
                             Label { Layout.fillWidth: true; text: commanderTile.firstRow.value || window.t("status.value.unknown", "UNKNOWN"); color: textPrimary; font.pixelSize: 20; font.bold: true; elide: Text.ElideRight }
-                            Label { Layout.fillWidth: true; text: commanderTile.firstRow.detail || window.t("commander.location_unknown", "LOCATION UNKNOWN"); color: cyan; font.pixelSize: 10; elide: Text.ElideRight }
+                            Label { Layout.fillWidth: true; text: commanderTile.firstRow.detail || window.t("commander.location_unknown", "LOCATION UNKNOWN"); color: cyan; font.pixelSize: UiMetrics.caption; elide: Text.ElideRight }
                             Item { Layout.fillHeight: true }
                         }
                         ColumnLayout {
                             Layout.fillWidth: true; Layout.fillHeight: true; spacing: 8
                             visible: modelData === "minor-reputation"
                             Label { text: commanderTile.cardRows.length ? commanderTile.cardRows.length : "—"; color: textPrimary; font.pixelSize: 34; font.bold: true }
-                            Label { text: commanderTile.cardRows.length ? window.t("commander.known_factions", "KNOWN MINOR FACTIONS") : commanderTile.cardData.empty; color: green; font.pixelSize: 10; font.bold: true }
-                                Label { text: window.t("commander.reputation_note", "No aggregate reputation bar: faction values are independent."); color: muted; font.pixelSize: 8; wrapMode: Text.WordWrap; Layout.fillWidth: true }
+                            Label { text: commanderTile.cardRows.length ? window.t("commander.known_factions", "KNOWN MINOR FACTIONS") : commanderTile.cardData.empty; color: green; font.pixelSize: UiMetrics.caption; font.bold: true }
+                                Label { text: window.t("commander.reputation_note", "No aggregate reputation bar: faction values are independent."); color: muted; font.pixelSize: UiMetrics.caption; wrapMode: Text.WordWrap; Layout.fillWidth: true }
                             Item { Layout.fillHeight: true }
                         }
                         ColumnLayout {
@@ -6189,8 +6268,17 @@ ApplicationWindow {
             Layout.fillHeight: true
             visible: commanderPage.activeSection === 1
             accent: orange
+            ScrollView {
+                id: financeViewport
+                objectName: "qa-finance-viewport"
+                anchors.fill: parent; anchors.margins: 18
+                clip: true
+                contentWidth: availableWidth
+                ScrollBar.horizontal.policy: ScrollBar.AlwaysOff
             ColumnLayout {
-                anchors.fill: parent; anchors.margins: 18; spacing: 12
+                width: financeViewport.availableWidth
+                height: Math.max(implicitHeight, financeViewport.availableHeight)
+                spacing: 12
                 RowLayout {
                     Layout.fillWidth: true; spacing: 10
                     Repeater {
@@ -6211,7 +6299,7 @@ ApplicationWindow {
                             border.width: 1; border.color: borderTone
                             ColumnLayout {
                                 anchors.fill: parent; anchors.margins: 11; spacing: 4
-                                Label { text: modelData[0]; color: muted; font.pixelSize: 9; font.bold: true }
+                                Label { text: modelData[0]; color: muted; font.pixelSize: UiMetrics.caption; font.bold: true }
                                 Label { Layout.fillWidth: true; text: modelData[1]; color: modelData[2]; font.pixelSize: 18; font.bold: true; elide: Text.ElideRight }
                             }
                         }
@@ -6219,20 +6307,21 @@ ApplicationWindow {
                 }
                 RowLayout {
                     Layout.fillWidth: true
-                    Label { text: window.t("commander.credits.ticker_title", "CREDIT FLOW · LIVE TICKER"); color: orange; font.pixelSize: 11; font.bold: true }
-                    Item { Layout.fillWidth: true }
-                    Label { text: window.t("commander.credits.range", "RANGE"); color: muted; font.pixelSize: 9; font.bold: true }
+                    Label { text: window.t("commander.credits.ticker_title", "CREDIT FLOW · LIVE TICKER"); color: orange; font.pixelSize: UiMetrics.caption; font.bold: true; Layout.fillWidth: true; elide: Text.ElideRight }
+                    Label { text: window.t("commander.credits.range", "RANGE"); color: muted; font.pixelSize: UiMetrics.caption; font.bold: true }
                     CockpitComboBox {
                         id: financePeriodBox
                         Layout.preferredWidth: 170
+                        ToolTip.visible: hovered
+                        ToolTip.text: currentText
                         model: commanderPage.financePeriodLabels
                         currentIndex: Math.max(0, commanderPage.financePeriodKeys.indexOf(cockpit.commanderFinancePeriod))
                         onActivated: cockpit.setCommanderFinancePeriod(
                                          commanderPage.financePeriodKeys[currentIndex])
                     }
-                    Label { text: window.t("commander.credits.scale", "SCALE"); color: muted; font.pixelSize: 9; font.bold: true }
+                    Label { text: window.t("commander.credits.scale", "SCALE"); color: muted; font.pixelSize: UiMetrics.caption; font.bold: true }
                     Rectangle {
-                        Layout.preferredWidth: 132; Layout.preferredHeight: 28
+                        Layout.preferredWidth: 188; Layout.preferredHeight: UiMetrics.controlHeight
                         radius: 7; color: backgroundPrimary
                         border.width: 1; border.color: borderTone
                         Row {
@@ -6244,7 +6333,7 @@ ApplicationWindow {
                                 ]
                                 delegate: Rectangle {
                                     required property var modelData
-                                    width: 62; height: 24; radius: 5
+                                    width: 90; height: UiMetrics.controlHeight - 4; radius: 5
                                     color: commanderPage.financeZeroBased === modelData.zeroBased
                                            ? Qt.rgba(orange.r, orange.g, orange.b, 0.24) : "transparent"
                                     border.width: commanderPage.financeZeroBased === modelData.zeroBased ? 1 : 0
@@ -6252,7 +6341,7 @@ ApplicationWindow {
                                     Label {
                                         anchors.centerIn: parent; text: modelData.label
                                         color: commanderPage.financeZeroBased === modelData.zeroBased ? orange : textSecondary
-                                        font.pixelSize: 8; font.bold: true
+                                        font.pixelSize: UiMetrics.caption; font.bold: true
                                     }
                                     MouseArea {
                                         anchors.fill: parent; cursorShape: Qt.PointingHandCursor
@@ -6262,10 +6351,14 @@ ApplicationWindow {
                             }
                         }
                     }
+                }
+                RowLayout {
+                    Layout.fillWidth: true
                     Rectangle { width: 18; height: 3; radius: 2; color: orange }
-                    Label { text: window.t("commander.credits.balance_short", "CREDITS"); color: textSecondary; font.pixelSize: 9 }
+                    Label { text: window.t("commander.credits.balance_short", "CREDITS"); color: textSecondary; font.pixelSize: UiMetrics.caption }
                     Rectangle { visible: commanderPage.financeHasAssets; width: 18; height: 3; radius: 2; color: textMuted }
-                    Label { visible: commanderPage.financeHasAssets; text: window.t("commander.credits.assets_short", "ASSETS"); color: textSecondary; font.pixelSize: 9 }
+                    Label { visible: commanderPage.financeHasAssets; text: window.t("commander.credits.assets_short", "ASSETS"); color: textSecondary; font.pixelSize: UiMetrics.caption }
+                    Item { Layout.fillWidth: true }
                 }
                 GridLayout {
                     Layout.fillWidth: true
@@ -6288,20 +6381,21 @@ ApplicationWindow {
                         ]
                         delegate: Rectangle {
                             required property var modelData
-                            Layout.fillWidth: true; Layout.preferredHeight: 58
+                            Layout.fillWidth: true; Layout.preferredHeight: 76
                             radius: 9; color: panelRaised
                             border.width: 1; border.color: borderTone
                             ColumnLayout {
                                 anchors.fill: parent; anchors.margins: 9; spacing: 2
-                                Label { text: modelData[0]; color: muted; font.pixelSize: 8; font.bold: true }
+                                Label { text: modelData[0]; color: muted; font.pixelSize: UiMetrics.caption; font.bold: true }
                                 Label { Layout.fillWidth: true; text: modelData[1]; color: modelData[3]; font.pixelSize: 14; font.bold: true; elide: Text.ElideRight }
-                                Label { Layout.fillWidth: true; text: modelData[2]; color: textSecondary; font.pixelSize: 8; elide: Text.ElideRight }
+                                Label { Layout.fillWidth: true; text: modelData[2]; color: textSecondary; font.pixelSize: UiMetrics.caption; elide: Text.ElideRight }
                             }
                         }
                     }
                 }
                 Rectangle {
                     Layout.fillWidth: true; Layout.fillHeight: true
+                    Layout.minimumHeight: 320
                     radius: 10; color: backgroundPrimary
                     border.width: 1; border.color: borderTone
                     Canvas {
@@ -6310,9 +6404,9 @@ ApplicationWindow {
                         property var points: commanderPage.financeHistory
                         property int hoverIndex: -1
                         property bool zeroBased: commanderPage.financeZeroBased
-                        property real plotLeft: 72
-                        property real plotRight: commanderPage.financeHasAssets ? 72 : 18
-                        property real plotTop: 66
+                        property real plotLeft: 90
+                        property real plotRight: commanderPage.financeHasAssets ? 90 : 18
+                        property real plotTop: 90
                         property real plotBottom: 34
                         property int activeIndex: points.length > 0
                             ? Math.max(0, Math.min(points.length - 1, hoverIndex >= 0 ? hoverIndex : points.length - 1))
@@ -6445,7 +6539,7 @@ ApplicationWindow {
                             for (let grid = 0; grid <= 4; ++grid) {
                                 let y = plotTop + plotHeight * grid / 4
                                 ctx.beginPath(); ctx.moveTo(plotLeft, y); ctx.lineTo(width - plotRight, y); ctx.stroke()
-                                ctx.font = "9px 'Segoe UI'"
+                                ctx.font = UiMetrics.caption + "px 'Segoe UI'"
                                 ctx.fillStyle = String(window.orange)
                                 ctx.textAlign = "right"; ctx.textBaseline = "middle"
                                 ctx.fillText(shortCredits(creditRange.maximum - (creditRange.maximum - creditRange.minimum) * grid / 4), plotLeft - 8, y)
@@ -6461,7 +6555,7 @@ ApplicationWindow {
                                     let stamp = timeRange.minimum + (timeRange.maximum - timeRange.minimum) * tick / 4
                                     let label = Qt.formatDateTime(new Date(stamp), "dd.MM.yy HH:mm")
                                     ctx.fillStyle = String(window.muted)
-                                    ctx.font = "9px 'Segoe UI'"
+                                    ctx.font = UiMetrics.caption + "px 'Segoe UI'"
                                     ctx.textBaseline = "bottom"
                                     ctx.textAlign = tick === 0 ? "left" : tick === 4 ? "right" : "center"
                                     ctx.fillText(label, x, height - 2)
@@ -6526,7 +6620,7 @@ ApplicationWindow {
                             if (creditSamples.length > 0) {
                                 let latest = creditSamples[creditSamples.length - 1]
                                 let latestText = shortCredits(latest.value)
-                                ctx.font = "bold 9px 'Segoe UI'"
+                                ctx.font = "bold " + UiMetrics.caption + "px 'Segoe UI'"
                                 let tagWidth = ctx.measureText(latestText).width + 16
                                 let tagX = Math.max(plotLeft + 4, latest.x - tagWidth - 8)
                                 let tagY = Math.max(plotTop + 3, Math.min(plotTop + plotHeight - 23, latest.y - 11))
@@ -6562,7 +6656,7 @@ ApplicationWindow {
                         Rectangle {
                             anchors.top: parent.top; anchors.left: parent.left
                             anchors.leftMargin: financeChart.plotLeft
-                            width: 238; height: 47
+                            width: 238; height: 64
                             radius: 7; color: panelRaised; border.width: 1; border.color: borderTone
                             visible: financeChart.points.length > 0 && financeChart.width >= 900
                             ColumnLayout {
@@ -6572,7 +6666,7 @@ ApplicationWindow {
                                     text: financeChart.periodLabel() + " · " + (financeChart.zeroBased
                                           ? window.t("commander.credits.scale_zero", "FROM ZERO")
                                           : window.t("commander.credits.scale_auto", "AUTO"))
-                                    color: cyan; font.pixelSize: 9; font.bold: true; elide: Text.ElideRight
+                                    color: cyan; font.pixelSize: UiMetrics.caption; font.bold: true; elide: Text.ElideRight
                                 }
                                 Label {
                                     Layout.fillWidth: true
@@ -6580,46 +6674,46 @@ ApplicationWindow {
                                           ? commanderPage.formatFinanceTime(commanderPage.financeSummary.startTimestamp, false)
                                             + "  →  " + commanderPage.formatFinanceTime(commanderPage.financeSummary.endTimestamp, false)
                                           : window.t("status.value.unknown", "UNKNOWN")
-                                    color: muted; font.pixelSize: 8; elide: Text.ElideRight
+                                    color: muted; font.pixelSize: UiMetrics.caption; elide: Text.ElideRight
                                 }
                             }
                         }
                         Rectangle {
                             anchors.top: parent.top; anchors.right: parent.right
-                            width: Math.min(parent.width - financeChart.plotLeft, 590); height: 52
+                            width: Math.min(parent.width - financeChart.plotLeft, 650); height: 72
                             radius: 7; color: panelRaised; border.width: 1; border.color: borderTone
                             visible: financeChart.points.length > 0
                             ColumnLayout {
                                 anchors.fill: parent; anchors.leftMargin: 9; anchors.rightMargin: 9; anchors.topMargin: 5; anchors.bottomMargin: 5; spacing: 2
                                 RowLayout {
                                     Layout.fillWidth: true; spacing: 9
-                                    Label { Layout.fillWidth: true; text: commanderPage.formatFinanceTime(financeChart.activePoint.timestamp, true); color: textSecondary; font.pixelSize: 9; font.bold: true; elide: Text.ElideRight }
+                                    Label { Layout.fillWidth: true; text: commanderPage.formatFinanceTime(financeChart.activePoint.timestamp, true); color: textSecondary; font.pixelSize: UiMetrics.caption; font.bold: true; elide: Text.ElideRight }
                                     Rectangle {
-                                        Layout.preferredWidth: sourceText.implicitWidth + 14; Layout.preferredHeight: 17
+                                        Layout.preferredWidth: sourceText.implicitWidth + 14; Layout.preferredHeight: 23
                                         radius: 8; color: backgroundPrimary; border.width: 1; border.color: cyan
-                                        Label { id: sourceText; anchors.centerIn: parent; text: financeChart.sourceLabel(financeChart.activePoint.source); color: cyan; font.pixelSize: 7; font.bold: true }
+                                        Label { id: sourceText; anchors.centerIn: parent; text: financeChart.sourceLabel(financeChart.activePoint.source); color: cyan; font.pixelSize: UiMetrics.caption; font.bold: true }
                                     }
-                                    Label { text: commanderPage.formatCr(financeChart.activePoint.credits, financeChart.activeCredit >= 0); color: orange; font.pixelSize: 10; font.bold: true }
-                                    Label { visible: Number(financeChart.activePoint.assets) >= 0; text: commanderPage.formatCr(financeChart.activePoint.assets, true); color: textMuted; font.pixelSize: 9 }
+                                    Label { text: commanderPage.formatCr(financeChart.activePoint.credits, financeChart.activeCredit >= 0); color: orange; font.pixelSize: UiMetrics.caption; font.bold: true }
+                                    Label { visible: Number(financeChart.activePoint.assets) >= 0; text: commanderPage.formatCr(financeChart.activePoint.assets, true); color: textMuted; font.pixelSize: UiMetrics.caption }
                                 }
                                 RowLayout {
                                     Layout.fillWidth: true; spacing: 7
-                                    Label { text: window.t("commander.credits.delta_previous", "Δ PREVIOUS"); color: muted; font.pixelSize: 7; font.bold: true }
+                                    Label { text: window.t("commander.credits.delta_previous", "Δ PREVIOUS"); color: muted; font.pixelSize: UiMetrics.caption; font.bold: true }
                                     Label {
                                         text: financeChart.previousCredit >= 0 && financeChart.activeCredit >= 0
                                               ? commanderPage.formatSignedCr(financeChart.activeCredit - financeChart.previousCredit, true) : "—"
                                         color: financeChart.previousCredit < 0 || financeChart.activeCredit === financeChart.previousCredit
                                                ? textSecondary : financeChart.activeCredit > financeChart.previousCredit ? green : danger
-                                        font.pixelSize: 8; font.bold: true
+                                        font.pixelSize: UiMetrics.caption; font.bold: true
                                     }
                                     Rectangle { Layout.preferredWidth: 1; Layout.fillHeight: true; color: divider }
-                                    Label { text: window.t("commander.credits.delta_period", "Δ PERIOD"); color: muted; font.pixelSize: 7; font.bold: true }
+                                    Label { text: window.t("commander.credits.delta_period", "Δ PERIOD"); color: muted; font.pixelSize: UiMetrics.caption; font.bold: true }
                                     Label {
                                         text: financeChart.periodStartCredit >= 0 && financeChart.activeCredit >= 0
                                               ? commanderPage.formatSignedCr(financeChart.activeCredit - financeChart.periodStartCredit, true) : "—"
                                         color: financeChart.periodStartCredit < 0 || financeChart.activeCredit === financeChart.periodStartCredit
                                                ? textSecondary : financeChart.activeCredit > financeChart.periodStartCredit ? green : danger
-                                        font.pixelSize: 8; font.bold: true
+                                        font.pixelSize: UiMetrics.caption; font.bold: true
                                     }
                                     Item { Layout.fillWidth: true }
                                 }
@@ -6628,13 +6722,13 @@ ApplicationWindow {
                         Label {
                             x: 2; y: financeChart.plotTop - 17
                             text: window.t("commander.credits.balance_short", "CREDITS")
-                            color: orange; font.pixelSize: 8; font.bold: true
+                            color: orange; font.pixelSize: UiMetrics.caption; font.bold: true
                         }
                         Label {
                             visible: commanderPage.financeHasAssets
                             anchors.right: parent.right; y: financeChart.plotTop - 17
                             text: window.t("commander.credits.assets_short", "ASSETS")
-                            color: textMuted; font.pixelSize: 8; font.bold: true
+                            color: textMuted; font.pixelSize: UiMetrics.caption; font.bold: true
                         }
                         MouseArea {
                             anchors.fill: parent; hoverEnabled: true
@@ -6652,8 +6746,9 @@ ApplicationWindow {
                 Label {
                     Layout.fillWidth: true
                     text: window.t("commander.credits.ticker_note", "The ticker stores every balance change observed by Elite from now on; older gaps are not reconstructed. Assets remain authoritative Journal snapshots. Average CR/h uses wall-clock time.")
-                    color: muted; font.pixelSize: 9; wrapMode: Text.WordWrap
+                    color: muted; font.pixelSize: UiMetrics.caption; wrapMode: Text.WordWrap
                 }
+            }
             }
         }
 
@@ -6707,11 +6802,11 @@ ApplicationWindow {
                         }
                         GridLayout {
                             Layout.fillWidth: true; columns: 2; columnSpacing: 12; rowSpacing: 4
-                            Label { text: window.t("commander.fleet.value", "VALUE"); color: muted; font.pixelSize: 10; font.bold: true }
+                            Label { text: window.t("commander.fleet.value", "VALUE"); color: muted; font.pixelSize: UiMetrics.caption; font.bold: true }
                             Label { Layout.fillWidth: true; text: commanderPage.formatCr(modelData.value, modelData.valueKnown); color: textSecondary; font.pixelSize: 11; font.bold: true; horizontalAlignment: Text.AlignRight; elide: Text.ElideRight }
-                            Label { text: window.t("commander.fleet.rebuy", "REBUY"); color: muted; font.pixelSize: 10; font.bold: true; visible: modelData.rebuyKnown }
+                            Label { text: window.t("commander.fleet.rebuy", "REBUY"); color: muted; font.pixelSize: UiMetrics.caption; font.bold: true; visible: modelData.rebuyKnown }
                             Label { Layout.fillWidth: true; text: commanderPage.formatCr(modelData.rebuy, modelData.rebuyKnown); color: textSecondary; font.pixelSize: 11; horizontalAlignment: Text.AlignRight; visible: modelData.rebuyKnown; elide: Text.ElideRight }
-                            Label { text: window.t("commander.fleet.location", "LOCATION"); color: muted; font.pixelSize: 10; font.bold: true }
+                            Label { text: window.t("commander.fleet.location", "LOCATION"); color: muted; font.pixelSize: UiMetrics.caption; font.bold: true }
                             Label { Layout.fillWidth: true; text: [modelData.system || "", modelData.station || ""].filter(Boolean).join(" · ") || window.t("commander.location_unknown", "LOCATION UNKNOWN"); color: cyan; font.pixelSize: 11; horizontalAlignment: Text.AlignRight; elide: Text.ElideRight }
                         }
                         Item { Layout.fillHeight: true }
@@ -6903,7 +6998,7 @@ ApplicationWindow {
                         spacing: 8
                         Label {
                             text: window.tf("status.renderer", "GRAPHICS RENDERER · ACTIVE %1", [cockpit.rendererActive])
-                            color: muted; font.pixelSize: 10; font.bold: true
+                            color: muted; font.pixelSize: UiMetrics.caption; font.bold: true
                         }
                         CockpitComboBox {
                             id: rendererSelector
@@ -6930,7 +7025,7 @@ ApplicationWindow {
                         }
                         Label {
                             text: window.t("settings.renderer_help", "AUTO is recommended. Change only for GPU or compatibility troubleshooting.")
-                            color: muted; font.pixelSize: 10; wrapMode: Text.WordWrap
+                            color: muted; font.pixelSize: UiMetrics.caption; wrapMode: Text.WordWrap
                             Layout.fillWidth: true
                         }
                     }
@@ -6940,17 +7035,17 @@ ApplicationWindow {
                         color: orange; font.pixelSize: 11; font.bold: true
                     }
                     Rectangle { Layout.fillWidth: true; height: 1; color: borderTone }
-                    Label { text: window.t("settings.interface", "INTERFACE"); color: muted; font.pixelSize: 10; font.bold: true }
+                    Label { text: window.t("settings.interface", "INTERFACE"); color: muted; font.pixelSize: UiMetrics.caption; font.bold: true }
                     RowLayout {
                         Layout.fillWidth: true
                         spacing: 12
                         ColumnLayout {
                             Layout.fillWidth: true
                             spacing: 2
-                            Label { text: window.t("settings.language", "LANGUAGE"); color: muted; font.pixelSize: 10; font.bold: true }
+                            Label { text: window.t("settings.language", "LANGUAGE"); color: muted; font.pixelSize: UiMetrics.caption; font.bold: true }
                             Label {
                                 text: window.t("settings.language_help", "Applies immediately and is saved locally")
-                                color: muted; font.pixelSize: 9
+                                color: muted; font.pixelSize: UiMetrics.caption
                             }
                         }
                         CockpitComboBox {
@@ -6984,7 +7079,7 @@ ApplicationWindow {
                     Rectangle { Layout.fillWidth: true; height: 1; color: divider }
                     RowLayout {
                         Layout.fillWidth: true
-                            Label { text: window.t("settings.ui_scale", "UI SCALE"); color: muted; font.pixelSize: 10; font.bold: true }
+                            Label { text: window.t("settings.ui_scale", "UI SCALE"); color: muted; font.pixelSize: UiMetrics.caption; font.bold: true }
                         Slider {
                             Layout.fillWidth: true
                             from: 1.00; to: 1.50; stepSize: 0.05
@@ -6998,10 +7093,10 @@ ApplicationWindow {
                     }
                     ColumnLayout {
                         Layout.fillWidth: true
-                        Label { text: window.t("settings.design_skin", "DESIGN SKIN"); color: muted; font.pixelSize: 10; font.bold: true }
+                        Label { text: window.t("settings.design_skin", "DESIGN SKIN"); color: muted; font.pixelSize: UiMetrics.caption; font.bold: true }
                         Label {
                             text: window.t("settings.design_help", "Color and accent preview · applies immediately and is saved locally")
-                            color: muted; font.pixelSize: 9
+                            color: muted; font.pixelSize: UiMetrics.caption
                         }
                         Flow {
                             Layout.fillWidth: true
@@ -7032,7 +7127,7 @@ ApplicationWindow {
                                         Label {
                                             Layout.fillWidth: true
                                             text: modelData.label
-                                            color: textPrimary; font.pixelSize: 9; font.bold: true
+                                            color: textPrimary; font.pixelSize: UiMetrics.caption; font.bold: true
                                             elide: Text.ElideRight
                                         }
                                     }
@@ -7081,7 +7176,7 @@ ApplicationWindow {
                               ? "TRAY MODE ENABLED · Journal, inventory and EDDN continue after closing the window. Use EXIT ED-FRAME in the tray to stop."
                               : "DISABLED BY DEFAULT · Closing the window exits ED-Frame."
                         color: cockpit.backgroundMode ? green : muted
-                        font.pixelSize: 10; wrapMode: Text.WordWrap; Layout.fillWidth: true
+                        font.pixelSize: UiMetrics.caption; wrapMode: Text.WordWrap; Layout.fillWidth: true
                     }
                     RowLayout {
                         Layout.fillWidth: true
@@ -7089,12 +7184,12 @@ ApplicationWindow {
                             text: window.tf("status.runtime", "RUNTIME · %1", [cockpit.backgroundRuntimeStatus])
                             color: cockpit.backgroundRuntimeStatus === "RUNNING IN BACKGROUND"
                                    ? green : cyan
-                            font.pixelSize: 10; font.bold: true
+                            font.pixelSize: UiMetrics.caption; font.bold: true
                         }
                         Item { Layout.fillWidth: true }
                         Label {
                             text: window.t("settings.single_instance", "ONE INSTANCE ONLY")
-                            color: muted; font.pixelSize: 10; font.bold: true
+                            color: muted; font.pixelSize: UiMetrics.caption; font.bold: true
                         }
                     }
                     RowLayout {
@@ -7129,7 +7224,7 @@ ApplicationWindow {
                 ColumnLayout {
                     anchors.fill: parent; anchors.margins: 22; spacing: 14
                             Label { text: window.t("settings.live_data", "LIVE DATA"); color: green; font.pixelSize: 13; font.bold: true }
-                            Label { text: window.t("settings.journal_directory", "JOURNAL DIRECTORY"); color: muted; font.pixelSize: 10; font.bold: true }
+                            Label { text: window.t("settings.journal_directory", "JOURNAL DIRECTORY"); color: muted; font.pixelSize: UiMetrics.caption; font.bold: true }
                     TextField {
                         id: journalPathField
                         text: cockpit.journalPath
@@ -7153,9 +7248,9 @@ ApplicationWindow {
                         onClicked: cockpit.reloadJournalNow()
                     }
                     Rectangle { Layout.fillWidth: true; height: 1; color: borderTone; Layout.topMargin: 8 }
-                            Label { text: window.t("settings.application", "APPLICATION"); color: cyan; font.pixelSize: 10; font.bold: true }
+                            Label { text: window.t("settings.application", "APPLICATION"); color: cyan; font.pixelSize: UiMetrics.caption; font.bold: true }
                     Label { text: "GPU Cockpit " + cockpit.appVersion; color: textPrimary; font.pixelSize: 16; font.bold: true }
-                            Label { text: window.t("settings.bundled_data", "Project data is bundled with this release."); color: muted; font.pixelSize: 10 }
+                            Label { text: window.t("settings.bundled_data", "Project data is bundled with this release."); color: muted; font.pixelSize: UiMetrics.caption }
                     Item { Layout.fillHeight: true }
                 }
             }
@@ -7271,11 +7366,11 @@ ApplicationWindow {
                         anchors.fill: parent; anchors.margins: 14; spacing: 3
                         RowLayout {
                             Layout.fillWidth: true
-                            Label { text: modelData.name; color: muted; font.pixelSize: 9; font.bold: true }
+                            Label { text: modelData.name; color: muted; font.pixelSize: UiMetrics.caption; font.bold: true }
                             Item { Layout.fillWidth: true }
                             Label { text: modelData.status; color: modelData.healthy ? green : orange; font.pixelSize: 11; font.bold: true }
                         }
-                        Label { text: modelData.detail; color: textSecondary; font.pixelSize: 9; elide: Text.ElideRight; Layout.fillWidth: true }
+                        Label { text: modelData.detail; color: textSecondary; font.pixelSize: UiMetrics.caption; elide: Text.ElideRight; Layout.fillWidth: true }
                     }
                 }
             }
@@ -7312,7 +7407,7 @@ ApplicationWindow {
                         text: window.t("connections.inara_privacy", "Nothing is sent until you enable consent. The API key is stored only in your local app profile and is never shown in logs or receipts.")
                         color: textSecondary; wrapMode: Text.WordWrap; Layout.fillWidth: true
                     }
-                                    Label { text: window.t("connections.commander", "COMMANDER"); color: muted; font.pixelSize: 10; font.bold: true }
+                                    Label { text: window.t("connections.commander", "COMMANDER"); color: muted; font.pixelSize: UiMetrics.caption; font.bold: true }
                     TextField {
                         id: inaraCommanderField
                         Layout.fillWidth: true
@@ -7324,7 +7419,7 @@ ApplicationWindow {
                                           ? window.t("connections.api_configured", "API KEY · CONFIGURED")
                                           : window.t("connections.api_key", "API KEY")
                         color: cockpit.inaraKeyConfigured ? green : muted
-                        font.pixelSize: 10
+                        font.pixelSize: UiMetrics.caption
                         font.bold: true
                     }
                     TextField {
@@ -7487,7 +7582,7 @@ ApplicationWindow {
                             anchors.fill: parent; anchors.margins: 14; spacing: 6
                             RowLayout {
                                 Layout.fillWidth: true
-                                Label { text: window.t("connections.connection", "CONNECTION"); color: muted; font.pixelSize: 9; font.bold: true }
+                                Label { text: window.t("connections.connection", "CONNECTION"); color: muted; font.pixelSize: UiMetrics.caption; font.bold: true }
                                 Item { Layout.fillWidth: true }
                                 Label {
                                     text: cockpit.frontierBusy ? window.t("status.working", "WORKING")
@@ -7508,7 +7603,7 @@ ApplicationWindow {
                             Label {
                                 visible: Boolean(cockpit.frontierLastSync)
                                 text: window.t("connections.frontier_last_sync", "LAST PROFILE SYNC") + " · " + cockpit.frontierLastSync
-                                color: cyan; font.pixelSize: 9; font.bold: true
+                                color: cyan; font.pixelSize: UiMetrics.caption; font.bold: true
                             }
                         }
                     }
@@ -7543,12 +7638,12 @@ ApplicationWindow {
                     Label {
                         text: window.t("connections.frontier_security", "Frontier must activate the registered client before the first login can succeed. Tokens are encrypted for this Windows account and are never written to diagnostics.")
                         color: muted; wrapMode: Text.WordWrap; Layout.fillWidth: true
-                        font.pixelSize: 10
+                        font.pixelSize: UiMetrics.caption
                     }
                     Label {
                         text: window.t("connections.frontier_scope", "The first integration imports credits and the currently active ship. It never deletes fleet entries or engineering plans.")
                         color: muted; wrapMode: Text.WordWrap; Layout.fillWidth: true
-                        font.pixelSize: 10
+                        font.pixelSize: UiMetrics.caption
                     }
                     Item { Layout.fillHeight: true }
                 }
@@ -7619,16 +7714,16 @@ ApplicationWindow {
                             id: technicalDetailsColumn
                             anchors.left: parent.left; anchors.right: parent.right
                             anchors.top: parent.top; anchors.margins: 10; spacing: 5
-                            Label { text: window.t("connections.edmc_parallel", "EDMC PARALLEL STILL NEEDED?"); color: textSecondary; font.pixelSize: 9; font.bold: true }
+                            Label { text: window.t("connections.edmc_parallel", "EDMC PARALLEL STILL NEEDED?"); color: textSecondary; font.pixelSize: UiMetrics.caption; font.bold: true }
                             Label { text: cockpit.edmcParallelStatus.verdict; color: cockpit.edmcParallelStatus.tone === "READY" ? green : orange; font.pixelSize: 11; font.bold: true }
-                            Label { text: cockpit.edmcParallelStatus.reason; color: muted; wrapMode: Text.WordWrap; Layout.fillWidth: true; font.pixelSize: 9 }
-                            Label { text: window.tf("status.eddn_parity", "JOURNAL EDDN PARITY · %1", [cockpit.eddnParity.status]); color: textSecondary; font.pixelSize: 9; font.bold: true }
+                            Label { text: cockpit.edmcParallelStatus.reason; color: muted; wrapMode: Text.WordWrap; Layout.fillWidth: true; font.pixelSize: UiMetrics.caption }
+                            Label { text: window.tf("status.eddn_parity", "JOURNAL EDDN PARITY · %1", [cockpit.eddnParity.status]); color: textSecondary; font.pixelSize: UiMetrics.caption; font.bold: true }
                             Label {
                                 text: cockpit.eddnParity.supported + " / " + cockpit.eddnParity.total
                                       + " SCHEMAS · " + cockpit.eddnParity.journalSchemas + " JOURNAL · "
                                       + cockpit.eddnParity.stationSchemas + " STATION · VALIDATED "
                                       + cockpit.eddnParity.validatedAt
-                                color: muted; font.pixelSize: 8; wrapMode: Text.WordWrap; Layout.fillWidth: true
+                                color: muted; font.pixelSize: UiMetrics.caption; wrapMode: Text.WordWrap; Layout.fillWidth: true
                             }
                             Label {
                                 text: window.tf(
@@ -7640,20 +7735,20 @@ ApplicationWindow {
                                      cockpit.eddnDeliverySummary.archivedInara,
                                      cockpit.eddnDeliverySummary.archivedMining]
                                 )
-                                color: muted; font.pixelSize: 8; wrapMode: Text.WordWrap; Layout.fillWidth: true
+                                color: muted; font.pixelSize: UiMetrics.caption; wrapMode: Text.WordWrap; Layout.fillWidth: true
                             }
-                            Label { text: cockpit.eddnDeliverySummary.historyFile; color: muted; font.pixelSize: 8; elide: Text.ElideMiddle; Layout.fillWidth: true }
+                            Label { text: cockpit.eddnDeliverySummary.historyFile; color: muted; font.pixelSize: UiMetrics.caption; elide: Text.ElideMiddle; Layout.fillWidth: true }
                             Rectangle { Layout.fillWidth: true; height: 1; color: borderTone }
                             Label {
                                 text: window.t("connections.data_archive", "DIAGNOSTIC DATA")
-                                color: textPrimary; font.pixelSize: 9; font.bold: true
+                                color: textPrimary; font.pixelSize: UiMetrics.caption; font.bold: true
                             }
                             Label {
                                 text: window.t(
                                     "connections.data_archive_help",
                                     "Creates a JSON backup of active and archived EDDN, HGE, INARA receipt and Mining Finder data. API keys and Elite Journal files are not included."
                                 )
-                                color: muted; wrapMode: Text.WordWrap; Layout.fillWidth: true; font.pixelSize: 8
+                                color: muted; wrapMode: Text.WordWrap; Layout.fillWidth: true; font.pixelSize: UiMetrics.caption
                             }
                             CockpitButton {
                                 text: cockpit.historyExportBusy
@@ -7674,7 +7769,7 @@ ApplicationWindow {
                                       ? window.t("connections.exporting_history", "EXPORTING DIAGNOSTIC DATA…")
                                       : cockpit.eddnStatus
                                 color: cockpit.historyExportBusy ? cyan : error
-                                wrapMode: Text.WordWrap; Layout.fillWidth: true; font.pixelSize: 8
+                                wrapMode: Text.WordWrap; Layout.fillWidth: true; font.pixelSize: UiMetrics.caption
                             }
                         }
                     }
@@ -7716,18 +7811,18 @@ ApplicationWindow {
                                   + cockpit.eddnDeliverySummary.failed + " FAILED"
                             color: cockpit.eddnDeliverySummary.failed > 0 ? error
                                    : cockpit.eddnDeliverySummary.waiting > 0 ? orange : muted
-                            font.pixelSize: 10; font.bold: true
+                            font.pixelSize: UiMetrics.caption; font.bold: true
                         }
                         Item { Layout.fillWidth: true }
                         Label {
                             text: window.tf("connections.activity_count", "%1 ENTRIES", [connectionsPage.eddnActivityRows.length])
-                            color: muted; font.pixelSize: 9
+                            color: muted; font.pixelSize: UiMetrics.caption
                         }
                     }
                     Label {
                         visible: cockpit.eddnBusy || cockpit.eddnDeliverySummary.waiting > 0
                         text: cockpit.eddnBusy ? window.t("status.sending", "SENDING…") : cockpit.eddnStatus
-                        color: cyan; wrapMode: Text.WordWrap; Layout.fillWidth: true; font.pixelSize: 10
+                        color: cyan; wrapMode: Text.WordWrap; Layout.fillWidth: true; font.pixelSize: UiMetrics.caption
                     }
                     Rectangle {
                         visible: Boolean(cockpit.eddnDeliverySummary.lastError)
@@ -7743,18 +7838,18 @@ ApplicationWindow {
                             Label {
                                 visible: Boolean(cockpit.eddnDeliverySummary.lastError)
                                 text: window.tf("status.last_error", "LAST ERROR · %1", [cockpit.eddnDeliverySummary.lastError])
-                                color: error; wrapMode: Text.WordWrap; Layout.fillWidth: true; font.pixelSize: 10
+                                color: error; wrapMode: Text.WordWrap; Layout.fillWidth: true; font.pixelSize: UiMetrics.caption
                             }
                             Label {
                                 visible: Boolean(cockpit.eddnDeliverySummary.nextRetryAt)
                                 text: window.tf("status.retry_pending", "RETRY PENDING · %1", [cockpit.eddnDeliverySummary.retry])
                                       + " · " + cockpit.eddnDeliverySummary.nextRetryAt
-                                color: orange; wrapMode: Text.WordWrap; Layout.fillWidth: true; font.pixelSize: 10
+                                color: orange; wrapMode: Text.WordWrap; Layout.fillWidth: true; font.pixelSize: UiMetrics.caption
                             }
                             Label {
                                 visible: cockpit.eddnDeliverySummary.quarantined > 0
                                 text: window.tf("connections.quarantine_count", "QUARANTINE · %1 IRREPARABLE", [cockpit.eddnDeliverySummary.quarantined])
-                                color: error; font.bold: true; font.pixelSize: 10
+                                color: error; font.bold: true; font.pixelSize: UiMetrics.caption
                             }
                         }
                     }
@@ -7782,15 +7877,15 @@ ApplicationWindow {
                                         color: modelData.status === "FAILED" || modelData.status === "INVALID" ? error
                                                : modelData.status === "QUEUED" || modelData.status === "SENDING" || modelData.status === "RETRY" ? orange
                                                : modelData.status === "SENT" || modelData.status === "COMPLETE" || modelData.status === "READY" ? green : muted
-                                        font.bold: true; font.pixelSize: 9
+                                        font.bold: true; font.pixelSize: UiMetrics.caption
                                     }
                                 }
                                 RowLayout {
                                     Layout.fillWidth: true
                                     ColumnLayout {
                                         Layout.fillWidth: true; spacing: 1
-                                        Label { text: modelData.meta; color: cyan; font.pixelSize: 9; elide: Text.ElideRight; Layout.fillWidth: true }
-                                        Label { text: modelData.detail; color: muted; font.pixelSize: 9; elide: Text.ElideRight; Layout.fillWidth: true }
+                                        Label { text: modelData.meta; color: cyan; font.pixelSize: UiMetrics.caption; elide: Text.ElideRight; Layout.fillWidth: true }
+                                        Label { text: modelData.detail; color: muted; font.pixelSize: UiMetrics.caption; elide: Text.ElideRight; Layout.fillWidth: true }
                                     }
                                     CockpitButton {
                                         visible: modelData.retryable
@@ -7867,7 +7962,7 @@ ApplicationWindow {
                                     Layout.fillWidth: true
                                     Label {
                                         text: window.t("connections.edframe_title", "ED-FRAME CATALOG SERVER")
-                                        color: cyan; font.pixelSize: 11; font.bold: true
+                                        color: cyan; font.pixelSize: 13; font.bold: true
                                     }
                                     Item { Layout.fillWidth: true }
                                     Label {
@@ -7878,125 +7973,29 @@ ApplicationWindow {
                                                 : cockpit.edFrameCatalogOnline
                                                   ? window.t("status.online", "ONLINE")
                                                   : window.t("status.offline", "OFFLINE")
-                                        color: cockpit.edFrameCatalogOnline ? green
-                                               : cockpit.edFrameCatalogBusy ? cyan : orange
-                                        font.pixelSize: 10; font.bold: true
+                                        color: !cockpit.edFrameCatalogEnabled ? muted
+                                               : cockpit.edFrameCatalogBusy ? orange
+                                               : cockpit.edFrameCatalogOnline ? green : orange
+                                        font.pixelSize: 12; font.bold: true
                                     }
                                 }
-                                Label {
-                                    text: cockpit.edFrameCatalogStatus
-                                    color: textSecondary; wrapMode: Text.WordWrap
+                                CatalogServerOverview {
                                     Layout.fillWidth: true
+                                    stats: cockpit.edFrameCatalogStats
+                                    lastSuccess: cockpit.edFrameCatalogLastSuccess
+                                    marketSync: cockpit.edFrameCatalogSyncStatus
+                                    offerSync: cockpit.edFrameStationOfferSyncStatus
+                                    stateSync: cockpit.edFrameStateFindSyncStatus
+                                    surface: panel
+                                    foreground: textPrimary
+                                    secondary: textSecondary
+                                    accent: cyan
+                                    warning: orange
                                 }
                                 Label {
-                                    visible: cockpit.edFrameCatalogOnline
-                                    text: window.tf(
-                                        "connections.edframe_counts",
-                                        "%1 SYSTEMS · %2 STATIONS · %3 MARKETS · %4 MINING SITES · %5 COMMODITIES",
-                                        [cockpit.edFrameCatalogStats.systems || 0,
-                                         cockpit.edFrameCatalogStats.stations >= 0
-                                           ? cockpit.edFrameCatalogStats.stations : "—",
-                                         cockpit.edFrameCatalogStats.markets || 0,
-                                         cockpit.edFrameCatalogStats.sites || 0,
-                                         cockpit.edFrameCatalogStats.commodities || 0])
-                                    color: textPrimary; font.pixelSize: 9; font.bold: true
-                                    wrapMode: Text.WordWrap; Layout.fillWidth: true
-                                }
-                                Label {
-                                    visible: cockpit.edFrameCatalogOnline
-                                    text: window.tf(
-                                        "connections.edframe_yield_counts",
-                                        "MEASURED YIELD · %1 SAMPLES · %2 SITES · %3 COMMODITIES",
-                                        [cockpit.edFrameCatalogStats.yieldSamples || 0,
-                                         cockpit.edFrameCatalogStats.measuredSites || 0,
-                                         cockpit.edFrameCatalogStats.measuredCommodities || 0])
-                                    color: textPrimary; font.pixelSize: 9; font.bold: true
-                                    wrapMode: Text.WordWrap; Layout.fillWidth: true
-                                }
-                                Label {
-                                    visible: cockpit.edFrameCatalogOnline
-                                    text: window.tf(
-                                        "connections.edframe_state_counts",
-                                        "STATE FINDS · %1 CURRENT BGS SNAPSHOTS · %2 LIVE SIGNALS",
-                                        [cockpit.edFrameCatalogStats.stateBgsSnapshots || 0,
-                                         cockpit.edFrameCatalogStats.stateSignals || 0])
-                                    color: textPrimary; font.pixelSize: 9; font.bold: true
-                                    wrapMode: Text.WordWrap; Layout.fillWidth: true
-                                }
-                                Label {
-                                    visible: cockpit.edFrameCatalogOnline
-                                    text: window.tf(
-                                        "connections.edframe_offer_counts",
-                                        "STATION OFFERS · %1 OUTFITTING STATIONS · %2 SHIPYARDS · %3 MODULES · %4 PRICED · %5 SHIPS · %6 PRICED",
-                                        [cockpit.edFrameCatalogStats.outfittingStations || 0,
-                                         cockpit.edFrameCatalogStats.shipyardStations || 0,
-                                         cockpit.edFrameCatalogStats.moduleOffers || 0,
-                                         cockpit.edFrameCatalogStats.pricedModuleOffers || 0,
-                                         cockpit.edFrameCatalogStats.shipOffers || 0,
-                                         cockpit.edFrameCatalogStats.pricedShipOffers || 0])
-                                    color: textPrimary; font.pixelSize: 9; font.bold: true
-                                    wrapMode: Text.WordWrap; Layout.fillWidth: true
-                                }
-                                Label {
-                                    visible: cockpit.edFrameCatalogOnline
-                                    text: window.tf(
-                                        "connections.edframe_reference_counts",
-                                        "REFERENCE CATALOG · %1 MODULE DEFINITIONS · %2 SHIPS",
-                                        [cockpit.edFrameCatalogStats.catalogModules || 0,
-                                         cockpit.edFrameCatalogStats.catalogShips || 0])
-                                    color: textPrimary; font.pixelSize: 9; font.bold: true
-                                    wrapMode: Text.WordWrap; Layout.fillWidth: true
-                                }
-                                Label {
-                                    visible: cockpit.edFrameCatalogEnabled
-                                    text: window.t(
-                                        "connections.edframe_offline_sync",
-                                        "OFFLINE CATALOG")
-                                          + " · " + cockpit.edFrameCatalogSyncStatus
-                                    color: cockpit.edFrameCatalogSyncBusy ? cyan : textSecondary
-                                    font.pixelSize: 9; font.bold: true
-                                    wrapMode: Text.WordWrap; Layout.fillWidth: true
-                                }
-                                Label {
-                                    visible: cockpit.edFrameCatalogEnabled
-                                    text: window.t(
-                                        "connections.edframe_station_offer_sync",
-                                        "STATION OFFERS")
-                                          + " · " + cockpit.edFrameStationOfferSyncStatus
-                                    color: cockpit.edFrameStationOfferSyncBusy ? cyan : textSecondary
-                                    font.pixelSize: 9; font.bold: true
-                                    wrapMode: Text.WordWrap; Layout.fillWidth: true
-                                }
-                                Label {
-                                    visible: cockpit.edFrameCatalogEnabled
-                                    text: window.t(
-                                        "connections.edframe_state_sync",
-                                        "STATE FINDS")
-                                          + " · " + cockpit.edFrameStateFindSyncStatus
-                                    color: cockpit.edFrameStateFindSyncBusy ? cyan : textSecondary
-                                    font.pixelSize: 9; font.bold: true
-                                    wrapMode: Text.WordWrap; Layout.fillWidth: true
-                                }
-                                Label {
-                                    visible: cockpit.edFrameCatalogOnline
-                                    text: window.tf(
-                                        "connections.edframe_completeness",
-                                        "COMMODITY DETAILS %1% · STATION TYPE %2% · LANDING PAD %3% · SERVICES %4%",
-                                        [cockpit.edFrameCatalogStats.marketDetailPercent || 0,
-                                         cockpit.edFrameCatalogStats.stationTypePercent >= 0
-                                           ? cockpit.edFrameCatalogStats.stationTypePercent : "—",
-                                         cockpit.edFrameCatalogStats.stationLandingPadPercent >= 0
-                                           ? cockpit.edFrameCatalogStats.stationLandingPadPercent : "—",
-                                         cockpit.edFrameCatalogStats.stationServicesPercent >= 0
-                                           ? cockpit.edFrameCatalogStats.stationServicesPercent : "—"])
-                                    color: muted; font.pixelSize: 9
-                                    wrapMode: Text.WordWrap; Layout.fillWidth: true
-                                }
-                                Label {
-                                    visible: Boolean(cockpit.edFrameCatalogLastSuccess)
-                                    text: window.t("connections.edframe_last_success", "LAST SUCCESS")
-                                          + " · " + cockpit.edFrameCatalogLastSuccess
-                                    color: muted; font.pixelSize: 9; font.bold: true
+                                    visible: !cockpit.edFrameCatalogOnline
+                                    text: cockpit.edFrameCatalogStatus
+                                    color: orange; font.pixelSize: 13
                                     wrapMode: Text.WordWrap; Layout.fillWidth: true
                                 }
                                 RowLayout {
@@ -8037,18 +8036,33 @@ ApplicationWindow {
                                 }
                                 Label {
                                     Layout.fillWidth: true
-                                    text: window.t(
-                                        "connections.edframe_share_yield_privacy",
-                                        "Only public system, ring, timestamp, commodity and percentage data is sent. Commander name, cargo and Journal path are never included.")
-                                    color: muted; font.pixelSize: 9
+                                    text: window.t("connections.edframe_share_yield_privacy", "Only public system, ring, timestamp, commodity and percentage data is sent. Commander name, cargo and Journal path are never included.")
+                                    color: muted; font.pixelSize: 12
                                     wrapMode: Text.WordWrap
                                 }
                                 Label {
                                     Layout.fillWidth: true
                                     text: cockpit.edFrameYieldUploadStatus
-                                    color: cockpit.edFrameYieldUploadBusy ? cyan : textSecondary
-                                    font.pixelSize: 9; font.bold: true
+                                    color: cockpit.edFrameYieldUploadBusy ? orange : textSecondary
+                                    font.pixelSize: 12; font.bold: true
                                     wrapMode: Text.WordWrap
+                                }
+                                CheckBox {
+                                    Layout.fillWidth: true
+                                    text: window.t("signals.share", "Share public Journal signal sightings with remaining lifetime")
+                                    checked: cockpit.edFrameSignalSharingEnabled
+                                    onToggled: cockpit.setEdFrameSignalSharingEnabled(checked)
+                                }
+                                Label {
+                                    Layout.fillWidth: true; wrapMode: Text.WordWrap
+                                    text: window.t("signals.privacy", "Off by default. Only system, coordinates, signal type, public faction/state, timestamp and lifetime are sent. No Commander name, ship, cargo or Journal path. EDDN stays unchanged.")
+                                    color: muted; font.pixelSize: UiMetrics.caption
+                                }
+                                Label {
+                                    Layout.fillWidth: true
+                                    text: window.t("signals.upload_" + String(cockpit.edFrameSignalUploadStatus || "Ready").replace(" ", "_"), String(cockpit.edFrameSignalUploadStatus || ""))
+                                    color: cockpit.edFrameSignalSharingEnabled ? cyan : muted
+                                    font.pixelSize: UiMetrics.caption
                                 }
                                 CheckBox {
                                     Layout.fillWidth: true
@@ -8063,14 +8077,14 @@ ApplicationWindow {
                                     text: window.t(
                                         "connections.edframe_share_ship_prices_privacy",
                                         "Only public station, module/ship identifier, observed price, timestamp and the applicable 2.5% discount amount are sent. Commander name and Journal path are never included. Rank is never included.")
-                                    color: muted; font.pixelSize: 9
+                                    color: muted; font.pixelSize: 12
                                     wrapMode: Text.WordWrap
                                 }
                                 Label {
                                     Layout.fillWidth: true
                                     text: cockpit.edFrameStationPriceUploadStatus
-                                    color: cockpit.edFrameStationPriceUploadBusy ? cyan : textSecondary
-                                    font.pixelSize: 9; font.bold: true
+                                    color: cockpit.edFrameStationPriceUploadBusy ? orange : textSecondary
+                                    font.pixelSize: 12; font.bold: true
                                     wrapMode: Text.WordWrap
                                 }
                                 Rectangle {
@@ -8083,7 +8097,7 @@ ApplicationWindow {
                                         anchors.fill: parent; anchors.margins: 10; spacing: 3
                                         Label {
                                             text: window.t("connections.edframe_log", "RECENT SERVER ACTIVITY")
-                                            color: muted; font.pixelSize: 9; font.bold: true
+                                            color: muted; font.pixelSize: 12; font.bold: true
                                         }
                                         Repeater {
                                             model: Math.min(5, cockpit.edFrameCatalogLog.length)
@@ -8091,8 +8105,8 @@ ApplicationWindow {
                                                 required property int index
                                                 Layout.fillWidth: true
                                                 text: String(cockpit.edFrameCatalogLog[index] || "")
-                                                color: textSecondary; font.pixelSize: 9
-                                                elide: Text.ElideRight
+                                                color: textSecondary; font.pixelSize: 12
+                                                wrapMode: Text.WordWrap
                                             }
                                         }
                                     }
@@ -8111,12 +8125,12 @@ ApplicationWindow {
                                 anchors.fill: parent; anchors.margins: 14; spacing: 7
                                 RowLayout {
                                     Layout.fillWidth: true
-                                    Label { text: window.t("connections.catalog_status", "CATALOG STATUS"); color: muted; font.pixelSize: 9; font.bold: true }
+                                    Label { text: window.t("connections.catalog_status", "CATALOG STATUS"); color: muted; font.pixelSize: UiMetrics.caption; font.bold: true }
                                     Item { Layout.fillWidth: true }
                                     Label {
                                         text: cockpit.spanshCatalogSyncBusy ? window.t("status.updating", "UPDATING…") : window.t("status.ready", "READY")
-                                        color: cockpit.spanshCatalogSyncBusy ? cyan : green
-                                        font.pixelSize: 10; font.bold: true
+                                        color: cockpit.spanshCatalogSyncBusy ? orange : green
+                                        font.pixelSize: UiMetrics.caption; font.bold: true
                                     }
                                 }
                                 Label {
@@ -8126,7 +8140,7 @@ ApplicationWindow {
                                 Label {
                                     visible: Boolean(cockpit.spanshLastRefresh)
                                     text: window.t("connections.spansh_last_refresh", "LAST REFRESH STARTED") + " · " + cockpit.spanshLastRefresh
-                                    color: muted; font.pixelSize: 9; font.bold: true
+                                    color: muted; font.pixelSize: UiMetrics.caption; font.bold: true
                                 }
                             }
                         }
@@ -8144,7 +8158,7 @@ ApplicationWindow {
                                     Layout.fillWidth: true
                                     Label {
                                         text: window.t("connections.catalog_status", "CATALOG STATUS")
-                                        color: muted; font.pixelSize: 9; font.bold: true
+                                        color: muted; font.pixelSize: UiMetrics.caption; font.bold: true
                                     }
                                     Item { Layout.fillWidth: true }
                                     Label {
@@ -8154,10 +8168,10 @@ ApplicationWindow {
                                                  ? window.t("status.ready", "READY")
                                                  : window.t("connections.not_loaded", "NOT LOADED"))
                                         color: cockpit.miningPowerplaySyncBusy
-                                               ? cyan
+                                               ? orange
                                                : (cockpit.miningPowerplaySystemCount > 0
                                                   ? green : orange)
-                                        font.pixelSize: 10; font.bold: true
+                                        font.pixelSize: UiMetrics.caption; font.bold: true
                                     }
                                 }
                                 Label {
@@ -8172,14 +8186,14 @@ ApplicationWindow {
                                             "connections.edsm_system_links",
                                             "%1 POWERPLAY SYSTEM LINKS",
                                             [cockpit.miningPowerplaySystemCount])
-                                        color: textPrimary; font.pixelSize: 9; font.bold: true
+                                        color: textPrimary; font.pixelSize: UiMetrics.caption; font.bold: true
                                     }
                                     Item { Layout.fillWidth: true }
                                     Label {
                                         visible: Boolean(cockpit.miningPowerplayLastRefresh)
                                         text: window.t("connections.edsm_last_refresh", "LAST SUCCESS")
                                               + " · " + cockpit.miningPowerplayLastRefresh
-                                        color: muted; font.pixelSize: 9; font.bold: true
+                                        color: muted; font.pixelSize: UiMetrics.caption; font.bold: true
                                     }
                                 }
                             }
@@ -8203,7 +8217,7 @@ ApplicationWindow {
                                 checked: cockpit.spanshAutoRefresh
                                 onToggled: cockpit.setSpanshAutoRefresh(checked, Number(spanshIntervalBox.currentValue))
                             }
-                            Label { text: window.t("connections.every", "EVERY"); color: muted; font.pixelSize: 9; font.bold: true }
+                            Label { text: window.t("connections.every", "EVERY"); color: muted; font.pixelSize: UiMetrics.caption; font.bold: true }
                             ComboBox {
                                 id: spanshIntervalBox
                                 Layout.preferredWidth: 150
@@ -8241,7 +8255,7 @@ ApplicationWindow {
                             visible: connectionsPage.connectionMode === 6
                             text: cockpit.miningMarketSyncStatus
                             color: cockpit.miningMarketSyncBusy ? cyan : muted
-                            wrapMode: Text.WordWrap; Layout.fillWidth: true; font.pixelSize: 10
+                            wrapMode: Text.WordWrap; Layout.fillWidth: true; font.pixelSize: UiMetrics.caption
                         }
                         CockpitButton {
                             visible: connectionsPage.connectionMode === 6
@@ -8314,7 +8328,7 @@ ApplicationWindow {
                     Layout.fillWidth: true; Layout.preferredHeight: 92
                     ColumnLayout {
                         anchors.fill: parent; anchors.margins: 15
-                        Label { text: modelData.label; color: muted; font.pixelSize: 10; font.bold: true }
+                        Label { text: modelData.label; color: muted; font.pixelSize: UiMetrics.caption; font.bold: true }
                         Label { text: modelData.value; color: modelData.tone; font.pixelSize: 19; font.bold: true; elide: Text.ElideRight; Layout.fillWidth: true }
                     }
                 }
@@ -8357,9 +8371,9 @@ ApplicationWindow {
                         delegate: RowLayout {
                             required property var modelData
                             Layout.fillWidth: true
-                            Label { text: modelData.name; color: muted; font.pixelSize: 10; font.bold: true; Layout.preferredWidth: 70 }
-                            Label { text: modelData.status; color: modelData.healthy ? green : orange; font.pixelSize: 10; font.bold: true; Layout.preferredWidth: 70 }
-                            Label { text: modelData.detail; color: textSecondary; font.pixelSize: 9; elide: Text.ElideRight; Layout.fillWidth: true }
+                            Label { text: modelData.name; color: muted; font.pixelSize: UiMetrics.caption; font.bold: true; Layout.preferredWidth: 70 }
+                            Label { text: modelData.status; color: modelData.healthy ? green : orange; font.pixelSize: UiMetrics.caption; font.bold: true; Layout.preferredWidth: 70 }
+                            Label { text: modelData.detail; color: textSecondary; font.pixelSize: UiMetrics.caption; elide: Text.ElideRight; Layout.fillWidth: true }
                         }
                     }
                     Label {
@@ -8379,7 +8393,7 @@ ApplicationWindow {
                         Layout.fillWidth: true
                             Label { text: window.t("diagnostics.local_log", "LOCAL LOG"); color: textPrimary; font.pixelSize: 13; font.bold: true }
                         Item { Layout.fillWidth: true }
-                            Label { text: window.tf("diagnostics.lines", "%1 LINES", [cockpit.diagnosticLogs.length]); color: muted; font.pixelSize: 10 }
+                            Label { text: window.tf("diagnostics.lines", "%1 LINES", [cockpit.diagnosticLogs.length]); color: muted; font.pixelSize: UiMetrics.caption }
                                 CockpitButton { text: window.t("diagnostics.clear_log", "CLEAR LOG"); helpText: window.t("diagnostics.clear_log_help", "Delete the local diagnostic log"); onClicked: cockpit.clearDiagnosticLog() }
                     }
                     ListView {
@@ -8392,7 +8406,7 @@ ApplicationWindow {
                             required property string modelData
                             width: diagnosticLogList.width
                             text: modelData
-                            color: textSecondary; font.family: "Consolas"; font.pixelSize: 10
+                            color: textSecondary; font.family: "Consolas"; font.pixelSize: UiMetrics.caption
                             wrapMode: Text.WrapAnywhere
                         }
                         onCountChanged: positionViewAtEnd()
@@ -8405,7 +8419,7 @@ ApplicationWindow {
                               ? cockpit.crashReports.map(function(row) { return row.name }).join(" · ")
                               : "No captured Python crash reports."
                         color: cockpit.crashReports.length ? orange : green
-                        font.pixelSize: 10; wrapMode: Text.WordWrap
+                        font.pixelSize: UiMetrics.caption; wrapMode: Text.WordWrap
                     }
                 }
             }
@@ -8420,11 +8434,11 @@ ApplicationWindow {
                     Layout.fillWidth: true
                     Label { text: window.t("diagnostics.interface_activity", "INTERFACE ACTIVITY"); color: textPrimary; font.pixelSize: 13; font.bold: true }
                     Item { Layout.fillWidth: true }
-                    Label { text: window.tf("diagnostics.interface_activity_count", "%1 EVENTS", [cockpit.interfaceActivity.length]); color: muted; font.pixelSize: 10 }
+                    Label { text: window.tf("diagnostics.interface_activity_count", "%1 EVENTS", [cockpit.interfaceActivity.length]); color: muted; font.pixelSize: UiMetrics.caption }
                 }
                 Label {
                     text: window.t("diagnostics.interface_activity_help", "What was actually sent to or received from INARA, EDDN and the Frontier Companion API, and when.")
-                    color: textSecondary; font.pixelSize: 10; wrapMode: Text.WordWrap; Layout.fillWidth: true
+                    color: textSecondary; font.pixelSize: UiMetrics.caption; wrapMode: Text.WordWrap; Layout.fillWidth: true
                 }
                 ListView {
                     id: interfaceActivityList
@@ -8442,15 +8456,15 @@ ApplicationWindow {
                                 text: modelData.service
                                 color: modelData.service === "INARA" ? cyan
                                        : modelData.service === "EDDN" ? green : orange
-                                font.pixelSize: 10; font.bold: true; Layout.preferredWidth: 100
+                                font.pixelSize: UiMetrics.caption; font.bold: true; Layout.preferredWidth: 100
                             }
-                            Label { text: modelData.direction; color: muted; font.pixelSize: 9; Layout.preferredWidth: 60 }
-                            Label { text: modelData.summary; color: textPrimary; font.pixelSize: 10; Layout.preferredWidth: 140; elide: Text.ElideRight }
+                            Label { text: modelData.direction; color: muted; font.pixelSize: UiMetrics.caption; Layout.preferredWidth: 60 }
+                            Label { text: modelData.summary; color: textPrimary; font.pixelSize: UiMetrics.caption; Layout.preferredWidth: 140; elide: Text.ElideRight }
                             Label {
                                 text: Qt.formatDateTime(new Date(modelData.timestamp), "dd.MM.yyyy · HH:mm:ss")
-                                color: textSecondary; font.pixelSize: 9; Layout.preferredWidth: 150
+                                color: textSecondary; font.pixelSize: UiMetrics.caption; Layout.preferredWidth: 150
                             }
-                            Label { text: modelData.detail; color: muted; font.pixelSize: 9; elide: Text.ElideRight; Layout.fillWidth: true }
+                            Label { text: modelData.detail; color: muted; font.pixelSize: UiMetrics.caption; elide: Text.ElideRight; Layout.fillWidth: true }
                         }
                     }
                     EmptyState {
@@ -8536,7 +8550,7 @@ ApplicationWindow {
             ColumnLayout {
                 Layout.fillWidth: true
                 spacing: 2
-                    Label { text: window.t("common.commander_update", "COMMANDER UPDATE"); color: cyan; font.pixelSize: 9; font.bold: true }
+                    Label { text: window.t("common.commander_update", "COMMANDER UPDATE"); color: cyan; font.pixelSize: UiMetrics.caption; font.bold: true }
                 Label {
                     Layout.fillWidth: true
                     text: window.feedbackMessage
@@ -8545,7 +8559,7 @@ ApplicationWindow {
                     elide: Text.ElideRight
                 }
             }
-            Label { text: "F1"; color: muted; font.pixelSize: 9 }
+            Label { text: "F1"; color: muted; font.pixelSize: UiMetrics.caption }
         }
     }
 
@@ -8600,7 +8614,7 @@ ApplicationWindow {
             }
             RowLayout {
                 Layout.fillWidth: true
-                    Label { text: window.t("dialog.import.target_ship", "TARGET SHIP"); color: orange; font.pixelSize: 10; font.bold: true }
+                    Label { text: window.t("dialog.import.target_ship", "TARGET SHIP"); color: orange; font.pixelSize: UiMetrics.caption; font.bold: true }
                 CockpitComboBox {
                     id: buildImportTarget
                     Layout.fillWidth: true
@@ -8632,7 +8646,7 @@ ApplicationWindow {
                     placeholderText: window.t("import.placeholder", "Drop a .json file here, or paste Coriolis JSON / EDSY-SLEF / embedded-data link")
                     wrapMode: TextEdit.NoWrap
                     font.family: "Consolas"
-                    font.pixelSize: 10
+                    font.pixelSize: UiMetrics.caption
                     selectByMouse: true
                     persistentSelection: true
                     onTextChanged: {
@@ -8664,7 +8678,7 @@ ApplicationWindow {
                     color: cockpit.buildImportPreview.compatible
                            && cockpit.buildImportPreview.status === "COMPLETE"
                            ? green : orange
-                    font.pixelSize: 10; font.bold: true
+                    font.pixelSize: UiMetrics.caption; font.bold: true
                 }
                 Item { Layout.fillWidth: true }
                 Label {
@@ -8674,7 +8688,7 @@ ApplicationWindow {
                           + ((cockpit.buildImportPreview.partial || 0) > 0
                              ? " · " + cockpit.buildImportPreview.partial + " PARTIAL" : "")
                     color: (cockpit.buildImportPreview.partial || 0) > 0 ? orange : cyan
-                    font.pixelSize: 10; font.bold: true
+                    font.pixelSize: UiMetrics.caption; font.bold: true
                 }
             }
             ListView {
@@ -8701,7 +8715,7 @@ ApplicationWindow {
                         anchors.fill: parent; anchors.margins: 10; spacing: 2
                         RowLayout {
                             Layout.fillWidth: true
-                            Label { text: modelData.slot; color: cyan; font.pixelSize: 10; font.bold: true }
+                            Label { text: modelData.slot; color: cyan; font.pixelSize: UiMetrics.caption; font.bold: true }
                             Label { text: modelData.module; color: textPrimary; font.pixelSize: 11; Layout.fillWidth: true; elide: Text.ElideRight }
                             Label {
                                 text: modelData.status === "ready"
@@ -8714,7 +8728,7 @@ ApplicationWindow {
                                       : modelData.status === "partial" ? window.t("import.partial", "PARTIAL")
                                       : window.localizedStatus(modelData.status)
                                 color: modelData.status === "ready" ? green : orange
-                                font.pixelSize: 10; font.bold: true
+                                font.pixelSize: UiMetrics.caption; font.bold: true
                             }
                         }
                         Label {
@@ -8729,7 +8743,7 @@ ApplicationWindow {
                                        + (modelData.experimental ? " · " + modelData.experimental : "")
                                        + " · " + modelData.detail
                                      : modelData.detail)
-                            color: muted; font.pixelSize: 10; elide: Text.ElideRight
+                            color: muted; font.pixelSize: UiMetrics.caption; elide: Text.ElideRight
                         }
                     }
                 }
@@ -8746,7 +8760,7 @@ ApplicationWindow {
                     id: buildImportWarnings
                     anchors.fill: parent; anchors.margins: 10
                     text: (cockpit.buildImportPreview.warnings || []).join("\n")
-                    color: orange; font.pixelSize: 10; wrapMode: Text.WordWrap
+                    color: orange; font.pixelSize: UiMetrics.caption; wrapMode: Text.WordWrap
                     elide: Text.ElideRight; maximumLineCount: 5
                 }
             }
@@ -8755,7 +8769,7 @@ ApplicationWindow {
                 visible: (cockpit.buildImportPreview.actionMessage || "").length > 0
                 text: cockpit.buildImportPreview.actionMessage || ""
                 color: cockpit.buildImportPreview.actionError ? orange : green
-                font.pixelSize: 10
+                font.pixelSize: UiMetrics.caption
                 wrapMode: Text.WordWrap
             }
             RowLayout {
@@ -8763,7 +8777,7 @@ ApplicationWindow {
                 Label {
                     Layout.fillWidth: true
                     text: window.t("import.safety", "Existing plans stay intact; exact duplicates are skipped. Imported plans stay bound to their target ship, slot, and module until Journal confirms installation.")
-                    color: muted; font.pixelSize: 9; wrapMode: Text.WordWrap
+                    color: muted; font.pixelSize: UiMetrics.caption; wrapMode: Text.WordWrap
                 }
                 CockpitButton {
                     text: window.t("dialog.import.apply", "APPLY TO WISHLIST")
@@ -8796,7 +8810,7 @@ ApplicationWindow {
             Label {
                 text: (cockpit.selectedLogbookEntry.event || "")
                       + " · " + (cockpit.selectedLogbookEntry.timestamp || "")
-                color: cyan; font.pixelSize: 10; font.bold: true
+                color: cyan; font.pixelSize: UiMetrics.caption; font.bold: true
             }
             Label {
                 Layout.fillWidth: true
@@ -8811,12 +8825,12 @@ ApplicationWindow {
                 delegate: RowLayout {
                     required property var modelData
                     Layout.fillWidth: true
-                    Label { text: modelData.label.toUpperCase(); color: orange; font.pixelSize: 9; font.bold: true; Layout.preferredWidth: 130 }
+                    Label { text: modelData.label.toUpperCase(); color: orange; font.pixelSize: UiMetrics.caption; font.bold: true; Layout.preferredWidth: 130 }
                     Label { text: modelData.value; color: textPrimary; font.pixelSize: 11; Layout.fillWidth: true; wrapMode: Text.WordWrap }
                 }
             }
             Rectangle { Layout.fillWidth: true; height: 1; color: borderTone }
-                Label { text: window.t("dialog.logbook.commander_note", "COMMANDER NOTE"); color: orange; font.pixelSize: 10; font.bold: true }
+                Label { text: window.t("dialog.logbook.commander_note", "COMMANDER NOTE"); color: orange; font.pixelSize: UiMetrics.caption; font.bold: true }
             TextArea {
                 id: logbookNoteEditor
                 Layout.fillWidth: true
@@ -8832,7 +8846,7 @@ ApplicationWindow {
                 Layout.fillWidth: true
                 Label {
                     text: logbookNoteEditor.length + " / 500"
-                    color: muted; font.pixelSize: 9
+                    color: muted; font.pixelSize: UiMetrics.caption
                 }
                 Item { Layout.fillWidth: true }
                 CockpitButton {
@@ -8947,7 +8961,7 @@ ApplicationWindow {
                       : window.t("common.journal_paused", "Ⅱ JOURNAL PAUSED")
                       + "   ·   " + (window.enhancedVisuals ? "ENHANCED GPU VISUALS" : "FLAT VISUALS")
                 color: cockpit.journalAuto ? green : orange
-                font.pixelSize: 10
+                font.pixelSize: UiMetrics.caption
             }
         }
     }
@@ -8985,7 +8999,7 @@ ApplicationWindow {
             }
             Label {
                 text: window.tf("dialog.search.results", "%1 RESULTS", [window.globalResults.length])
-                color: cyan; font.pixelSize: 10; font.bold: true
+                color: cyan; font.pixelSize: UiMetrics.caption; font.bold: true
             }
             ListView {
                 id: globalResultList
@@ -9028,11 +9042,11 @@ ApplicationWindow {
                     }
                     RowLayout {
                         anchors.fill: parent; anchors.margins: 11
-                        Label { text: modelData.kind; color: cyan; font.pixelSize: 9; font.bold: true; Layout.preferredWidth: 75 }
+                        Label { text: modelData.kind; color: cyan; font.pixelSize: UiMetrics.caption; font.bold: true; Layout.preferredWidth: 75 }
                         ColumnLayout {
                             Layout.fillWidth: true; spacing: 2
                             Label { text: modelData.title; color: textPrimary; font.pixelSize: 13; font.bold: true }
-                            Label { text: modelData.detail; color: muted; font.pixelSize: 10; elide: Text.ElideRight; Layout.fillWidth: true }
+                            Label { text: modelData.detail; color: muted; font.pixelSize: UiMetrics.caption; elide: Text.ElideRight; Layout.fillWidth: true }
                         }
                     }
                 }
@@ -9066,7 +9080,7 @@ ApplicationWindow {
             Rectangle { Layout.fillWidth: true; height: 1; color: borderTone }
             RowLayout {
                 Layout.fillWidth: true
-                    Label { text: window.t("dialog.about.developer", "DEVELOPER"); color: muted; font.pixelSize: 10; font.bold: true }
+                    Label { text: window.t("dialog.about.developer", "DEVELOPER"); color: muted; font.pixelSize: UiMetrics.caption; font.bold: true }
                 Item { Layout.fillWidth: true }
                 Label { text: "CMDR Forcer"; color: textPrimary; font.pixelSize: 13; font.bold: true }
             }
@@ -9112,7 +9126,7 @@ ApplicationWindow {
                 Layout.fillWidth: true
                 text: window.t("about.disclaimer", "ED-Frame is a third-party tool and is not affiliated with Frontier Developments. Elite Dangerous is a trademark of Frontier Developments plc.")
                 color: muted
-                font.pixelSize: 10
+                font.pixelSize: UiMetrics.caption
                 wrapMode: Text.WordWrap
             }
         }
@@ -9272,7 +9286,7 @@ ApplicationWindow {
                                                         ? "HEURISTIC"
                                                         : "DERIVED"
                                                 color: modelData.verified ? green : muted
-                                                font.pixelSize: 9; font.bold: true
+                                                font.pixelSize: UiMetrics.caption; font.bold: true
                                             }
                                             CockpitButton {
                                                 visible: !!modelData.system

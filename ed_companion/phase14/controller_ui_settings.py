@@ -381,6 +381,7 @@ class UiSettingsMixin:
             "edframe_yield_sharing_enabled": getattr(
                 self, "_edframe_yield_sharing_enabled", False
             ),
+            "edframe_signal_sharing_enabled": getattr(self, "_edframe_signal_sharing_enabled", False),
             "edframe_station_price_sharing_enabled": getattr(
                 self, "_edframe_station_price_sharing_enabled", False
             ),

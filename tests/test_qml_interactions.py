@@ -130,7 +130,7 @@ class QmlInteractionContractTests(unittest.TestCase):
 
         self.assertIn("property bool financeHasAssets", source)
         self.assertIn(
-            "property real plotRight: commanderPage.financeHasAssets ? 72 : 18",
+            "property real plotRight: commanderPage.financeHasAssets ? 90 : 18",
             source,
         )
         self.assertGreaterEqual(
@@ -240,8 +240,12 @@ class QmlInteractionContractTests(unittest.TestCase):
         for path in QML_FILES:
             source = path.read_text(encoding="utf-8-sig")
             for offset, block in qml_blocks(
-                source, r"\b(?:CockpitButton|Button)\s*\{"
+                source, r"\b(?:CockpitButton|Button|ServiceButton|CommodityButton)\s*\{"
             ):
+                # Inline component declarations define a type, not an instance.
+                # Actual ServiceButton instances are checked above as well.
+                if re.search(r"\bcomponent\s+\w+\s*:\s*$", source[:offset]):
+                    continue
                 # This is the reusable CockpitButton component definition,
                 # not an actionable instance.
                 if (

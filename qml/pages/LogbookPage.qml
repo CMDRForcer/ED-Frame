@@ -1,4 +1,5 @@
 import QtQuick
+import "../components/UiMetrics.js" as UiMetrics
 import QtQuick.Controls
 import QtQuick.Layouts
 import "../components"
@@ -89,9 +90,17 @@ ColumnLayout {
                             border.width: 1
                             border.color: borderTone
                             ColumnLayout {
-                                anchors.centerIn: parent
+                                anchors.fill: parent
+                                anchors.margins: 6
                                 spacing: 1
-                                Label { text: modelData[0]; color: muted; font.pixelSize: 8; font.bold: true }
+                                Label {
+                                    Layout.fillWidth: true; Layout.minimumWidth: 0
+                                    text: modelData[0]; color: muted; font.pixelSize: UiMetrics.caption; font.bold: true
+                                    elide: Text.ElideRight
+                                    ToolTip.text: text
+                                    ToolTip.visible: metricHover.hovered && truncated
+                                    HoverHandler { id: metricHover }
+                                }
                                 Label { text: modelData[1]; color: textPrimary; font.pixelSize: 12; font.bold: true }
                             }
                         }
@@ -133,7 +142,7 @@ ColumnLayout {
                             Label {
                                 text: (modelData.start || "").slice(0, 10)
                                 color: orange
-                                font.pixelSize: 9
+                                font.pixelSize: UiMetrics.caption
                                 font.bold: true
                             }
                             Label {
@@ -141,7 +150,7 @@ ColumnLayout {
                                       + " · " + modelData.fsdJumps + " jumps"
                                       + " · " + Number(modelData.distanceLy || 0).toFixed(1) + " ly"
                                 color: textSecondary
-                                font.pixelSize: 9
+                                font.pixelSize: UiMetrics.caption
                                 Layout.fillWidth: true
                                 elide: Text.ElideRight
                             }
@@ -152,7 +161,7 @@ ColumnLayout {
                         visible: parent.count === 0
                         text: appWindow.t("logbook.no_history", "No completed sessions stored yet.")
                         color: muted
-                        font.pixelSize: 10
+                        font.pixelSize: UiMetrics.caption
                     }
                 }
             }
@@ -162,7 +171,18 @@ ColumnLayout {
         Layout.fillWidth: true
         spacing: 10
         TextField {
+            id: logbookSearch
             Layout.fillWidth: true
+            Layout.minimumWidth: 0
+            Layout.preferredHeight: UiMetrics.controlHeight
+            font.pixelSize: UiMetrics.body
+            color: textPrimary; placeholderTextColor: muted
+            leftPadding: 16; rightPadding: 16
+            background: Rectangle {
+                radius: UiMetrics.controlRadius; color: appWindow.inputBackground
+                border.width: logbookSearch.activeFocus ? 2 : 1
+                border.color: logbookSearch.activeFocus ? cyan : borderTone
+            }
             placeholderText: appWindow.t("logbook.search", "Search system, station, blueprint, material or ship…")
             onTextChanged: cockpit.setLogbookQuery(text)
         }
@@ -175,7 +195,7 @@ ColumnLayout {
         Label {
                 text: appWindow.tf("logbook.entry_count", "%1 ENTRIES", [cockpit.logbookEntries.length])
             color: cyan
-            font.pixelSize: 10
+            font.pixelSize: UiMetrics.caption
             font.bold: true
         }
     }
@@ -222,19 +242,19 @@ ColumnLayout {
                         ColumnLayout {
                             anchors.centerIn: parent
                             spacing: 1
-                            Label { text: modelData.category; color: cyan; font.pixelSize: 8; font.bold: true }
-                            Label { text: modelData.event; color: textPrimary; font.pixelSize: 9; font.bold: true }
+                            Label { text: modelData.category; color: cyan; font.pixelSize: UiMetrics.caption; font.bold: true }
+                            Label { text: modelData.event; color: textPrimary; font.pixelSize: UiMetrics.caption; font.bold: true }
                         }
                     }
                     ColumnLayout {
                         Layout.fillWidth: true
                         spacing: 3
                         Label { text: modelData.title; color: textPrimary; font.pixelSize: 13; font.bold: true; Layout.fillWidth: true; elide: Text.ElideRight }
-                        Label { text: modelData.summary || appWindow.t("logbook.journal_event", "Journal event"); color: muted; font.pixelSize: 10; Layout.fillWidth: true; elide: Text.ElideRight }
+                        Label { text: modelData.summary || appWindow.t("logbook.journal_event", "Journal event"); color: muted; font.pixelSize: UiMetrics.caption; Layout.fillWidth: true; elide: Text.ElideRight }
                         Label {
                             text: [modelData.system, modelData.station, modelData.ship].filter(function(value) { return !!value }).join(" · ")
                             color: green
-                            font.pixelSize: 9
+                            font.pixelSize: UiMetrics.caption
                             Layout.fillWidth: true
                             elide: Text.ElideRight
                         }
@@ -242,7 +262,7 @@ ColumnLayout {
                             visible: !!modelData.note
                             text: appWindow.tf("logbook.note_label", "NOTE · %1", [modelData.note || ""])
                             color: orange
-                            font.pixelSize: 9
+                            font.pixelSize: UiMetrics.caption
                             font.bold: true
                             Layout.fillWidth: true
                             elide: Text.ElideRight
@@ -251,8 +271,8 @@ ColumnLayout {
                     ColumnLayout {
                         Layout.preferredWidth: 92
                         spacing: 2
-                        Label { text: modelData.date; color: muted; font.pixelSize: 9 }
-                        Label { text: modelData.time + " UTC"; color: orange; font.pixelSize: 9; font.bold: true }
+                        Label { text: modelData.date; color: muted; font.pixelSize: UiMetrics.caption }
+                        Label { text: modelData.time + " UTC"; color: orange; font.pixelSize: UiMetrics.caption; font.bold: true }
                     }
                 }
             }

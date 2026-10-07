@@ -2,11 +2,13 @@ from __future__ import annotations
 
 import hashlib
 import json
+from math import isfinite
 from datetime import datetime, timedelta, timezone
 from typing import Any, Iterable
 
 from ed_companion.navigation.mining_commodities import mining_commodity_id
 from ed_companion.navigation.mining_finder import project_eddn_mining_candidates
+from ed_companion.navigation.mining_powerplay import project_powerplay_observations
 from ed_companion.navigation.hge import (
     extract_signal_finds,
     extract_system_bgs_snapshot,
@@ -15,6 +17,29 @@ from ed_companion.navigation.hge import (
 
 def utc_now() -> str:
     return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+
+
+def project_powerplay_snapshot(payload: dict[str, Any], received_at: str):
+    """Anonymous explicit control facts; never derive control from presence."""
+    if schema_name(payload) != "journal/1":
+        return None
+    rows = project_powerplay_observations(payload, received_at)
+    if not rows:
+        return None
+    row = rows[0]
+    observed = _timestamp(row.get("observedAt"))
+    if observed is None or observed > datetime.now(timezone.utc) + timedelta(minutes=5):
+        return None
+    coords = row["coordinates"] or [None, None, None]
+    if any(value is not None and not isfinite(value) for value in coords):
+        return None
+    return {
+        "identity": row["system"].casefold(),
+        "system_name": row["system"], "system_address": row["systemAddress"] or None,
+        "x": coords[0], "y": coords[1], "z": coords[2],
+        "observed_at": observed.isoformat(), "received_at": received_at,
+        "facts": json.dumps(rows),
+    }
 
 
 def schema_name(payload: dict[str, Any]) -> str:
@@ -717,5 +742,32 @@ def project_state_signals(
             "received_at": received_at,
             "expires_at": expires.isoformat(),
             "observation": json.dumps(observation),
+        })
+    return result
+
+
+def project_state_sightings(payload: dict[str, Any], received_at: str):
+    """Retain supported FSS sightings without claiming an active lifetime."""
+    received = _timestamp(received_at) or datetime.now(timezone.utc)
+    result = []
+    for observation in extract_signal_finds(payload, received_at):
+        observed = _timestamp(observation.get("signal_timestamp"))
+        if observed is None or observed > received + timedelta(minutes=2):
+            continue
+        if received - observed > timedelta(hours=24):
+            continue
+        identity = "|".join((
+            _state_identity(observation.get("system_address"), observation.get("system")),
+            str(observation.get("find_type") or ""),
+            str(observation.get("faction") or "").casefold(),
+            str(observation.get("state") or "").casefold(),
+            str(observation.get("intensity") or ""),
+        ))
+        observation = {**observation, "time_remaining": 0, "lifetime_verified": False}
+        result.append({
+            "identity": hashlib.sha256(identity.encode("utf-8")).hexdigest(),
+            "system_address": observation.get("system_address"),
+            "system_name": observation["system"], "observed_at": observed.isoformat(),
+            "received_at": received_at, "observation": json.dumps(observation),
         })
     return result

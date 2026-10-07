@@ -1,4 +1,6 @@
 import QtQuick
+import "../components/UiMetrics.js" as UiMetrics
+import "../components/PresentationLabels.js" as PresentationLabels
 import QtQuick.Controls
 import QtQuick.Layouts
 import "../components"
@@ -93,13 +95,13 @@ Item {
     function accessColor(row) {
         var tone = String((row || {}).accessTone || "UNKNOWN")
         if (tone === "CONFIRMED" || tone === "OPEN") return green
-        if (tone === "LOCKED") return appWindow.red || "#ff586f"
+        if (tone === "LOCKED") return appWindow.error
         return orange
     }
     function purchaseColor(row) {
         var tone = String((row || {}).purchaseTone || "OPEN")
         if (tone === "CONFIRMED" || tone === "OPEN") return green
-        if (tone === "LOCKED") return appWindow.red || "#ff586f"
+        if (tone === "LOCKED") return appWindow.error
         return orange
     }
     function priceColor(row) {
@@ -320,8 +322,8 @@ Item {
         property bool selected: false
         property color tone: finder.orange
         onClicked: {}
-        implicitHeight: 38
-        font.pixelSize: 11
+        implicitHeight: UiMetrics.controlHeight
+        font.pixelSize: UiMetrics.body
         font.bold: true
         contentItem: Label {
             text: control.text
@@ -332,7 +334,7 @@ Item {
             elide: Text.ElideRight
         }
         background: Rectangle {
-            radius: 7
+            radius: UiMetrics.controlRadius
             color: control.selected ? control.tone
                   : control.hovered ? appWindow.hover : inputBackground
             border.width: control.selected ? 0 : 1
@@ -394,7 +396,7 @@ Item {
             Label {
                 text: cockpit.shipyardFinderStatus || ""
                 color: cockpit.shipyardFinderBusy ? cyan : muted
-                font.pixelSize: 10
+                font.pixelSize: UiMetrics.caption
                 font.bold: true
                 elide: Text.ElideLeft
                 Layout.maximumWidth: Math.max(220, finder.width * 0.43)
@@ -420,7 +422,7 @@ Item {
                         text: finder.mode === "MODULES"
                               ? appWindow.t("shipyard.find_module", "FIND MODULE")
                               : appWindow.t("shipyard.find_ship", "FIND SHIP")
-                        color: cyan; font.pixelSize: 9; font.bold: true
+                        color: cyan; font.pixelSize: UiMetrics.caption; font.bold: true
                     }
                     TextField {
                         id: searchField
@@ -505,7 +507,7 @@ Item {
                                                     ? [modelData.sizeRating || appWindow.t("common.unknown", "UNKNOWN"),
                                                        modelData.mount || "", modelData.purchaseStatus || "ACQUISITION UNKNOWN"].filter(Boolean).join(" · ")
                                                     : [modelData.manufacturer || "", modelData.size || ""].filter(Boolean).join(" · ")
-                                                color: muted; font.pixelSize: 9; elide: Text.ElideRight
+                                                color: muted; font.pixelSize: UiMetrics.caption; elide: Text.ElideRight
                                             }
                                         }
                                     }
@@ -520,7 +522,7 @@ Item {
 
                 ColumnLayout {
                     Layout.fillWidth: true; spacing: 4
-                    Label { text: appWindow.t("shipyard.start_system", "START SYSTEM"); color: muted; font.pixelSize: 9; font.bold: true }
+                    Label { text: appWindow.t("shipyard.start_system", "START SYSTEM"); color: muted; font.pixelSize: UiMetrics.caption; font.bold: true }
                     TextField {
                         id: originField
                         Layout.fillWidth: true; text: finder.originSystem
@@ -537,7 +539,7 @@ Item {
                 }
                 ColumnLayout {
                     Layout.fillWidth: true; spacing: 4
-                    Label { text: appWindow.t("shipyard.range_pad", "RANGE / PAD"); color: muted; font.pixelSize: 9; font.bold: true }
+                    Label { text: appWindow.t("shipyard.range_pad", "RANGE / PAD"); color: muted; font.pixelSize: UiMetrics.caption; font.bold: true }
                     RowLayout {
                         Layout.fillWidth: true; spacing: 6
                         CockpitComboBox {
@@ -555,7 +557,7 @@ Item {
                 }
                 ColumnLayout {
                     Layout.fillWidth: true; spacing: 4
-                    Label { text: appWindow.t("shipyard.access_filter", "ACCESS"); color: muted; font.pixelSize: 9; font.bold: true }
+                    Label { text: appWindow.t("shipyard.access_filter", "ACCESS"); color: muted; font.pixelSize: UiMetrics.caption; font.bold: true }
                     CockpitComboBox {
                         Layout.fillWidth: true
                         model: ["ALL · SHOW LOCKED", "ACCESSIBLE ONLY"]
@@ -589,22 +591,28 @@ Item {
                             : finder.moduleFamilyKey === ""
                               ? "OUTFITTING · SELECT A SHIP SLOT"
                               : appWindow.t("shipyard.shop_variants", "OUTFITTING · SELECT CLASS / RATING / MOUNT")
-                        color: cyan; font.pixelSize: 9; font.bold: true
+                        color: cyan; font.pixelSize: UiMetrics.caption; font.bold: true
                     }
                     Item { Layout.fillWidth: true }
                     Label {
                         text: appWindow.t("shipyard.catalog_help", "CLICK A TILE TO SELECT")
-                        color: muted; font.pixelSize: 8; font.bold: true
+                        color: muted; font.pixelSize: UiMetrics.caption; font.bold: true
                     }
                 }
-                RowLayout {
+                Flow {
+                    objectName: "qa-outfitting-category-flow"
                     visible: finder.mode === "MODULES"
-                    Layout.fillWidth: true; spacing: 8
+                    Layout.fillWidth: true
+                    Layout.preferredHeight: implicitHeight
+                    spacing: 8
                     Label {
+                        height: 42
+                        verticalAlignment: Text.AlignVCenter
                         text: finder.currentShipName || "SHIP UNKNOWN"
                         color: textPrimary; font.pixelSize: 12; font.bold: true
                     }
                     CheckBox {
+                        height: 42
                         text: appWindow.t("shipyard.follow_current", "Follow current ship")
                         checked: finder.fitCurrentShip
                         onToggled: {
@@ -616,14 +624,13 @@ Item {
                         model: ["HARDPOINTS", "UTILITY", "CORE", "OPTIONAL", "MINING", "TECH BROKER", "POWERPLAY"]
                         delegate: FinderButton {
                             required property var modelData
-                            Layout.preferredWidth: 110; Layout.preferredHeight: 30
-                            text: String(modelData)
+                            width: Math.max(126, implicitWidth); height: UiMetrics.controlHeight
+                            text: PresentationLabels.label(appWindow, modelData)
                             selected: finder.moduleGroup === String(modelData)
                             tone: cyan
                             onClicked: finder.selectModuleGroup(modelData)
                         }
                     }
-                    Item { Layout.fillWidth: true }
                 }
                 RowLayout {
                     visible: finder.mode === "MODULES" && finder.moduleGroup === "TECH BROKER"
@@ -648,7 +655,9 @@ Item {
                     Layout.fillWidth: true; Layout.fillHeight: true; spacing: 9
 
                     Rectangle {
-                        Layout.preferredWidth: 390; Layout.fillHeight: true
+                        Layout.preferredWidth: Math.min(390, finder.width * 0.32)
+                        Layout.minimumWidth: 180
+                        Layout.fillHeight: true
                         color: "transparent"; clip: true
                         ColumnLayout {
                             anchors.fill: parent; spacing: 6
@@ -659,7 +668,7 @@ Item {
                                     : finder.fitCurrentShip && finder.currentShipFitKnown
                                     ? "SELECT SLOT" : finder.fitCurrentShip
                                       ? "BROWSE CATEGORIES · SLOTS UNKNOWN" : "BROWSE CATEGORIES"
-                                color: cyan; font.pixelSize: 8; font.bold: true
+                                color: cyan; font.pixelSize: UiMetrics.caption; font.bold: true
                             }
                             ListView {
                                 visible: ["MINING", "TECH BROKER", "POWERPLAY"].indexOf(finder.moduleGroup) >= 0 || !finder.fitCurrentShip || !finder.currentShipFitKnown
@@ -676,7 +685,7 @@ Item {
                                     tone: orange
                                     onClicked: finder.selectModuleFamily(modelData)
                                     ToolTip.visible: hovered
-                                    ToolTip.text: String(modelData.purchaseStatus || "ACQUISITION UNKNOWN")
+                                    ToolTip.text: PresentationLabels.label(appWindow, modelData.purchaseStatus || "ACQUISITION UNKNOWN")
                                         + " · " + String(modelData.purchaseReason || "")
                                 }
                             }
@@ -715,7 +724,7 @@ Item {
                                             Label {
                                                 Layout.fillWidth: true
                                                 text: appWindow.tf("shipyard.slot_class", "CLASS %1", [String(slotControl.modelData.slotBadge || "—")])
-                                                color: textSecondary; font.pixelSize: 10; elide: Text.ElideRight
+                                                color: textSecondary; font.pixelSize: UiMetrics.caption; elide: Text.ElideRight
                                             }
                                         }
                                         Rectangle {
@@ -730,14 +739,14 @@ Item {
                                                 anchors.fill: parent; anchors.margins: 8; anchors.topMargin: 25
                                                 text: slotControl.modelData.empty ? "Empty slot"
                                                     : String(slotControl.modelData.module || "Unknown module")
-                                                color: textSecondary; font.pixelSize: 10
+                                                color: textSecondary; font.pixelSize: UiMetrics.caption
                                                 wrapMode: Text.WordWrap
                                                 verticalAlignment: Text.AlignVCenter
                                             }
                                             Label {
                                                 anchors.right: parent.right; anchors.top: parent.top; anchors.margins: 5
                                                 text: slotControl.modelData.engineered ? "ENG" : ""
-                                                color: orange; font.pixelSize: 9
+                                                color: orange; font.pixelSize: UiMetrics.caption
                                             }
                                         }
                                     }
@@ -768,7 +777,7 @@ Item {
                                     text: finder.moduleFamilyKey === ""
                                         ? finder.moduleGroup + " › " + (finder.selectedSlot.slot ? finder.slotLabel(finder.selectedSlot) : "MODULE TYPES")
                                         : finder.moduleGroup + " › " + String(finder.selectedItem.moduleFamily || searchField.text || "")
-                                    color: orange; font.pixelSize: 10; font.bold: true
+                                    color: orange; font.pixelSize: UiMetrics.caption; font.bold: true
                                     elide: Text.ElideRight
                                 }
                                 Label {
@@ -776,7 +785,7 @@ Item {
                                     text: finder.moduleFamilyKey === ""
                                         ? appWindow.tf("shipyard.family_count", "%1 MODULE FAMILIES", [finder.moduleFamilyRows().length])
                                         : appWindow.tf("shipyard.variant_count", "%1 COMPATIBLE VARIANTS", [finder.moduleVariantRows().length])
-                                    color: muted; font.pixelSize: 7; font.bold: true
+                                    color: muted; font.pixelSize: UiMetrics.caption; font.bold: true
                                 }
                                 Label {
                                     Layout.fillWidth: true
@@ -787,7 +796,7 @@ Item {
                                         + (finder.selectedSlot.engineered ? " · ENGINEERED (CURRENT ONLY)" : "")
                                         + " · CHECK RESULTS IN COMPARISON"
                                         + (finder.selectedSlot.restriction ? " · " + finder.selectedSlot.restriction : "")
-                                    color: green; font.pixelSize: 9; wrapMode: Text.WordWrap
+                                    color: green; font.pixelSize: UiMetrics.caption; wrapMode: Text.WordWrap
                                 }
                             }
                             CockpitComboBox {
@@ -867,7 +876,7 @@ Item {
                                         Label {
                                             Layout.fillWidth: true
                                             text: String(modelData.moduleFamily || "MODULE")
-                                            color: textPrimary; font.pixelSize: 10; font.bold: true
+                                            color: textPrimary; font.pixelSize: UiMetrics.caption; font.bold: true
                                             elide: Text.ElideRight
                                         }
                                         Label {
@@ -875,7 +884,7 @@ Item {
                                             text: [modelData.classLabel || "",
                                                    appWindow.tf("shipyard.module_variants", "%1 VARIANTS", [Number(modelData.variantCount || 0)])]
                                                   .filter(Boolean).join(" · ")
-                                            color: orange; font.pixelSize: 8; font.bold: true
+                                            color: orange; font.pixelSize: UiMetrics.caption; font.bold: true
                                             elide: Text.ElideRight
                                         }
                                         Label {
@@ -884,13 +893,13 @@ Item {
                                                 ? appWindow.tf("shipyard.compatible_variants", "%1 FIT CURRENT SHIP",
                                                                [Number(modelData.compatibleVariantCount || 0)])
                                                 : String(modelData.mountLabel || modelData.moduleGroupLabel || "")
-                                            color: finder.fitCurrentShip ? green : muted; font.pixelSize: 7
+                                            color: finder.fitCurrentShip ? green : muted; font.pixelSize: UiMetrics.caption
                                             elide: Text.ElideRight
                                         }
                                         Label {
                                             Layout.fillWidth: true
-                                            text: String(modelData.purchaseStatus || "ACQUISITION UNKNOWN")
-                                            color: finder.purchaseColor(modelData); font.pixelSize: 8
+                                            text: PresentationLabels.label(appWindow, modelData.purchaseStatus || "ACQUISITION UNKNOWN")
+                                            color: finder.purchaseColor(modelData); font.pixelSize: UiMetrics.caption
                                             elide: Text.ElideRight
                                         }
                                     }
@@ -922,10 +931,10 @@ Item {
                             spacing: 6
                             header: RowLayout {
                                 width: moduleVariantGrid.width; height: 30; spacing: 8
-                                Label { Layout.preferredWidth: 60; text: appWindow.t("shipyard.compare_class", "CLASS"); color: muted; font.pixelSize: 9 }
-                                Label { Layout.fillWidth: true; text: appWindow.t("shipyard.compare_module", "MODULE / MOUNT / ACQUISITION"); color: muted; font.pixelSize: 9 }
-                                Label { Layout.preferredWidth: 150; text: appWindow.t("shipyard.compare_fit", "INSTALLATION CHECK"); color: muted; font.pixelSize: 9 }
-                                Label { Layout.preferredWidth: 120; text: appWindow.t("shipyard.compare_reference", "REFERENCE · NOT STATION"); color: muted; font.pixelSize: 9; wrapMode: Text.WordWrap }
+                                Label { Layout.preferredWidth: 60; text: appWindow.t("shipyard.compare_class", "CLASS"); color: muted; font.pixelSize: UiMetrics.caption }
+                                Label { Layout.fillWidth: true; text: appWindow.t("shipyard.compare_module", "MODULE / MOUNT / ACQUISITION"); color: muted; font.pixelSize: UiMetrics.caption }
+                                Label { Layout.preferredWidth: 150; text: appWindow.t("shipyard.compare_fit", "INSTALLATION CHECK"); color: muted; font.pixelSize: UiMetrics.caption }
+                                Label { Layout.preferredWidth: 120; text: appWindow.t("shipyard.compare_reference", "REFERENCE · NOT STATION"); color: muted; font.pixelSize: UiMetrics.caption; wrapMode: Text.WordWrap }
                             }
                             model: finder.moduleVariantRows()
                             ScrollBar.vertical: CockpitScrollBar {}
@@ -969,13 +978,13 @@ Item {
                                             Layout.fillWidth: true
                                             text: [modelData.mount || "",
                                                    modelData.moduleGroupLabel || ""].filter(Boolean).join(" · ")
-                                            color: muted; font.pixelSize: 7
+                                            color: muted; font.pixelSize: UiMetrics.caption
                                             elide: Text.ElideRight
                                         }
                                         Label {
                                             Layout.fillWidth: true
-                                            text: String(modelData.purchaseStatus || "ACQUISITION UNKNOWN")
-                                            color: finder.purchaseColor(modelData); font.pixelSize: 8
+                                            text: PresentationLabels.label(appWindow, modelData.purchaseStatus || "ACQUISITION UNKNOWN")
+                                            color: finder.purchaseColor(modelData); font.pixelSize: UiMetrics.caption
                                             elide: Text.ElideRight
                                         }
                                     }
@@ -987,10 +996,10 @@ Item {
                                         Label {
                                             Layout.fillWidth: true
                                             text: parent.fitStatus === "FITS" ? appWindow.t("shipyard.fit_yes", "FITS SLOT") : parent.fitStatus === "INCOMPATIBLE" ? appWindow.t("shipyard.fit_no", "DOES NOT FIT") : appWindow.t("shipyard.fit_unknown", "NOT VERIFIED")
-                                            color: parent.fitStatus === "FITS" ? (appWindow.green || "#69e1b5") : parent.fitStatus === "INCOMPATIBLE" ? (appWindow.red || "#ff586f") : orange
-                                            font.pixelSize: 10; font.bold: true; elide: Text.ElideRight
+                                            color: parent.fitStatus === "FITS" ? (appWindow.green || "#69e1b5") : parent.fitStatus === "INCOMPATIBLE" ? appWindow.error : orange
+                                            font.pixelSize: UiMetrics.caption; font.bold: true; elide: Text.ElideRight
                                         }
-                                        Label { Layout.fillWidth: true; text: appWindow.t("shipyard.compare_power", "POWER · SEE DETAILS"); color: muted; font.pixelSize: 8 }
+                                        Label { Layout.fillWidth: true; text: appWindow.t("shipyard.compare_power", "POWER · SEE DETAILS"); color: muted; font.pixelSize: UiMetrics.caption }
                                     }
                                     Label {
                                         Layout.preferredWidth: 120
@@ -1028,7 +1037,7 @@ Item {
                         color: panelRaised
                         border.width: catalogTile.rankLocked ? 2 : 1
                         border.color: catalogTile.rankLocked
-                                      ? (appWindow.red || "#ff586f")
+                                      ? appWindow.error
                                       : String(modelData.symbol || "") === finder.selectedSymbol
                                         ? orange : borderTone
                         ToolTip.visible: catalogMouse.containsMouse
@@ -1068,7 +1077,7 @@ Item {
                                     Label {
                                         Layout.fillWidth: true
                                         text: String(modelData.mount || modelData.moduleGroupLabel || "")
-                                        color: muted; font.pixelSize: 8; font.bold: true
+                                        color: muted; font.pixelSize: UiMetrics.caption; font.bold: true
                                         horizontalAlignment: Text.AlignHCenter
                                         elide: Text.ElideRight
                                     }
@@ -1079,7 +1088,7 @@ Item {
                                 Layout.fillWidth: true
                                 text: String(modelData.displayName || modelData.moduleFamily || modelData.symbol || "")
                                 color: String(modelData.symbol || "") === finder.selectedSymbol ? orange : textPrimary
-                                font.pixelSize: 10; font.bold: true
+                                font.pixelSize: UiMetrics.caption; font.bold: true
                                 horizontalAlignment: Text.AlignHCenter; elide: Text.ElideRight
                             }
                             Label {
@@ -1087,7 +1096,7 @@ Item {
                                 text: finder.mode === "SHIPS"
                                     ? String(modelData.manufacturer || modelData.size || "")
                                     : [modelData.sizeRating || "", modelData.mount || ""].filter(Boolean).join(" · ")
-                                color: muted; font.pixelSize: 8
+                                color: muted; font.pixelSize: UiMetrics.caption
                                 horizontalAlignment: Text.AlignHCenter; elide: Text.ElideRight
                             }
                             Label {
@@ -1097,15 +1106,15 @@ Item {
                                     ? "REFERENCE · " + finder.formatNumber(modelData.referencePrice) + " CR"
                                     : appWindow.t("shipyard.price_unknown", "PRICE UNKNOWN")
                                 color: Number(modelData.referencePrice || 0) > 0 ? orange : muted
-                                font.pixelSize: 9; font.bold: true
+                                font.pixelSize: UiMetrics.caption; font.bold: true
                                 horizontalAlignment: Text.AlignHCenter; elide: Text.ElideRight
                             }
                             Label {
                                 Layout.fillWidth: true
                                 visible: finder.mode === "SHIPS"
-                                text: String(modelData.purchaseStatus || "OPEN")
+                                text: PresentationLabels.label(appWindow, modelData.purchaseStatus || "OPEN")
                                 color: finder.purchaseColor(modelData)
-                                font.pixelSize: 8; font.bold: true
+                                font.pixelSize: UiMetrics.caption; font.bold: true
                                 horizontalAlignment: Text.AlignHCenter; elide: Text.ElideRight
                             }
                         }
@@ -1141,7 +1150,7 @@ Item {
                                 text: finder.mode === "SHIPS"
                                     ? appWindow.t("shipyard.selected_ship", "SELECTED SHIP")
                                     : appWindow.t("shipyard.selected_module", "SELECTED MODULE")
-                                color: cyan; font.pixelSize: 9; font.bold: true
+                                color: cyan; font.pixelSize: UiMetrics.caption; font.bold: true
                             }
                             Rectangle {
                                 Layout.fillWidth: true; Layout.preferredHeight: 178
@@ -1165,7 +1174,7 @@ Item {
                                     }
                                     Label {
                                         Layout.fillWidth: true
-                                        text: String(finder.selectedItem.moduleGroupLabel || "SELECT A SHOP CATEGORY")
+                                        text: PresentationLabels.label(appWindow, finder.selectedItem.moduleGroupLabel || "SELECT A SHOP CATEGORY")
                                         color: cyan; font.pixelSize: 11; font.bold: true
                                         horizontalAlignment: Text.AlignHCenter
                                     }
@@ -1173,7 +1182,7 @@ Item {
                                         Layout.fillWidth: true
                                         text: [finder.selectedItem.moduleFamily || "",
                                                finder.selectedItem.mount || ""].filter(Boolean).join(" · ")
-                                        color: textSecondary; font.pixelSize: 10
+                                        color: textSecondary; font.pixelSize: UiMetrics.caption
                                         horizontalAlignment: Text.AlignHCenter
                                         elide: Text.ElideRight
                                     }
@@ -1183,7 +1192,7 @@ Item {
                                     anchors.centerIn: parent
                                     visible: !finder.selectedSymbol
                                     text: appWindow.t("shipyard.choose_catalog_item", "CHOOSE AN ITEM FROM THE CATALOG")
-                                    color: muted; font.pixelSize: 10; font.bold: true
+                                    color: muted; font.pixelSize: UiMetrics.caption; font.bold: true
                                 }
                             }
                             Label {
@@ -1207,10 +1216,10 @@ Item {
                                 Label {
                                     id: purchaseExplanation
                                     anchors.fill: parent; anchors.margins: 7
-                                    text: String(finder.selectedItem.purchaseStatus || "ACQUISITION UNKNOWN")
+                                    text: PresentationLabels.label(appWindow, finder.selectedItem.purchaseStatus || "ACQUISITION UNKNOWN")
                                           + " · " + String(finder.selectedItem.purchaseReason || "")
                                     color: finder.purchaseColor(finder.selectedItem)
-                                    font.pixelSize: 8; font.bold: true
+                                    font.pixelSize: UiMetrics.caption; font.bold: true
                                     wrapMode: Text.Wrap; verticalAlignment: Text.AlignVCenter
                                 }
                             }
@@ -1241,8 +1250,8 @@ Item {
                                         radius: 6; color: appWindow.cardRaised
                                         Label {
                                             anchors.fill: parent; anchors.margins: 6
-                                            text: modelData; color: textSecondary
-                                            font.pixelSize: 8; font.bold: true
+                                            text: PresentationLabels.label(appWindow, modelData); color: textSecondary
+                                            font.pixelSize: UiMetrics.caption; font.bold: true
                                             verticalAlignment: Text.AlignVCenter
                                         }
                                     }
@@ -1262,13 +1271,13 @@ Item {
                                 Layout.fillWidth: true
                                 Label {
                                     text: appWindow.t("shipyard.best_stations", "MATCHED STATIONS · ACCESS EXPLAINED")
-                                    color: orange; font.pixelSize: 9; font.bold: true
+                                    color: orange; font.pixelSize: UiMetrics.caption; font.bold: true
                                 }
                                 Item { Layout.fillWidth: true }
                                 Label {
                                     text: appWindow.tf("shipyard.results_count", "%1 RESULTS", [finder.results.length])
                                     color: finder.results.length ? green : muted
-                                    font.pixelSize: 9; font.bold: true
+                                    font.pixelSize: UiMetrics.caption; font.bold: true
                                 }
                             }
                             Rectangle {
@@ -1276,10 +1285,10 @@ Item {
                                 radius: 5; color: inputBackground
                                 RowLayout {
                                     anchors.fill: parent; anchors.leftMargin: 10; anchors.rightMargin: 10
-                                    Label { Layout.fillWidth: true; text: appWindow.t("shipyard.station_system", "STATION / SYSTEM"); color: muted; font.pixelSize: 8; font.bold: true }
-                                    Label { Layout.preferredWidth: 90; text: appWindow.t("shipyard.distance", "DISTANCE"); color: muted; font.pixelSize: 8; font.bold: true }
-                                    Label { Layout.preferredWidth: 124; text: appWindow.t("shipyard.access", "ACCESS"); color: muted; font.pixelSize: 8; font.bold: true }
-                                    Label { Layout.preferredWidth: 105; text: appWindow.t("shipyard.price", "PRICE"); color: muted; font.pixelSize: 8; font.bold: true }
+                                    Label { Layout.fillWidth: true; text: appWindow.t("shipyard.station_system", "STATION / SYSTEM"); color: muted; font.pixelSize: UiMetrics.caption; font.bold: true }
+                                    Label { Layout.preferredWidth: 90; text: appWindow.t("shipyard.distance", "DISTANCE"); color: muted; font.pixelSize: UiMetrics.caption; font.bold: true }
+                                    Label { Layout.preferredWidth: 124; text: appWindow.t("shipyard.access", "ACCESS"); color: muted; font.pixelSize: UiMetrics.caption; font.bold: true }
+                                    Label { Layout.preferredWidth: 105; text: appWindow.t("shipyard.price", "PRICE"); color: muted; font.pixelSize: UiMetrics.caption; font.bold: true }
                                     Item { Layout.preferredWidth: 76 }
                                 }
                             }
@@ -1297,7 +1306,7 @@ Item {
                                            ? Qt.rgba(1.0, 0.20, 0.30, 0.09) : panelRaised
                                     border.width: index === 0 || String(modelData.accessTone || "") === "LOCKED" ? 2 : 1
                                     border.color: String(modelData.accessTone || "") === "LOCKED"
-                                                  ? (appWindow.red || "#ff586f")
+                                                  ? appWindow.error
                                                   : index === 0 ? orange : borderTone
                                     RowLayout {
                                         anchors.fill: parent; anchors.margins: 10; spacing: 10
@@ -1306,7 +1315,7 @@ Item {
                                             Label {
                                                 Layout.fillWidth: true
                                                 text: String(modelData.station || "")
-                                                color: textPrimary; font.pixelSize: 10; font.bold: true
+                                                color: textPrimary; font.pixelSize: UiMetrics.caption; font.bold: true
                                                 elide: Text.ElideRight
                                             }
                                             Label {
@@ -1314,39 +1323,39 @@ Item {
                                                 text: String(modelData.system || "") + " · "
                                                     + String(modelData.stationType || "UNKNOWN") + " · PAD "
                                                     + String(modelData.landingPadSize || "UNKNOWN")
-                                                color: muted; font.pixelSize: 8; elide: Text.ElideRight
+                                                color: muted; font.pixelSize: UiMetrics.caption; elide: Text.ElideRight
                                             }
                                             Label {
                                                 Layout.fillWidth: true
                                                 text: String(modelData.recommendationReason || modelData.reason || "")
                                                 color: String(modelData.accessTone || "") === "LOCKED"
                                                        ? finder.accessColor(modelData) : textSecondary
-                                                font.pixelSize: 8; font.bold: true
+                                                font.pixelSize: UiMetrics.caption; font.bold: true
                                                 elide: Text.ElideRight
                                             }
                                             Label {
                                                 Layout.fillWidth: true
                                                 text: String(modelData.accessReason || modelData.reason || "")
-                                                color: finder.accessColor(modelData); font.pixelSize: 8
+                                                color: finder.accessColor(modelData); font.pixelSize: UiMetrics.caption
                                                 elide: Text.ElideRight
                                             }
                                         }
                                         ColumnLayout {
                                             Layout.preferredWidth: 90; spacing: 2
-                                            Label { text: finder.distanceLabel(modelData); color: textSecondary; font.pixelSize: 9; font.bold: true }
-                                            Label { text: finder.arrivalLabel(modelData); color: muted; font.pixelSize: 8 }
+                                            Label { text: finder.distanceLabel(modelData); color: textSecondary; font.pixelSize: UiMetrics.caption; font.bold: true }
+                                            Label { text: finder.arrivalLabel(modelData); color: muted; font.pixelSize: UiMetrics.caption }
                                         }
                                         Label {
                                             Layout.preferredWidth: 124
-                                            text: String(modelData.accessStatus || "UNKNOWN")
-                                            color: finder.accessColor(modelData); font.pixelSize: 8; font.bold: true
+                                            text: PresentationLabels.label(appWindow, modelData.accessStatus || "UNKNOWN")
+                                            color: finder.accessColor(modelData); font.pixelSize: UiMetrics.caption; font.bold: true
                                             wrapMode: Text.Wrap
                                         }
                                         ColumnLayout {
                                             Layout.preferredWidth: 105; spacing: 2
-                                            Label { text: finder.priceLabel(modelData); color: finder.priceColor(modelData); font.pixelSize: 9; font.bold: true }
-                                            Label { text: String(modelData.priceStatus || "UNKNOWN"); color: finder.priceColor(modelData); font.pixelSize: 8; font.bold: true }
-                                            Label { text: String(modelData.dataAgeLabel || "AGE UNKNOWN"); color: muted; font.pixelSize: 7 }
+                                            Label { text: finder.priceLabel(modelData); color: finder.priceColor(modelData); font.pixelSize: UiMetrics.caption; font.bold: true }
+                                            Label { text: PresentationLabels.label(appWindow, modelData.priceStatus || "UNKNOWN"); color: finder.priceColor(modelData); font.pixelSize: UiMetrics.caption; font.bold: true }
+                                            Label { text: String(modelData.dataAgeLabel || "AGE UNKNOWN"); color: muted; font.pixelSize: UiMetrics.caption }
                                         }
                                         FinderButton {
                                             Layout.preferredWidth: 76
@@ -1386,8 +1395,8 @@ Item {
                             border.width: 1; border.color: borderTone
                             Column {
                                 anchors.fill: parent; anchors.margins: 9; spacing: 3
-                                Label { text: String(modelData.title); color: modelData.tone; font.pixelSize: 8; font.bold: true }
-                                Label { width: parent.width; text: String(modelData.detail); color: textSecondary; font.pixelSize: 8; elide: Text.ElideRight }
+                                Label { text: String(modelData.title); color: modelData.tone; font.pixelSize: UiMetrics.caption; font.bold: true }
+                                Label { width: parent.width; text: String(modelData.detail); color: textSecondary; font.pixelSize: UiMetrics.caption; elide: Text.ElideRight }
                             }
                         }
                     }

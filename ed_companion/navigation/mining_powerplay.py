@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import gzip
 import json
+from math import isfinite
 from datetime import datetime, timezone
 from typing import Any, Iterable
 
@@ -18,6 +19,7 @@ from ed_companion import APP_VERSION
 
 
 POWERPLAY_DUMP_URL = "https://www.edsm.net/dump/powerPlay.json.gz"
+EDFRAME_POWERPLAY_URL = "https://vps-20b25c36.vps.ovh.net/v1/mining/powerplay"
 POWERPLAY_CATALOG_SOURCE = "EDSM daily PowerPlay catalog"
 POWERPLAY_CATALOG_SCHEMA_VERSION = 3
 POWERPLAY_STATES = frozenset({
@@ -27,6 +29,58 @@ POWERPLAY_STATES = frozenset({
 
 class MiningPowerplayError(RuntimeError):
     """A concise, user-displayable Powerplay catalog failure."""
+
+
+def fetch_edframe_powerplay(*, origin: list, max_distance: float, get: Any,
+                           timeout: int = 10, diagnostics: dict | None = None) -> list[dict[str, Any]]:
+    if len(origin or []) != 3:
+        raise MiningPowerplayError("Powerplay query requires coordinates")
+    try:
+        origin = [float(value) for value in origin]
+        if not all(isfinite(value) for value in origin):
+            raise ValueError("Non-finite coordinates")
+    except (TypeError, ValueError) as exc:
+        raise MiningPowerplayError("Invalid Powerplay coordinates") from exc
+    response = get(EDFRAME_POWERPLAY_URL, params={
+        **dict(zip(("x", "y", "z"), origin)),
+        "max_distance": max(1, min(2000, float(max_distance))),
+        "max_age_hours": 24, "limit": 200,
+    }, timeout=timeout)
+    response.raise_for_status()
+    payload = response.json()
+    if not isinstance(payload, dict) or not isinstance(payload.get("results"), list):
+        raise MiningPowerplayError("Invalid server Powerplay response")
+    if diagnostics is not None:
+        diagnostics.update({"bounded": bool(payload.get("hasMore"))})
+    rows = []
+    for source in payload["results"]:
+        if not isinstance(source, dict):
+            continue
+        # Whitelist public fields. An explicit controller must be present;
+        # never trust a claimed CONTROL relationship alone.
+        if not source.get("system") or not source.get("power") or not source.get("observedAt"):
+            continue
+        try:
+            stamp = datetime.fromisoformat(str(source["observedAt"]).replace("Z", "+00:00"))
+            stamp = stamp.replace(tzinfo=timezone.utc) if stamp.tzinfo is None else stamp
+            age = (datetime.now(timezone.utc) - stamp).total_seconds()
+        except ValueError:
+            continue
+        if not -300 <= age <= 24 * 3600 or source.get("powerState") not in POWERPLAY_STATES:
+            continue
+        row = {key: source[key] for key in (
+            "system", "systemAddress", "coordinates", "power", "powerState",
+            "controllingPower", "powers", "observedAt",
+        ) if key in source}
+        controller = str(row.get("controllingPower") or "").strip()
+        row.update({
+            "source": "ED-Frame live catalog · EDDN journal/1",
+            "controlKnown": bool(controller),
+            "powerRelationship": "CONTROL" if controller and controller.casefold()
+                == str(row["power"]).casefold() else "PRESENCE",
+        })
+        rows.append(row)
+    return rows
 
 
 def _coordinates(value: Any) -> list[float]:

@@ -1,4 +1,5 @@
 import QtQuick
+import "../components/UiMetrics.js" as UiMetrics
 import QtQuick.Controls
 import QtQuick.Layouts
 import "../components"
@@ -158,7 +159,7 @@ ColumnLayout {
                                 visible: !!location.controllingPower
                                 text: appWindow.tf("powerplay.controlled", "CONTROLLED BY %1", [location.controllingPower])
                                 color: muted
-                                font.pixelSize: 9
+                                font.pixelSize: UiMetrics.caption
                                 font.bold: true
                             }
                         }
@@ -226,7 +227,7 @@ ColumnLayout {
                                                          : index === 3 ? Text.AlignRight
                                                          : Text.AlignHCenter
                                     color: muted
-                                    font.pixelSize: 9
+                                    font.pixelSize: UiMetrics.caption
                                 }
                             }
                         }
@@ -236,7 +237,7 @@ ColumnLayout {
                         text: appWindow.t("powerplay.control_progress", "CONTROL PROGRESS · ")
                               + Math.round(location.controlProgress * 100) + "%"
                         color: cyan
-                        font.pixelSize: 10
+                        font.pixelSize: UiMetrics.caption
                         font.bold: true
                     }
                     ColumnLayout {
@@ -274,9 +275,9 @@ ColumnLayout {
                         }
                         RowLayout {
                             Layout.fillWidth: true
-                            Label { text: appWindow.t("powerplay.undermining", "UNDERMINING"); color: muted; font.pixelSize: 9 }
+                            Label { text: appWindow.t("powerplay.undermining", "UNDERMINING"); color: muted; font.pixelSize: UiMetrics.caption }
                             Item { Layout.fillWidth: true }
-                            Label { text: appWindow.t("powerplay.reinforcement", "REINFORCEMENT"); color: muted; font.pixelSize: 9 }
+                            Label { text: appWindow.t("powerplay.reinforcement", "REINFORCEMENT"); color: muted; font.pixelSize: UiMetrics.caption }
                         }
                     }
                 }

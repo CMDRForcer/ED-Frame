@@ -1,6 +1,7 @@
 import QtQuick
 import QtQuick.Controls
 import QtQuick.Layouts
+import "UiMetrics.js" as UiMetrics
 
 Item {
     id: header
@@ -15,7 +16,9 @@ Item {
 
     objectName: qaName
     Layout.fillWidth: true
-    Layout.preferredHeight: appWindow.narrowWorkspace ? 104 : 76
+    implicitHeight: Math.max(76, titleColumn.height + 16,
+                             actionRow.y + actionRow.height + 16)
+    Layout.preferredHeight: implicitHeight
 
     Rectangle {
         anchors.left: parent.left
@@ -39,7 +42,7 @@ Item {
             visible: header.eyebrow.length > 0
             text: header.eyebrow
             color: appWindow.accentSecondary
-            font.pixelSize: 9
+            font.pixelSize: UiMetrics.caption
             font.weight: Font.DemiBold
             font.letterSpacing: 1.0
         }
@@ -55,7 +58,9 @@ Item {
             Layout.fillWidth: true
             text: header.subtitle
             color: appWindow.muted
-            font.pixelSize: 11
+            font.pixelSize: UiMetrics.body
+            wrapMode: Text.WordWrap
+            maximumLineCount: 2
             elide: Text.ElideRight
         }
     }

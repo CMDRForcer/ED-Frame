@@ -18,10 +18,13 @@ from .database import (
     ensure_schema,
     upsert_station_offer_batch,
     upsert_yield_observations,
+    upsert_state_find_batch,
+    upsert_signal_systems,
 )
 from .projection import (
     project_station_offer_observations,
     project_yield_observations,
+    project_state_signals,
 )
 
 
@@ -46,6 +49,8 @@ app = FastAPI(
 
 _yield_rate_lock = threading.Lock()
 _yield_rate_buckets: dict[str, list[float]] = {}
+_signal_rate_lock = threading.Lock()
+_signal_rate_buckets: dict[str, list[float]] = {}
 _station_offer_rate_lock = threading.Lock()
 _station_offer_rate_buckets: dict[str, list[float]] = {}
 
@@ -267,7 +272,9 @@ def status() -> dict:
                  WHERE observed_at >= NOW() - INTERVAL '24 hours')
                    AS state_bgs_snapshots,
               (SELECT COUNT(*) FROM state_signals
-                 WHERE expires_at > NOW()) AS state_signals
+                 WHERE expires_at > NOW()) AS state_signals,
+              (SELECT COUNT(*) FROM state_signal_sightings
+                 WHERE observed_at >= NOW() - INTERVAL '24 hours') AS state_signal_sightings
             """
         ).fetchone()
         state = conn.execute(
@@ -726,30 +733,61 @@ def receive_station_offer_observations(
 def sync_state_finds(
     cursor: Annotated[str | None, Query(max_length=512)] = None,
     limit: Annotated[int, Query(ge=1, le=1000)] = 500,
+    x: Annotated[float | None, Query(ge=-1000000, le=1000000)] = None,
+    y: Annotated[float | None, Query(ge=-1000000, le=1000000)] = None,
+    z: Annotated[float | None, Query(ge=-1000000, le=1000000)] = None,
+    max_distance: Annotated[float, Query(gt=0, le=2000)] = 250,
 ) -> dict:
     """Return current public BGS snapshots and unexpired signal sightings."""
     cursor_at, cursor_kind, cursor_identity = _decode_state_cursor(cursor)
+    regional = any(value is not None for value in (x, y, z))
+    if regional and any(value is None for value in (x, y, z)):
+        raise HTTPException(status_code=422, detail="x, y and z must be supplied together")
+    region_clause = ""
+    values = [cursor_at, cursor_kind, cursor_identity]
+    if regional:
+        # EXISTS avoids duplicates even when multiple names share an address.
+        # Missing coordinates are not silently treated as zero-distance systems.
+        region_clause = """
+            AND EXISTS (
+                SELECT 1 FROM systems s
+                WHERE ((current_state.system_address IS NOT NULL
+                        AND s.system_address = current_state.system_address)
+                       OR (current_state.system_address IS NULL
+                           AND LOWER(s.name) = LOWER(current_state.system_name)))
+                  AND POWER(s.x - %s, 2) + POWER(s.y - %s, 2)
+                      + POWER(s.z - %s, 2) <= POWER(%s, 2)
+            )
+        """
+        values.extend((x, y, z, max_distance))
+    values.append(limit + 1)
     with connection() as conn:
         rows = conn.execute(
-            """
+            f"""
             WITH current_state AS (
                 SELECT updated_at AS sync_at, 'BGS'::text AS kind,
-                       identity, snapshot AS payload
+                       identity, snapshot AS payload, system_address, system_name
                 FROM state_bgs_snapshots
                 WHERE observed_at >= NOW() - INTERVAL '24 hours'
                 UNION ALL
                 SELECT updated_at AS sync_at, 'SIGNAL'::text AS kind,
-                       identity, observation AS payload
+                       identity, observation AS payload, system_address, system_name
                 FROM state_signals
                 WHERE expires_at > NOW()
+                UNION ALL
+                SELECT updated_at AS sync_at, 'SIGHTING'::text AS kind,
+                       identity, observation AS payload, system_address, system_name
+                FROM state_signal_sightings
+                WHERE observed_at >= NOW() - INTERVAL '24 hours'
             )
             SELECT sync_at AS "syncAt", kind, identity, payload
             FROM current_state
             WHERE (sync_at, kind, identity) > (%s, %s, %s)
+            {region_clause}
             ORDER BY sync_at, kind, identity
             LIMIT %s
             """,
-            (cursor_at, cursor_kind, cursor_identity, limit + 1),
+            tuple(values),
         ).fetchall()
     has_more = len(rows) > limit
     page = rows[:limit]
@@ -773,6 +811,7 @@ def sync_state_finds(
         "results": results,
         "nextCursor": next_cursor,
         "hasMore": has_more,
+        "region": {"origin": [x, y, z], "radiusLy": max_distance} if regional else None,
     }
 
 
@@ -795,6 +834,52 @@ def suggest_systems(
             (f"{q.strip()}%", q.strip(), limit),
         ).fetchall()
     return {"generatedAt": _now(), "results": rows}
+
+
+@app.post("/v1/state-signals/observations")
+def receive_state_signal_observations(request: Request, payload: dict) -> dict:
+    """Opt-in public Journal signals, strictly allowlisted and rate bounded."""
+    from ed_companion.navigation.signal_sharing import public_signal_observations
+    observations = payload.get("observations")
+    if not isinstance(observations, list) or not 1 <= len(observations) <= 100:
+        raise HTTPException(status_code=422, detail="expected 1 to 100 observations")
+    forwarded = request.headers.get("x-forwarded-for", "").split(",", 1)[0]
+    remote = forwarded.strip() or (request.client.host if request.client else "unknown")
+    now = time.monotonic()
+    with _signal_rate_lock:
+        recent = [stamp for stamp in _signal_rate_buckets.get(remote, []) if now - stamp < 60]
+        if len(recent) >= 6:
+            raise HTTPException(status_code=429, detail="signal request budget exceeded")
+        if len(_signal_rate_buckets) > 4096:
+            _signal_rate_buckets.clear()
+        _signal_rate_buckets[remote] = recent + [now]
+    received = _now()
+    rows = public_signal_observations(observations, now=datetime.now(timezone.utc), local_only=False)
+    projected = []
+    for row in rows:
+        signal = {"timestamp": row["signal_timestamp"], "TimeRemaining": row["time_remaining"],
+                  "SpawningFaction": row["faction"], "SpawningState": row["state"]}
+        if row["find_type"] == "HGE":
+            signal["USSType"] = "$USS_Type_VeryValuableSalvage;"
+        else:
+            signal["SignalName"] = {"CONFLICT_ZONE": "Conflict Zone",
+                                    "SEEKING_MEDS": "$USS_Type_SeekingMeds;",
+                                    "SEEKING_FOODS": "$USS_Type_SeekingFoods;"}[row["find_type"]]
+        frame = {"$schemaRef": "https://eddn.edcd.io/schemas/fsssignaldiscovered/1",
+                 "message": {"StarSystem": row["system"], "SystemAddress": row["system_address"],
+                             "StarPos": row["star_pos"], "signals": [signal]}}
+        for item in project_state_signals(frame, received):
+            observation = json.loads(item["observation"])
+            observation["source"] = "ED-Frame community Journal"
+            observation["lifetime_verified"] = True
+            item["observation"] = json.dumps(observation)
+            projected.append(item)
+    if not projected:
+        raise HTTPException(status_code=422, detail="no valid unexpired public signals")
+    with connection() as conn:
+        upsert_signal_systems(conn, projected)
+        accepted = upsert_state_find_batch(conn, [], projected)
+    return {"receivedAt": received, "accepted": accepted, "rejected": len(observations)-accepted}
 
 
 @app.post("/v1/yields/observations")
@@ -1028,6 +1113,95 @@ def search_markets(
     return {"generatedAt": _now(), "results": rows}
 
 
+@app.get("/v1/catalog/commodities")
+def catalog_commodities() -> dict:
+    # Loose index scan: one indexed step per symbol, not DISTINCT over millions
+    # of market rows. Includes new/special commodities without a static whitelist.
+    with connection() as conn:
+        rows = conn.execute("""
+            WITH RECURSIVE names AS (
+                (SELECT commodity FROM markets ORDER BY commodity LIMIT 1)
+                UNION ALL
+                SELECT (SELECT commodity FROM markets WHERE commodity > names.commodity
+                        ORDER BY commodity LIMIT 1)
+                FROM names WHERE names.commodity IS NOT NULL
+            )
+            SELECT commodity FROM names WHERE commodity IS NOT NULL
+        """).fetchall()
+    return {"generatedAt": _now(), "results": [row["commodity"] for row in rows]}
+
+
+@app.get("/v1/markets/commodity-offers")
+def commodity_offers(
+    commodity: Annotated[str, Query(min_length=2, max_length=80)],
+    direction: Annotated[str, Query(pattern="^(BUY|SELL)$")],
+    x: Annotated[float, Query(ge=-1000000, le=1000000)],
+    y: Annotated[float, Query(ge=-1000000, le=1000000)],
+    z: Annotated[float, Query(ge=-1000000, le=1000000)],
+    max_distance: Annotated[float, Query(gt=0, le=2000)] = 100,
+    min_quantity: Annotated[int, Query(ge=1, le=1000000)] = 1,
+    max_age_hours: Annotated[int, Query(ge=1, le=2160)] = 24,
+    landing_pad: Annotated[str | None, Query(pattern="^(S|M|L)$")] = None,
+    exclude_fleet_carriers: bool = True,
+    limit: Annotated[int, Query(ge=1, le=200)] = 100,
+    commodities: Annotated[str | None, Query(max_length=12000)] = None,
+) -> dict:
+    if direction not in {"BUY", "SELL"}:
+        raise HTTPException(status_code=422, detail="direction must be BUY or SELL")
+    symbols = sorted(set(commodities.strip().lower().split(","))) if commodities else None
+    if symbols is not None and (len(symbols) > 200 or any(
+            not 2 <= len(symbol) <= 80 or not all(c.isalnum() or c == "_" for c in symbol)
+            for symbol in symbols)):
+        raise HTTPException(status_code=422, detail="Invalid commodity group")
+    price, quantity, ordering = (
+        ("buy_price", "stock", "ASC") if direction == "BUY"
+        else ("sell_price", "demand", "DESC")
+    )
+    clauses = [
+        "m.commodity = ANY(%s)" if symbols else "m.commodity = LOWER(%s)", f"m.{price} > 0", f"m.{quantity} >= %s",
+        "m.observed_at >= NOW() - (%s * INTERVAL '1 hour')",
+        "POWER(s.x - %s, 2) + POWER(s.y - %s, 2) + POWER(s.z - %s, 2) <= POWER(%s, 2)",
+    ]
+    values = [x, y, z, symbols or commodity.strip(), min_quantity, max_age_hours, x, y, z, max_distance]
+    if landing_pad:
+        clauses.append("st.landing_pad_size = ANY(%s)")
+        values.append({"S": ["S", "M", "L"], "M": ["M", "L"], "L": ["L"]}[landing_pad])
+    if exclude_fleet_carriers:
+        clauses.append("st.fleet_carrier IS NOT TRUE")
+    values.append(limit + 1)
+    with connection() as conn:
+        rows = conn.execute(f"""
+            SELECT m.market_id AS "marketId", m.commodity,
+                   COALESCE(NULLIF(st.station_name, ''), m.station_name) AS station,
+                   COALESCE(NULLIF(st.system_name, ''), m.system_name) AS system,
+                   m.{price} AS price, m.{quantity} AS quantity,
+                   m.buy_price AS "buyPrice", m.sell_price AS "sellPrice", m.mean_price AS "meanPrice",
+                   m.stock, m.demand, m.observed_at AS "observedAt", m.source,
+                   st.landing_pad_size AS "landingPadSize",
+                   st.distance_to_arrival_ls AS "distanceToArrivalLs",
+                   st.station_type AS "stationType", st.fleet_carrier AS "fleetCarrier",
+                   st.carrier_docking_access AS "carrierDockingAccess", st.prohibited,
+                   SQRT(POWER(s.x - %s, 2) + POWER(s.y - %s, 2) + POWER(s.z - %s, 2)) AS "distanceLy"
+            FROM markets m LEFT JOIN stations st ON st.market_id = m.market_id
+            JOIN LATERAL (
+                SELECT sy.x, sy.y, sy.z FROM systems sy
+                WHERE ((st.system_address IS NOT NULL AND sy.system_address = st.system_address)
+                       OR (st.system_address IS NULL AND LOWER(sy.name) = LOWER(m.system_name)))
+                  AND sy.x IS NOT NULL AND sy.y IS NOT NULL AND sy.z IS NOT NULL
+                ORDER BY sy.observed_at DESC NULLS LAST, sy.name LIMIT 1
+            ) s ON TRUE
+            WHERE {' AND '.join(clauses)}
+            ORDER BY m.{price} {ordering}, "distanceLy", st.distance_to_arrival_ls ASC NULLS LAST, m.market_id
+            LIMIT %s
+        """, tuple(values)).fetchall()
+    return {
+        "generatedAt": _now(), "results": rows[:limit], "hasMore": len(rows) > limit,
+        "direction": direction, "commodity": commodity.strip().lower(),
+        "commodities": symbols,
+        "region": {"origin": [x, y, z], "radiusLy": max_distance},
+    }
+
+
 @app.get("/v1/stations/search")
 def search_stations(
     system: Annotated[str | None, Query(max_length=100)] = None,
@@ -1079,6 +1253,80 @@ def search_stations(
             values,
         ).fetchall()
     return {"generatedAt": _now(), "results": rows}
+
+
+@app.get("/v1/stations/nearby")
+def nearby_station_services(
+    x: Annotated[float, Query(ge=-1000000, le=1000000)],
+    y: Annotated[float, Query(ge=-1000000, le=1000000)],
+    z: Annotated[float, Query(ge=-1000000, le=1000000)],
+    service: Annotated[str, Query(min_length=1, max_length=80)],
+    max_distance: Annotated[float, Query(gt=0, le=2000)] = 100,
+    landing_pad: Annotated[str | None, Query(pattern="^(S|M|L)$")] = None,
+    exclude_fleet_carriers: bool = True,
+    limit: Annotated[int, Query(ge=1, le=200)] = 100,
+) -> dict:
+    clauses = [
+        "POWER(s.x - %s, 2) + POWER(s.y - %s, 2) + POWER(s.z - %s, 2) <= POWER(%s, 2)",
+        """EXISTS (SELECT 1 FROM jsonb_array_elements_text(
+            COALESCE(st.services, '[]'::jsonb)) item WHERE LOWER(item) = LOWER(%s))""",
+    ]
+    values = [x, y, z, x, y, z, max_distance, service.strip()]
+    if landing_pad:
+        clauses.append("st.landing_pad_size = ANY(%s)")
+        values.append({"S": ["S", "M", "L"], "M": ["M", "L"], "L": ["L"]}[landing_pad])
+    if exclude_fleet_carriers:
+        clauses.append("st.fleet_carrier IS NOT TRUE")
+    values.append(limit + 1)
+    with connection() as conn:
+        rows = conn.execute(f"""
+            SELECT st.market_id AS "marketId", st.system_name AS system,
+                   st.station_name AS station, st.station_type AS "stationType",
+                   st.landing_pad_size AS "landingPadSize",
+                   st.distance_to_arrival_ls AS "distanceToArrivalLs",
+                   st.services, st.fleet_carrier AS "fleetCarrier",
+                   st.carrier_docking_access AS "carrierDockingAccess",
+                   st.observed_at AS "observedAt", st.source,
+                   SQRT(POWER(s.x - %s, 2) + POWER(s.y - %s, 2)
+                        + POWER(s.z - %s, 2)) AS "distanceLy"
+            FROM stations st
+            JOIN LATERAL (
+                SELECT sy.x, sy.y, sy.z FROM systems sy
+                WHERE ((st.system_address IS NOT NULL AND sy.system_address = st.system_address)
+                       OR (st.system_address IS NULL AND LOWER(sy.name) = LOWER(st.system_name)))
+                  AND sy.x IS NOT NULL AND sy.y IS NOT NULL AND sy.z IS NOT NULL
+                ORDER BY sy.observed_at DESC NULLS LAST, sy.name LIMIT 1
+            ) s ON TRUE
+            WHERE {' AND '.join(clauses)}
+            ORDER BY "distanceLy", st.distance_to_arrival_ls ASC NULLS LAST, st.market_id
+            LIMIT %s
+        """, tuple(values)).fetchall()
+    return {
+        "generatedAt": _now(), "results": rows[:limit], "hasMore": len(rows) > limit,
+        "region": {"origin": [x, y, z], "radiusLy": max_distance},
+    }
+
+
+@app.get("/v1/mining/powerplay")
+def search_mining_powerplay(
+    x: float, y: float, z: float,
+    max_distance: Annotated[float, Query(gt=0, le=2000)] = 250,
+    max_age_hours: Annotated[int, Query(ge=1, le=168)] = 24,
+    limit: Annotated[int, Query(ge=1, le=200)] = 200,
+) -> dict:
+    with connection() as conn:
+        rows = conn.execute("""
+            SELECT facts FROM mining_powerplay
+            WHERE observed_at >= NOW() - (%s * INTERVAL '1 hour')
+              AND POWER(x - %s, 2) + POWER(y - %s, 2)
+                  + POWER(z - %s, 2) <= POWER(%s, 2)
+            ORDER BY observed_at DESC, identity
+            LIMIT %s
+        """, (max_age_hours, x, y, z, max_distance, limit + 1)).fetchall()
+    return {
+        "generatedAt": _now(), "hasMore": len(rows) > limit,
+        "results": [fact for row in rows[:limit] for fact in row["facts"]],
+    }
 
 
 @app.get("/v1/sites/search")

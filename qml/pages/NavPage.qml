@@ -2,6 +2,7 @@ import QtQuick
 import QtQuick.Controls
 import QtQuick.Layouts
 import "../components"
+import "../components/UiMetrics.js" as UiMetrics
 
 ColumnLayout {
     id: navPage
@@ -64,13 +65,47 @@ ColumnLayout {
         eyebrow: appWindow.t("nav.workspace", "NAVIGATION")
         title: appWindow.t("nav.title", "NAV")
         subtitle: appWindow.t("nav.subtitle", "Surface navigation and saved coordinates")
-        statusText: Object.keys(navPage.position).length > 0
+        statusText: appWindow.navCommoditiesOpen ? appWindow.t("commodities.title", "COMMODITIES")
+                    : appWindow.navStationServicesOpen
+                    ? appWindow.t("nav.services.title", "STATION SERVICES")
+                    : Object.keys(navPage.position).length > 0
                     ? appWindow.t("nav.position_live", "SURFACE POSITION")
                     : appWindow.t("nav.position_missing", "POSITION UNAVAILABLE")
-        statusTone: Object.keys(navPage.position).length > 0 ? appWindow.green : appWindow.orange
+        statusTone: appWindow.navStationServicesOpen ? appWindow.accentSecondary
+                    : Object.keys(navPage.position).length > 0 ? appWindow.green : appWindow.orange
     }
 
     RowLayout {
+        Layout.fillWidth: true
+        Button {
+            text: appWindow.t("nav.surface", "SURFACE NAV")
+            highlighted: !appWindow.navStationServicesOpen && !appWindow.navCommoditiesOpen
+            onClicked: { appWindow.navStationServicesOpen = false; appWindow.navCommoditiesOpen = false }
+        }
+        Button {
+            text: appWindow.t("nav.services.title", "STATION SERVICES")
+            highlighted: appWindow.navStationServicesOpen
+            onClicked: { appWindow.navStationServicesOpen = true; appWindow.navCommoditiesOpen = false }
+        }
+        Button {
+            text: appWindow.t("commodities.title", "COMMODITIES")
+            highlighted: appWindow.navCommoditiesOpen
+            onClicked: { appWindow.navStationServicesOpen = false; appWindow.navCommoditiesOpen = true }
+        }
+    }
+    StationServicesSection {
+        Layout.fillWidth: true; Layout.fillHeight: true
+        appWindow: navPage.appWindow
+        visible: appWindow.navStationServicesOpen
+    }
+    CommoditiesSection {
+        Layout.fillWidth: true; Layout.fillHeight: true
+        appWindow: navPage.appWindow
+        visible: appWindow.navCommoditiesOpen
+    }
+
+    RowLayout {
+        visible: !appWindow.navStationServicesOpen && !appWindow.navCommoditiesOpen
         Layout.fillWidth: true
         Button {
             text: navOverlaySettings.visible
@@ -93,6 +128,7 @@ ColumnLayout {
         Item { Layout.fillWidth: true }
     }
     Label {
+        visible: !appWindow.navStationServicesOpen && !appWindow.navCommoditiesOpen
         Layout.fillWidth: true
         text: appWindow.t("nav.overlay_hint", "Floating compass for borderless-windowed play. You can also control it from the tray menu.")
         color: appWindow.muted
@@ -170,6 +206,7 @@ ColumnLayout {
 
     ScrollView {
         id: navScroll
+        visible: !appWindow.navStationServicesOpen && !appWindow.navCommoditiesOpen
         Layout.fillWidth: true
         Layout.fillHeight: true
         clip: true
@@ -243,7 +280,7 @@ ColumnLayout {
                             anchors.bottom: parent.bottom
                             text: appWindow.t("nav.forward", "FORWARD")
                             color: appWindow.muted
-                            font.pixelSize: 10
+                            font.pixelSize: UiMetrics.caption
                             font.bold: true
                         }
                     }
@@ -414,7 +451,7 @@ ColumnLayout {
                                       + navPage.coordinate(modelData.latitude) + ", "
                                       + navPage.coordinate(modelData.longitude)
                                 color: appWindow.muted
-                                font.pixelSize: 10
+                                font.pixelSize: UiMetrics.caption
                                 elide: Text.ElideRight
                             }
                         }

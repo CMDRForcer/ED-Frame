@@ -9,6 +9,10 @@ anonymous public catalog facts ED-Frame can reuse:
   carrier access when the source message supplies those fields;
 - public ring and hotspot observations projected through ED-Frame's existing
   mining evidence contract;
+- explicit public Powerplay state, presence and control from `journal/1`,
+  retained as one latest anonymous snapshot per system. Presence never implies
+  control. The regional Mining API serves observations up to 24 hours old by
+  default; old snapshots remain stored rather than being deleted by age;
 - opt-in, anonymous `ProspectedAsteroid` material percentages from ED-Frame,
   de-duplicated by site, timestamp and material payload so measured yield can
   gradually replace hotspot/reserve estimates for every mining commodity;
@@ -94,6 +98,7 @@ files per service. Mining evidence and system geography are retained.
 - `GET /v1/catalog/ships/suggest?q=ana`
 - `GET /v1/markets/search?commodity=platinum`
 - `GET /v1/sites/search?commodity=platinum`
+- `GET /v1/mining/powerplay?x=0&y=0&z=0&max_distance=100`
 - `GET /v1/sync/markets`
 - `GET /v1/sync/station-offers`
 - `GET /v1/sync/state-finds`
@@ -106,3 +111,45 @@ the same read-only, anonymous contract.
 
 `/v1/status` exposes separate catalog counts plus freshness and completeness
 metrics for market details, station metadata, coordinates and mining evidence.
+
+### Regional State Finds
+
+`GET /v1/sync/state-finds` optionally accepts `x`, `y`, `z` together and
+`max_distance` (default 250 LY, maximum 2000 LY). Both BGS snapshots (24-hour
+window) and unexpired signals are filtered through known system coordinates.
+Missing coordinates are excluded, not interpreted as zero distance.
+The response echoes `region: {origin: [x,y,z], radiusLy: ...}`.
+Clients must reset their cursor whenever this region changes. Omitting all
+coordinates preserves the global endpoint for older clients.
+Regional coverage is not complete galaxy coverage or proof of an active HGE.
+
+### Regional station services
+
+`GET /v1/stations/nearby` requires `x/y/z` and `service` (a public
+StationServices identifier). `max_distance` defaults to 100 LY (max 2000);
+`landing_pad` is the required ship pad: S accepts S/M/L, M accepts M/L,
+L accepts L. Unknown pads are excluded when a requirement is specified.
+Fleet Carriers are excluded by default. Results are ordered by LY distance,
+arrival LS, then MarketID; at most 200 rows with `hasMore` for truncation.
+The API echoes the region and returns observation timestamps and docking
+metadata, not guaranteed commander-specific access or trader/broker subtypes.
+
+### Commodity catalog and station quotes
+
+`GET /v1/catalog/commodities` lists every symbol currently present in `markets`,
+including rare/new/special commodities. An indexed recursive walk avoids a
+full-table DISTINCT over millions of rows. Names/categories are a small client
+reference. The normal trading UI filters out unknown, salvage, nonmarketable,
+mission-reward and mining-only cargo. Rare purchases have their own category.
+The complete API/database inventory is retained for other consumers.
+
+`GET /v1/markets/commodity-offers` requires `commodity`, `direction=BUY|SELL`
+and `x/y/z`. BUY uses `buy_price/stock` ascending; SELL uses
+`sell_price/demand` descending. Nonpositive prices and insufficient quantities
+are excluded; there is no mean-price or reference-price fallback.
+`max_distance` defaults to 100 LY (max 2000), `min_quantity` to 1 (max 1M),
+`max_age_hours` to 24 (max 2160). Pad compatibility and carrier exclusion
+follow the station-services endpoint. Up to 200 rows (`hasMore`), with region,
+timestamp, source, access metadata and all raw price/quantity fields.
+The app requests at most 100 rows manually. No new tables, history retention,
+background commodity polling or third-party live market requests are added.
