@@ -487,9 +487,11 @@ class CockpitController(
         self._spansh_last_refresh = str(
             ui_config.get("spansh_last_refresh") or ""
         )
-        self._edframe_catalog_enabled = bool(
-            ui_config.get("edframe_catalog_enabled", True)
-        )
+        community_enabled = all(bool(ui_config.get(key, True)) for key in (
+            "edframe_catalog_enabled", "edframe_yield_sharing_enabled",
+            "edframe_signal_sharing_enabled", "edframe_station_price_sharing_enabled",
+        ))
+        self._edframe_catalog_enabled = community_enabled
         self._edframe_catalog_busy = False
         self._edframe_catalog_online = False
         self._edframe_catalog_status = (
@@ -502,10 +504,8 @@ class CockpitController(
         )
         self._edframe_catalog_stats = {}
         self._edframe_catalog_log = []
-        self._edframe_yield_sharing_enabled = bool(
-            ui_config.get("edframe_yield_sharing_enabled", False)
-        )
-        self._edframe_signal_sharing_enabled = bool(ui_config.get("edframe_signal_sharing_enabled", False))
+        self._edframe_yield_sharing_enabled = community_enabled
+        self._edframe_signal_sharing_enabled = community_enabled
         self._edframe_signal_upload_busy = False
         self._edframe_signal_uploaded = set()
         self._edframe_signal_upload_status = ""
@@ -526,9 +526,7 @@ class CockpitController(
         self._edframe_yield_uploaded = {
             str(value) for value in uploaded_yields if value
         }
-        self._edframe_station_price_sharing_enabled = bool(
-            ui_config.get("edframe_station_price_sharing_enabled", False)
-        )
+        self._edframe_station_price_sharing_enabled = community_enabled
         self._edframe_station_price_upload_busy = False
         self._edframe_station_price_upload_status = (
             "Ready · anonymous module prices and confirmed ship purchases"

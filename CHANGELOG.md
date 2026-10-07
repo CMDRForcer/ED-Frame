@@ -2,6 +2,34 @@
 
 ## Unreleased
 
+## 1.5.36 — 2026-10-07
+
+### Added
+
+- Catalog-backed commodity and station-service searches, including a separate
+  rare-goods selection and station stock/demand information.
+- Server-backed mining and regional State Finds data, with BGS candidates,
+  supported FSS sightings and lifetime-confirmed signals kept distinct.
+- Public Journal signal sharing without Commander, ship or cargo identifiers.
+
+### Changed
+
+- One master switch each for ED-Frame and EDDN controls reception and public
+  sharing together. New profiles default to enabled; existing explicit opt-outs
+  are preserved and disable the entire corresponding group.
+- Unified page headers, finder controls, status colors and translations, with
+  expanded readable catalog diagnostics and scrollable finance charts.
+
+### Fixed
+
+- Materials-ready empty state reserves its own height and no longer overlaps
+  adjacent Operations content.
+
+### Verification
+
+- 945 application tests passed, including isolated QML smoke tests; 64 catalog
+  server tests passed. A positive real HGE upload remains to be verified.
+
 ## 1.5.35 — 2026-10-06
 
 ### Added

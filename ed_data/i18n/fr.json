@@ -1,4 +1,7 @@
 {
+  "connections.edframe_master": "Utiliser ED-Frame · actualiser le catalogue et partager les observations publiques",
+  "connections.eddn_master": "Utiliser EDDN · recevoir les données et partager les observations publiques",
+  "signals.master_privacy": "Le commutateur ED-Frame contrôle aussi le partage des signaux. Seuls le système public, les coordonnées, le type, la faction/état, la date et la durée restante sont envoyés. Aucun commandant, vaisseau, fret ou chemin du journal.",
   "signals.bgs": "CANDIDATS BGS",
   "signals.bgs_detail": "Relevés actuels des systèmes · dernières 24 h",
   "signals.sightings": "OBSERVATIONS FSS",

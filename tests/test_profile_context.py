@@ -209,7 +209,10 @@ class ProfileContextTests(unittest.TestCase):
                 self.assertTrue(controller._sync_eddn_profile())
             self.assertEqual(controller.profile_context, bravo)
             self.assertEqual(controller.config_dir, bravo.directory)
-            self.assertFalse(controller._eddn_config["consent"])
+            # A new profile defaults to the enabled community master switch.
+            self.assertTrue(controller._eddn_config["consent"])
+            self.assertTrue(controller._eddn_config["upload_enabled"])
+            self.assertTrue(controller._eddn_config["listener_enabled"])
 
             controller.saveEddnConfig(True, True, False)
             prepared = {

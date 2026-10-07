@@ -267,8 +267,8 @@ class EddnMixin:
 
     def _load_eddn_config(self):
         defaults = {
-            "consent": False, "upload_enabled": False,
-            "listener_enabled": False, "retry_failed": True,
+            "consent": True, "upload_enabled": True,
+            "listener_enabled": True, "retry_failed": True,
             "uploader_id": uuid.uuid4().hex,
             "hge_classifier_version": 0,
             "last_success": {}, "station_receipts": {},
@@ -279,6 +279,10 @@ class EddnMixin:
             defaults.update({
                 key: loaded.get(key, defaults[key]) for key in defaults
             })
+        enabled = all(bool(defaults[key]) for key in (
+            "consent", "upload_enabled", "listener_enabled",
+        ))
+        defaults.update(consent=enabled, upload_enabled=enabled, listener_enabled=enabled)
         return defaults
 
 

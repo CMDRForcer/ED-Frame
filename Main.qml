@@ -7678,25 +7678,9 @@ ApplicationWindow {
                     }
                     CheckBox {
                         id: eddnConsentBox
-                        text: window.t("connections.eddn_allow", "Allow this app to contact EDDN")
-                        checked: cockpit.eddnConsent
-                    }
-                    CheckBox {
-                        id: eddnUploadBox
-                        text: window.t("connections.eddn_share", "Share supported new Journal events anonymously")
-                        checked: cockpit.eddnUploadEnabled
-                        enabled: eddnConsentBox.checked
-                    }
-                    CheckBox {
-                        id: eddnListenerBox
-                        text: window.t("connections.eddn_receive", "Receive live State Finds intelligence")
-                        checked: cockpit.eddnListenerEnabled
-                        enabled: eddnConsentBox.checked
-                    }
-                    CockpitButton {
-                        text: window.t("connections.eddn_save", "SAVE EDDN SETTINGS"); selected: true
-                        Layout.fillWidth: true
-                        onClicked: cockpit.saveEddnConfig(eddnConsentBox.checked, eddnUploadBox.checked, eddnListenerBox.checked)
+                        text: window.t("connections.eddn_master", "Use EDDN · receive intelligence and share public observations")
+                        checked: cockpit.eddnConsent && cockpit.eddnUploadEnabled && cockpit.eddnListenerEnabled
+                        onToggled: cockpit.saveEddnConfig(checked, checked, checked)
                     }
                     CockpitButton {
                         text: connectionsPage.eddnDetailsExpanded
@@ -8003,10 +7987,15 @@ ApplicationWindow {
                                     CheckBox {
                                         Layout.fillWidth: true
                                         text: window.t(
-                                            "connections.edframe_enable",
-                                            "Use the ED-Frame server to update the local offline catalog")
-                                        checked: cockpit.edFrameCatalogEnabled
-                                        onToggled: cockpit.setEdFrameCatalogEnabled(checked)
+                                            "connections.edframe_master",
+                                            "Use ED-Frame · update catalog and share public observations")
+                                        checked: cockpit.edFrameCatalogEnabled && cockpit.edFrameYieldSharingEnabled && cockpit.edFrameSignalSharingEnabled && cockpit.edFrameStationPriceSharingEnabled
+                                        onToggled: {
+                                            cockpit.setEdFrameCatalogEnabled(checked)
+                                            cockpit.setEdFrameYieldSharingEnabled(checked)
+                                            cockpit.setEdFrameSignalSharingEnabled(checked)
+                                            cockpit.setEdFrameStationPriceSharingEnabled(checked)
+                                        }
                                     }
                                     CockpitButton {
                                         text: cockpit.edFrameCatalogBusy
@@ -8026,13 +8015,12 @@ ApplicationWindow {
                                         onClicked: cockpit.refreshEdFrameCatalogStatus()
                                     }
                                 }
-                                CheckBox {
+                                Label {
                                     Layout.fillWidth: true
                                     text: window.t(
                                         "connections.edframe_share_yield",
                                         "Share anonymous Prospector yield measurements with the ED-Frame community catalog")
-                                    checked: cockpit.edFrameYieldSharingEnabled
-                                    onToggled: cockpit.setEdFrameYieldSharingEnabled(checked)
+                                    color: textSecondary; wrapMode: Text.WordWrap
                                 }
                                 Label {
                                     Layout.fillWidth: true
@@ -8047,15 +8035,14 @@ ApplicationWindow {
                                     font.pixelSize: 12; font.bold: true
                                     wrapMode: Text.WordWrap
                                 }
-                                CheckBox {
+                                Label {
                                     Layout.fillWidth: true
                                     text: window.t("signals.share", "Share public Journal signal sightings with remaining lifetime")
-                                    checked: cockpit.edFrameSignalSharingEnabled
-                                    onToggled: cockpit.setEdFrameSignalSharingEnabled(checked)
+                                    color: textSecondary; wrapMode: Text.WordWrap
                                 }
                                 Label {
                                     Layout.fillWidth: true; wrapMode: Text.WordWrap
-                                    text: window.t("signals.privacy", "Off by default. Only system, coordinates, signal type, public faction/state, timestamp and lifetime are sent. No Commander name, ship, cargo or Journal path. EDDN stays unchanged.")
+                                    text: window.t("signals.master_privacy", "The ED-Frame switch also controls signal sharing. Only public system, coordinates, signal type, faction/state, timestamp and lifetime are sent. No Commander name, ship, cargo or Journal path.")
                                     color: muted; font.pixelSize: UiMetrics.caption
                                 }
                                 Label {
@@ -8064,13 +8051,12 @@ ApplicationWindow {
                                     color: cockpit.edFrameSignalSharingEnabled ? cyan : muted
                                     font.pixelSize: UiMetrics.caption
                                 }
-                                CheckBox {
+                                Label {
                                     Layout.fillWidth: true
                                     text: window.t(
                                         "connections.edframe_share_ship_prices",
                                         "Share anonymously observed module and ship prices with the ED-Frame community catalog")
-                                    checked: cockpit.edFrameStationPriceSharingEnabled
-                                    onToggled: cockpit.setEdFrameStationPriceSharingEnabled(checked)
+                                    color: textSecondary; wrapMode: Text.WordWrap
                                 }
                                 Label {
                                     Layout.fillWidth: true

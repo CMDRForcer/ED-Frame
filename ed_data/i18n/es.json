@@ -1,4 +1,7 @@
 {
+  "connections.edframe_master": "Usar ED-Frame · actualizar catálogo y compartir observaciones públicas",
+  "connections.eddn_master": "Usar EDDN · recibir datos y compartir observaciones públicas",
+  "signals.master_privacy": "El interruptor ED-Frame controla también las señales compartidas. Solo se envían sistema público, coordenadas, tipo de señal, facción/estado, fecha y duración restante. Sin comandante, nave, carga ni ruta del diario.",
   "signals.bgs": "CANDIDATOS BGS",
   "signals.bgs_detail": "Registros actuales del sistema · últimas 24 h",
   "signals.sightings": "AVISTAMIENTOS FSS",

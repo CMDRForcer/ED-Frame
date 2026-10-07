@@ -1,4 +1,7 @@
 {
+  "connections.edframe_master": "Use ED-Frame · update catalog and share public observations",
+  "connections.eddn_master": "Use EDDN · receive intelligence and share public observations",
+  "signals.master_privacy": "The ED-Frame switch also controls signal sharing. Only public system, coordinates, signal type, faction/state, timestamp and lifetime are sent. No Commander name, ship, cargo or Journal path.",
   "signals.bgs": "BGS CANDIDATES",
   "signals.bgs_detail": "Current system snapshots · last 24 h",
   "signals.sightings": "FSS SIGHTINGS",
