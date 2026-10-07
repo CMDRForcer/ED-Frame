@@ -1,7 +1,7 @@
 import unittest
 from unittest.mock import MagicMock, patch
 from edframe_catalog.mining_overlaps import (
-    catalog, ring_key, attach_overlap_reports, community_reference_candidates,
+    catalog, ring_key, attach_overlap_reports, community_reference_candidates, imported_system_positions,
 )
 
 
@@ -49,7 +49,26 @@ class MiningOverlapTests(unittest.TestCase):
         conn.execute.return_value.fetchall.return_value = [{
             'name': 'Lalande 34968', 'x': None, 'y': 0., 'z': 0.,
         }]
-        self.assertEqual(community_reference_candidates(conn, [], system='Lalande 34968'), [])
+        with patch('edframe_catalog.mining_overlaps.imported_system_positions', return_value={}):
+            self.assertEqual(community_reference_candidates(conn, [], system='Lalande 34968'), [])
+
+    def test_all_22_coordinate_imports_have_separate_provenance(self):
+        positions = imported_system_positions()
+        self.assertEqual(len(positions), 22)
+        self.assertIsNone(positions['hun nik']['positionEvidence']['observedAt'])
+        self.assertIsNone(positions['hun nik']['positionEvidence']['dumpSha256'])
+        self.assertTrue(positions['lalande 34968']['positionEvidence']['dumpSha256'])
+
+    def test_import_locates_reference_without_confirming_ring(self):
+        conn = MagicMock()
+        conn.execute.return_value.fetchall.return_value = []
+        rows = community_reference_candidates(conn, [], system='Hun Nik',
+                    origin=(155.6875, 107.125, -78.65625), radius=1)
+        self.assertTrue(rows)
+        self.assertEqual(rows[0]['distanceLy'], 0)
+        self.assertIsNone(rows[0]['ringType'])
+        self.assertIsNone(rows[0]['observedAt'])
+        self.assertEqual(rows[0]['ringAssociationStatus'], 'COMMUNITY_REFERENCE_ONLY')
 
     def test_snapshot_has_provenance_without_fabricated_verification(self):
         rows = catalog()

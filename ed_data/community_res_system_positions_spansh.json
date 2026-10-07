@@ -1,0 +1,346 @@
+{
+  "sourceUrl": "https://downloads.spansh.co.uk/systems_1month.json.gz",
+  "retrievedAt": "2026-10-07T16:11:00.521626+00:00",
+  "dumpLastModified": "Wed, 07 Oct 2026 08:27:58 GMT",
+  "dumpETag": "\"6ac6028e-5689275\"",
+  "compressedBytesRead": 90739317,
+  "dumpSha256": "add0be293575e42e948e2e4d9c9493d4579c41139db177425ea647c47ac057b4",
+  "scope": "System coordinates only; no ring or overlap verification",
+  "results": [
+    {
+      "system": "HR 6489",
+      "resolved": true,
+      "data": {
+        "name": "HR 6489",
+        "id64": 39961232572,
+        "coords": {
+          "x": -70.78125,
+          "y": 60.75,
+          "z": 178.8125
+        },
+        "updateTime": "2026-09-19T21:43:14Z"
+      },
+      "status": "FOUND"
+    },
+    {
+      "system": "HIP 51652",
+      "resolved": true,
+      "data": {
+        "name": "HIP 51652",
+        "id64": 560249997667,
+        "coords": {
+          "x": 27.1875,
+          "y": 151.65625,
+          "z": -82.34375
+        },
+        "updateTime": "2026-10-02T02:41:47Z"
+      },
+      "status": "FOUND"
+    },
+    {
+      "system": "HR 5473",
+      "resolved": true,
+      "data": {
+        "name": "HR 5473",
+        "id64": 108684911804,
+        "coords": {
+          "x": -15.0625,
+          "y": 144.21875,
+          "z": 80.1875
+        },
+        "updateTime": "2026-09-29T18:15:45Z"
+      },
+      "status": "FOUND"
+    },
+    {
+      "system": "HIP 113894",
+      "resolved": true,
+      "data": {
+        "name": "HIP 113894",
+        "id64": 83651105490,
+        "coords": {
+          "x": -109.53125,
+          "y": -106.34375,
+          "z": 8.09375
+        },
+        "updateTime": "2026-09-28T20:33:26Z"
+      },
+      "status": "FOUND"
+    },
+    {
+      "system": "Palliyan",
+      "resolved": true,
+      "data": {
+        "name": "Palliyan",
+        "id64": 2871051888033,
+        "coords": {
+          "x": 85.0625,
+          "y": 126.21875,
+          "z": -10.71875
+        },
+        "updateTime": "2026-09-20T10:45:27Z"
+      },
+      "status": "FOUND"
+    },
+    {
+      "system": "HIP 94582",
+      "resolved": true,
+      "data": {
+        "name": "HIP 94582",
+        "id64": 358462067402,
+        "coords": {
+          "x": -160.84375,
+          "y": 73,
+          "z": -36.75
+        },
+        "updateTime": "2026-09-29T15:35:39Z"
+      },
+      "status": "FOUND"
+    },
+    {
+      "system": "Misthaka",
+      "resolved": true,
+      "data": {
+        "name": "Misthaka",
+        "id64": 9466242475457,
+        "coords": {
+          "x": -56.8125,
+          "y": 85.8125,
+          "z": 65.96875
+        },
+        "updateTime": "2026-10-02T00:10:49Z"
+      },
+      "status": "FOUND"
+    },
+    {
+      "system": "HR 1013",
+      "resolved": true,
+      "data": {
+        "name": "HR 1013",
+        "id64": 1144365484387,
+        "coords": {
+          "x": 58.75,
+          "y": -135.59375,
+          "z": -68.625
+        },
+        "updateTime": "2026-09-09T00:43:54Z"
+      },
+      "status": "FOUND"
+    },
+    {
+      "system": "HIP 115736",
+      "resolved": true,
+      "data": {
+        "name": "HIP 115736",
+        "id64": 972583553395,
+        "coords": {
+          "x": 105.40625,
+          "y": -237.15625,
+          "z": 129.78125
+        },
+        "updateTime": "2026-09-27T01:51:26Z"
+      },
+      "status": "FOUND"
+    },
+    {
+      "system": "HIP 35219",
+      "resolved": true,
+      "data": {
+        "name": "HIP 35219",
+        "id64": 1591042115931,
+        "coords": {
+          "x": 64,
+          "y": 41.40625,
+          "z": -162.3125
+        },
+        "updateTime": "2026-09-24T02:01:22Z"
+      },
+      "status": "FOUND"
+    },
+    {
+      "system": "58 Epsilon Herculis",
+      "resolved": true,
+      "data": {
+        "name": "58 Epsilon Herculis",
+        "id64": 121565611196,
+        "coords": {
+          "x": -100.3125,
+          "y": 90.5625,
+          "z": 75.90625
+        },
+        "updateTime": "2026-09-27T09:52:46Z"
+      },
+      "status": "FOUND"
+    },
+    {
+      "system": "HIP 71572",
+      "resolved": true,
+      "data": {
+        "name": "HIP 71572",
+        "id64": 766391650675,
+        "coords": {
+          "x": -13.90625,
+          "y": 135.09375,
+          "z": 72.71875
+        },
+        "updateTime": "2026-09-19T17:55:23Z"
+      },
+      "status": "FOUND"
+    },
+    {
+      "system": "Lalande 34968",
+      "resolved": true,
+      "data": {
+        "name": "Lalande 34968",
+        "id64": 1384833370475,
+        "coords": {
+          "x": -156.34375,
+          "y": 77.21875,
+          "z": -20.28125
+        },
+        "updateTime": "2026-10-03T00:29:56Z"
+      },
+      "status": "FOUND"
+    },
+    {
+      "system": "Clionometes",
+      "resolved": true,
+      "data": {
+        "name": "Clionometes",
+        "id64": 18262066603465,
+        "coords": {
+          "x": -78.78125,
+          "y": -62.71875,
+          "z": 77.65625
+        },
+        "updateTime": "2026-09-28T11:28:17Z"
+      },
+      "status": "FOUND"
+    },
+    {
+      "system": "Latjal",
+      "resolved": true,
+      "data": {
+        "name": "Latjal",
+        "id64": 5068464334281,
+        "coords": {
+          "x": -26.6875,
+          "y": 55.34375,
+          "z": 80.78125
+        },
+        "updateTime": "2026-09-25T17:18:28Z"
+      },
+      "status": "FOUND"
+    },
+    {
+      "system": "HIP 109310",
+      "resolved": true,
+      "data": {
+        "name": "HIP 109310",
+        "id64": 1457973596882,
+        "coords": {
+          "x": -161,
+          "y": -38.5625,
+          "z": -6.375
+        },
+        "updateTime": "2026-09-30T16:42:48Z"
+      },
+      "status": "FOUND"
+    },
+    {
+      "system": "Maidareldi",
+      "resolved": true,
+      "data": {
+        "name": "Maidareldi",
+        "id64": 670417560945,
+        "coords": {
+          "x": -40.78125,
+          "y": -21.53125,
+          "z": -140.625
+        },
+        "updateTime": "2026-09-27T19:30:04Z"
+      },
+      "status": "FOUND"
+    },
+    {
+      "system": "HIP 111173",
+      "resolved": true,
+      "data": {
+        "name": "HIP 111173",
+        "id64": 1183229842146,
+        "coords": {
+          "x": -85.53125,
+          "y": -137.625,
+          "z": 59.125
+        },
+        "updateTime": "2026-09-18T18:09:08Z"
+      },
+      "status": "FOUND"
+    },
+    {
+      "system": "HIP 105408",
+      "resolved": true,
+      "data": {
+        "name": "HIP 105408",
+        "id64": 1522322606459,
+        "coords": {
+          "x": 18.15625,
+          "y": -147.71875,
+          "z": 145.5
+        },
+        "updateTime": "2026-09-22T19:11:37Z"
+      },
+      "status": "FOUND"
+    },
+    {
+      "system": "HR 2265",
+      "resolved": true,
+      "data": {
+        "name": "HR 2265",
+        "id64": 61444449460,
+        "coords": {
+          "x": 169.125,
+          "y": -76.03125,
+          "z": -80
+        },
+        "updateTime": "2026-09-22T22:48:00Z"
+      },
+      "status": "FOUND"
+    },
+    {
+      "system": "Hun Nik",
+      "resolved": true,
+      "data": {
+        "name": "Hun Nik",
+        "id64": 2862369229155,
+        "coords": {
+          "x": 155.6875,
+          "y": 107.125,
+          "z": -78.65625
+        },
+        "updateTime": null
+      },
+      "status": "FOUND_ONE_TIME_LOOKUP",
+      "sourceUrl": "https://spansh.co.uk/api/systems/field_values/system_names?q=Hun%20Nik",
+      "retrievedAt": "2026-10-07T16:13:09Z"
+    },
+    {
+      "system": "Lemayak",
+      "resolved": true,
+      "data": {
+        "name": "Lemayak",
+        "id64": 3931874726618,
+        "coords": {
+          "x": -171.875,
+          "y": -102.5,
+          "z": 33.96875
+        },
+        "updateTime": null
+      },
+      "status": "FOUND_ONE_TIME_LOOKUP",
+      "sourceUrl": "https://spansh.co.uk/api/systems/field_values/system_names?q=Lemayak",
+      "retrievedAt": "2026-10-07T16:13:09Z"
+    }
+  ],
+  "supplementalLookupNote": "20 exact names from the full monthly dump; two absent names resolved once via the official frontend's public name endpoint. No recurring lookups. API coordinate update time unknown."
+}

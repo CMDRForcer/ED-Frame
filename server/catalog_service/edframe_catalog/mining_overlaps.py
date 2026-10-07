@@ -51,16 +51,52 @@ def parse_catalog(snapshot):
     return reports
 
 
-@lru_cache(maxsize=1)
-def catalog():
+@lru_cache(maxsize=4)
+def bundled_file(name):
     package = Path(__file__).resolve()
-    paths = [package.parents[1] / 'ed_data' / 'community_res_overlaps.json']
+    paths = [package.parents[1] / 'ed_data' / name]
     if len(package.parents) > 3:
-        paths.append(package.parents[3] / 'ed_data' / 'community_res_overlaps.json')
+        paths.append(package.parents[3] / 'ed_data' / name)
     path = next((path for path in paths if path.is_file()), None)
     if path is None:
         raise FileNotFoundError('Bundled community RES overlap catalog missing')
-    return parse_catalog(json.loads(path.read_text(encoding='utf-8')))
+    return path
+
+
+@lru_cache(maxsize=1)
+def catalog():
+    return parse_catalog(json.loads(bundled_file('community_res_overlaps.json').read_text(encoding='utf-8')))
+
+
+@lru_cache(maxsize=1)
+def imported_system_positions():
+    """One-time coordinate import; never evidence that a ring exists or is active."""
+    snapshot = json.loads(bundled_file('community_res_system_positions_spansh.json').read_text(encoding='utf-8'))
+    allowed = {r['system'].casefold() for r in catalog()}
+    positions = {}
+    for row in snapshot['results']:
+        data = row.get('data') or {}
+        key = str(row.get('system') or '').strip().casefold()
+        coords = data.get('coords') or {}
+        if (not row.get('resolved') or key not in allowed
+                or str(data.get('name', '')).casefold() != key
+                or type(data.get('id64')) is not int or data['id64'] <= 0
+                or not all(type(coords.get(k)) in (int, float) and isfinite(coords[k])
+                           for k in ('x', 'y', 'z'))):
+            continue
+        positions[key] = {
+            'name': data['name'], 'system_address': data['id64'],
+            **{k: coords[k] for k in ('x', 'y', 'z')},
+            'observed_at': data.get('updateTime'),
+            'positionEvidence': {
+                'source': 'Spansh public coordinate snapshot',
+                'sourceUrl': row.get('sourceUrl') or snapshot['sourceUrl'],
+                'observedAt': data.get('updateTime'),
+                'retrievedAt': row.get('retrievedAt') or snapshot['retrievedAt'],
+                'dumpSha256': None if row.get('sourceUrl') else snapshot['dumpSha256'],
+            },
+        }
+    return positions
 
 
 def attach_overlap_reports(rows, reports=None):
@@ -105,6 +141,8 @@ def community_reference_candidates(conn, existing, *, commodity=None, system=Non
     by_system = {p['name'].casefold(): p for p in positions
                  if all(isinstance(p.get(k), (int, float)) and isfinite(p[k])
                         for k in ('x', 'y', 'z'))}
+    for key, position in imported_system_positions().items():
+        by_system.setdefault(key, position)
     grouped = defaultdict(list)
     for report in reports:
         grouped[ring_key(report['system'], report['ring'])].append(report)
@@ -129,8 +167,8 @@ def community_reference_candidates(conn, existing, *, commodity=None, system=Non
             'prospectorSampleCount': 0, 'evidence': 'CATALOG_CANDIDATE',
             'source': 'Community historical ring reference · ring unverified',
             'ringAssociationStatus': 'COMMUNITY_REFERENCE_ONLY',
-            'systemPositionEvidence': {'source': 'ED-Frame systems catalog',
-                                       'observedAt': position.get('observed_at')},
+            'systemPositionEvidence': position.get('positionEvidence') or {
+                'source': 'ED-Frame systems catalog', 'observedAt': position.get('observed_at')},
             'communityOverlapReports': matches, 'distanceLy': distance,
         })
     result.sort(key=lambda r: (r['distanceLy'] is None, r['distanceLy'] or 0,
