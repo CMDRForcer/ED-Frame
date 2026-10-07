@@ -49,6 +49,59 @@ MODULE_GROUP_LABELS = {
     "OPTIONAL": "OPTIONAL INTERNAL",
 }
 
+# Acquisition is separate from physical fit and station inventory. No legacy
+# Powerplay rank/timer rule is used: the current reward track needs its own
+# evidence before a player's purchase entitlement can be confirmed.
+POWERPLAY_MODULE_FAMILIES = frozenset({
+    "ADVANCED PLASMA ACCELERATOR", "CONCORD CANNON",
+    "CYTOSCRAMBLER BURST LASER", "ENFORCER CANNON",
+    "IMPERIAL HAMMER RAIL GUN", "MINING LANCE BEAM LASER",
+    "PACIFIER FRAG-CANNON", "PACK-HOUND MISSILE RACK",
+    "PRISMATIC SHIELD GENERATOR", "PULSE DISRUPTOR LASER",
+    "RETRIBUTOR BEAM LASER", "ROCKET PROPELLED FSD DISRUPTER",
+})
+HUMAN_BROKER_FAMILIES = frozenset({
+    "ENZYME MISSILE RACK", "META ALLOY HULL REINFORCEMENT PACKAGE",
+    "REMOTE RELEASE FLECHETTE LAUNCHER", "SHOCK CANNON",
+})
+
+
+def evaluate_module_access(item: Any) -> dict[str, Any]:
+    """Describe acquisition without treating availability/ownership as unlocks."""
+    row = item if isinstance(item, dict) else {}
+    name = str(row.get("displayName") or row.get("moduleFamily") or "").upper()
+    route, status, reason = "STANDARD", "STANDARD PURCHASE", "Normal outfitting purchase; station stock and access still apply"
+    tone, rank = "OPEN", 0
+    if not name:
+        route, status = "UNKNOWN", "ACQUISITION UNKNOWN"
+        reason = "Module identity is unavailable; purchase requirements cannot be verified"
+    elif name in POWERPLAY_MODULE_FAMILIES:
+        route, status = "POWERPLAY", "POWERPLAY · UNLOCK UNKNOWN"
+        reason = "Powerplay reward unlock required; your module entitlement is not verified"
+    elif ("GUARDIAN" in name or name in HUMAN_BROKER_FAMILIES
+          or name == "ANTI-CORROSION CARGO RACK" and str(row.get("moduleClass")) in {"2", "4"}):
+        route, status = "TECH_BROKER", "TECH BROKER · UNLOCK UNKNOWN"
+        broker = "Guardian" if "GUARDIAN" in name else "Human"
+        reason = f"{broker} Technology Broker acquisition required; unlock/material recipe and variant must be checked"
+    elif name == "ENHANCED PERFORMANCE THRUSTERS":
+        route, status = "SPECIAL_VENDOR", "ENGINEER OUTFITTING"
+        reason = "Sold through engineer outfitting; engineer access and station stock must be checked"
+    elif name in {"BASIC DISCOVERY SCANNER", "INTERMEDIATE DISCOVERY SCANNER", "ADVANCED DISCOVERY SCANNER"}:
+        route, status = "LEGACY", "LEGACY · NOT NORMAL STOCK"
+        reason = "Legacy discovery scanner catalog identity; do not assume current outfitting availability"
+        tone, rank = "LOCKED", 3
+    elif name.startswith("MK II ") or any(marker in name for marker in (
+        "PRE-ENGINEERED", "MODIFIED", "NANITE", "VOLLEY REPEATER",
+    )):
+        route, status = "SPECIAL", "SPECIAL · ACQUISITION UNKNOWN"
+        reason = "Special variant; acquisition route and entitlement are not verified"
+    if route != "STANDARD" and tone != "LOCKED":
+        tone, rank = "UNKNOWN", 2
+    return {
+        "acquisitionRoute": route, "purchaseStatus": status,
+        "purchaseTone": tone, "purchaseReason": reason, "purchaseRank": rank,
+    }
+
 _CORE_INTERNAL_SYMBOLS = (
     "_powerplant_", "_guardianpowerplant_",
     "_engine_", "_hyperdrive_", "_lifesupport_",
@@ -189,7 +242,7 @@ def build_module_catalog(payload: Any) -> list[dict[str, Any]]:
         module_department = _module_department(
             folded_symbol, display_name, module_group,
         )
-        rows.append({
+        row = {
             "symbol": folded_symbol,
             "displayName": display_name,
             "sizeRating": size_rating,
@@ -206,7 +259,9 @@ def build_module_catalog(payload: Any) -> list[dict[str, Any]]:
                 folded_symbol, display_name,
             ),
             "kind": "MODULES",
-        })
+        }
+        row.update(evaluate_module_access(row))
+        rows.append(row)
     return sorted(rows, key=lambda row: (
         row["displayName"].casefold(), row["sizeRating"], row["symbol"],
     ))
@@ -238,8 +293,12 @@ def build_module_families(
             "mounts": set(),
             "fitStates": set(),
             "compatibleVariantCount": 0,
+            "purchaseStates": set(),
+            "purchaseReasons": set(),
         })
         family["variantCount"] += 1
+        family["purchaseStates"].add(str(row.get("purchaseStatus") or "ACQUISITION UNKNOWN"))
+        family["purchaseReasons"].add(str(row.get("purchaseReason") or ""))
         if row.get("moduleClass"):
             family["classes"].add(str(row["moduleClass"]))
         if row.get("mount"):
@@ -254,6 +313,11 @@ def build_module_families(
         classes = sorted(family.pop("classes"), key=lambda item: int(item))
         mounts = sorted(family.pop("mounts"))
         fit_states = family.pop("fitStates")
+        purchase_states = family.pop("purchaseStates")
+        purchase_reasons = family.pop("purchaseReasons")
+        family["purchaseStatus"] = next(iter(purchase_states)) if len(purchase_states) == 1 else "VARIANT REQUIREMENTS DIFFER"
+        family["purchaseReason"] = " · ".join(sorted(reason for reason in purchase_reasons if reason))
+        family["purchaseTone"] = "OPEN" if purchase_states == {"STANDARD PURCHASE"} else "UNKNOWN"
         family["classLabel"] = "CLASS " + ("–".join(
             [classes[0], classes[-1]] if len(classes) > 1 else classes
         ) if classes else "—")
@@ -780,11 +844,7 @@ def rank_station_offers(
         )
         ship_access = (
             evaluate_ship_access(item, commander_overview)
-            if kind == "SHIPS" else {
-                "purchaseStatus": "OPEN", "purchaseTone": "OPEN",
-                "purchaseReason": "No ship purchase rank applies",
-                "purchaseRank": 0,
-            }
+            if kind == "SHIPS" else evaluate_module_access(item)
         )
         if int(ship_access["purchaseRank"]) > int(system_access["accessRank"]):
             access = {

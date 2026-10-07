@@ -8,6 +8,7 @@ from ed_companion.navigation.shipyard_finder import (
     build_ship_catalog,
     catalog_suggestions,
     evaluate_ship_access,
+    evaluate_module_access,
     evaluate_station_access,
     module_catalog_with_ship_fit,
     rank_station_offers,
@@ -16,6 +17,40 @@ from ed_companion.navigation.shipyard_finder import (
 
 
 class ShipyardFinderTests(unittest.TestCase):
+    def test_module_acquisition_is_not_implied_by_fit_or_availability(self):
+        cases = [
+            ("BEAM LASER", "STANDARD", "OPEN"),
+            ("PRISMATIC SHIELD GENERATOR", "POWERPLAY", "UNKNOWN"),
+            ("GUARDIAN FRAME SHIFT DRIVE BOOSTER", "TECH_BROKER", "UNKNOWN"),
+            ("SHOCK CANNON", "TECH_BROKER", "UNKNOWN"),
+            ("ENHANCED PERFORMANCE THRUSTERS", "SPECIAL_VENDOR", "UNKNOWN"),
+            ("ADVANCED DISCOVERY SCANNER", "LEGACY", "LOCKED"),
+            ("MK II AGILE BOOST THRUSTERS", "SPECIAL", "UNKNOWN"),
+        ]
+        for name, route, tone in cases:
+            with self.subTest(name=name):
+                access = evaluate_module_access({"displayName": name, "currentShipFitStatus": "FITS"})
+                self.assertEqual(access["acquisitionRoute"], route)
+                self.assertEqual(access["purchaseTone"], tone)
+                self.assertTrue(access["purchaseReason"])
+
+    def test_corrosion_rack_requirements_depend_on_class(self):
+        for size, route in (("1", "STANDARD"), ("2", "TECH_BROKER"), ("4", "TECH_BROKER")):
+            self.assertEqual(evaluate_module_access({
+                "displayName": "ANTI-CORROSION CARGO RACK", "moduleClass": size,
+            })["acquisitionRoute"], route)
+
+    def test_module_offer_does_not_confirm_player_unlock(self):
+        offers = [{"system": "Test", "station": "Test Station", "coordinates": [0, 0, 0]}]
+        rows = rank_station_offers(offers, kind="MODULES", origin_coordinates=[0, 0, 0],
+                                  item={"displayName": "PRISMATIC SHIELD GENERATOR"})
+        self.assertEqual(rows[0]["purchaseTone"], "UNKNOWN")
+        self.assertEqual(rows[0]["accessTone"], "UNKNOWN")
+        filtered = rank_station_offers(offers, kind="MODULES", origin_coordinates=[0, 0, 0],
+                                      item={"displayName": "PRISMATIC SHIELD GENERATOR"},
+                                      access_filter="CONFIRMED ONLY")
+        self.assertEqual(filtered, [])
+
     def test_static_ship_reference_dump_covers_the_full_local_catalog(self):
         import json
 

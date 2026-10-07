@@ -17,12 +17,15 @@ Item {
     property string padFilter: "ANY"
     property string accessFilter: "ALL · SHOW LOCKED"
     property string moduleGroup: "HARDPOINTS"
-    property string moduleDepartment: "LASERS"
+    property string moduleDepartment: "ALL"
     property string moduleFamilyKey: ""
     property string moduleClassFilter: "ANY"
     property string moduleRatingFilter: "ANY"
     property string moduleMountFilter: "ANY"
     property bool fitCurrentShip: true
+    property string brokerFilter: "ALL BROKERS"
+    property var selectedSlot: ({})
+    readonly property var currentShipSlots: cockpit.shipyardCurrentShipSlots || []
     readonly property var suggestions: cockpit.shipyardFinderSuggestions || []
     readonly property var ships: cockpit.shipyardShipCatalog || []
     readonly property var modules: cockpit.shipyardModuleCatalog || []
@@ -32,6 +35,13 @@ Item {
     readonly property var overview: cockpit.commanderOverview || ({})
     readonly property string currentShipName: String(cockpit.shipyardCurrentShip || "")
     readonly property bool currentShipFitKnown: Boolean(cockpit.shipyardCurrentShipFitKnown)
+    onCurrentShipSlotsChanged: {
+        var slotId = String(selectedSlot.slot || "")
+        if (slotId) {
+            var rows = currentShipSlots.filter(function(row) { return String(row.slot || "") === slotId })
+            selectedSlot = rows.length ? rows[0] : ({})
+        }
+    }
     readonly property color cyan: appWindow.cyan
     readonly property color orange: appWindow.orange
     readonly property color green: appWindow.green
@@ -101,7 +111,9 @@ Item {
         selectedItem = row || ({})
         selectedSymbol = String((row || {}).symbol || "")
         if (String((row || {}).kind || "") === "MODULES") {
-            moduleGroup = String((row || {}).moduleGroup || moduleGroup)
+            if (String(selectedSlot.slot || "") && !slotAllows(row)) selectedSlot = ({})
+            moduleGroup = moduleBrowseGroup(row)
+            if (moduleGroup === "TECH BROKER" && !matchesModuleGroup(row)) brokerFilter = "ALL BROKERS"
             moduleDepartment = String((row || {}).moduleDepartment || moduleDepartment)
             moduleFamilyKey = String((row || {}).moduleFamilyKey || moduleFamilyKey)
             Qt.callLater(function() { moduleVariantGrid.positionViewAtBeginning() })
@@ -109,22 +121,73 @@ Item {
         searchField.text = String((row || {}).displayName || selectedSymbol)
         suggestionPopup.close()
     }
+    function isMiningModule(row) {
+        var family = String((row || {}).moduleFamily || (row || {}).displayName || "").toUpperCase()
+        return ["MINING LASER", "MINING LANCE BEAM LASER", "MINING VOLLEY REPEATER",
+                "ABRASION BLASTER", "SEISMIC CHARGE LAUNCHER",
+                "SUB-SURFACE DISPLACEMENT MISSILE", "SUB-SURFACE EXTRACTION MISSILE",
+                "REFINERY", "PROSPECTOR LIMPET CONTROLLER", "COLLECTOR LIMPET CONTROLLER",
+                "MINING MULTI-LIMPET CONTROLLER", "PULSE WAVE ANALYSER", "CARGO RACK"]
+                .indexOf(family) >= 0
+    }
+    function moduleBrowseGroup(row) {
+        var route = String((row || {}).acquisitionRoute || "")
+        if (route === "TECH_BROKER") return "TECH BROKER"
+        if (isMiningModule(row)) return "MINING"
+        if (route === "POWERPLAY") return "POWERPLAY"
+        return String((row || {}).moduleGroup || "")
+    }
+    function matchesModuleGroup(row) {
+        if (moduleBrowseGroup(row) !== moduleGroup) return false
+        if (moduleGroup !== "TECH BROKER" || brokerFilter === "ALL BROKERS") return true
+        var guardian = String((row || {}).displayName || (row || {}).moduleFamily || "").toUpperCase().indexOf("GUARDIAN") >= 0
+        return brokerFilter === "GUARDIAN" ? guardian : !guardian
+    }
     function moduleFamilyRows() {
-        var term = searchField ? String(searchField.text || "").trim().toLowerCase() : ""
+        var term = moduleFamilyKey ? "" : searchField ? String(searchField.text || "").trim().toLowerCase() : ""
+        var matchingFamilies = ({})
+        modules.forEach(function(row) {
+            if (!matchesModuleGroup(row) || !slotAllows(row)) return
+            if (fitCurrentShip && String(row.currentShipFitStatus || "UNKNOWN") === "INCOMPATIBLE") return
+            var key = String(row.moduleFamilyKey || "")
+            if (!matchingFamilies[key]) matchingFamilies[key] = []
+            matchingFamilies[key].push(row)
+        })
         return moduleFamilies.filter(function(row) {
-            if (String(row.moduleGroup || "") !== moduleGroup) return false
-            if (moduleDepartment !== "ALL"
-                    && String(row.moduleDepartment || "SUPPORT") !== moduleDepartment) return false
-            if (fitCurrentShip
-                    && String(row.currentShipFitStatus || "UNKNOWN") === "INCOMPATIBLE") return false
+            if (!matchingFamilies[String(row.moduleFamilyKey || "")]) return false
             if (!term) return true
             return String(row.moduleFamily || "").toLowerCase().indexOf(term) >= 0
+        }).map(function(row) {
+            var variants = matchingFamilies[String(row.moduleFamilyKey || "")]
+            var classes = variants.map(function(v) { return Number(v.moduleClass) })
+                .filter(function(v) { return !isNaN(v) }).sort(function(a, b) { return a - b })
+            var copy = Object.assign({}, row)
+            copy.variantCount = variants.length
+            copy.compatibleVariantCount = variants.filter(function(v) { return v.currentShipFitStatus === "FITS" }).length
+            copy.classLabel = classes.length ? "CLASS " + classes[0]
+                + (classes[0] !== classes[classes.length - 1] ? "–" + classes[classes.length - 1] : "") : "CLASS UNKNOWN"
+            copy.purchaseStatus = variants[0].purchaseStatus || "ACQUISITION UNKNOWN"
+            copy.purchaseReason = variants[0].purchaseReason || ""
+            copy.purchaseTone = variants[0].purchaseTone || "UNKNOWN"
+            return copy
+        }).sort(function(a, b) {
+            var order = ["ARMOUR", "POWER PLANT", "THRUSTERS", "FRAME SHIFT DRIVE",
+                         "FRAME SHIFT DRIVE (SCO)", "LIFE SUPPORT", "POWER DISTRIBUTOR", "SENSORS", "FUEL TANK"]
+            if (moduleGroup === "CORE") {
+                var ai = order.indexOf(String(a.moduleFamily || ""))
+                var bi = order.indexOf(String(b.moduleFamily || ""))
+                if (ai < 0) ai = order.length
+                if (bi < 0) bi = order.length
+                if (ai !== bi) return ai - bi
+            }
+            return String(a.moduleFamily || "").localeCompare(String(b.moduleFamily || ""))
         })
     }
     function moduleVariantRows() {
         return modules.filter(function(row) {
-            if (String(row.moduleGroup || "") !== moduleGroup) return false
+            if (!matchesModuleGroup(row)) return false
             if (String(row.moduleFamilyKey || "") !== moduleFamilyKey) return false
+            if (!slotAllows(row)) return false
             if (fitCurrentShip
                     && String(row.currentShipFitStatus || "UNKNOWN") === "INCOMPATIBLE") return false
             if (moduleClassFilter !== "ANY"
@@ -136,23 +199,37 @@ Item {
             return true
         })
     }
-    function moduleDepartments(group) {
-        if (group === "HARDPOINTS")
-            return ["LASERS", "KINETIC", "EXPLOSIVE", "EXPERIMENTAL", "MINING"]
-        if (group === "UTILITY")
-            return ["DEFENCE", "SCANNERS", "SUPPORT"]
-        if (group === "CORE")
-            return ["POWER", "PROPULSION", "NAVIGATION", "SUPPORT"]
-        return ["CARGO", "PROTECTION", "LIMPETS", "PASSENGER", "EXPLORATION", "SUPPORT"]
+    function slotRows() {
+        var groups = { HARDPOINTS: "HARDPOINTS", UTILITY: "UTILITY MOUNTS",
+                       CORE: "CORE INTERNALS", OPTIONAL: "OPTIONAL INTERNALS" }
+        return currentShipSlots.filter(function(row) {
+            return String(row.group || "") === groups[moduleGroup]
+        })
     }
-    function defaultModuleDepartment(group) {
-        var rows = moduleDepartments(group)
-        return rows.length ? String(rows[0]) : "ALL"
+    function slotLabel(row) {
+        var names = { Armour: "ARMOUR", PowerPlant: "POWER PLANT", MainEngines: "THRUSTERS",
+                      FrameShiftDrive: "FRAME SHIFT DRIVE", LifeSupport: "LIFE SUPPORT",
+                      PowerDistributor: "POWER DISTRIBUTOR", Radar: "SENSORS", FuelTank: "FUEL TANK" }
+        var id = String(row.slot || "")
+        if (names[id]) return names[id]
+        if (moduleGroup === "OPTIONAL") {
+            var match = /^Slot(\d+)_/.exec(id)
+            return "OPTIONAL SLOT " + (match ? Number(match[1]) : id.replace(/([a-z])([A-Z])/g, "$1 $2"))
+        }
+        if (moduleGroup === "UTILITY") return "UTILITY " + id.replace(/\D/g, "")
+        return id.replace(/([a-z])([A-Z])/g, "$1 $2")
     }
-    function selectModuleGroup(group) {
-        moduleGroup = String(group || "HARDPOINTS")
-        moduleDepartment = defaultModuleDepartment(moduleGroup)
+    function slotAllows(row) {
+        if (!fitCurrentShip || !String(selectedSlot.slot || "")) return true
+        if (moduleGroup === "CORE"
+                && String(row.moduleCoreSlot || "") !== String(selectedSlot.slot || "")) return false
+        var size = Number(row.moduleClass)
+        return isNaN(size) || size <= Number(selectedSlot.slotSize || 0)
+    }
+    function selectSlot(row) {
+        selectedSlot = row || ({})
         moduleFamilyKey = ""
+        moduleDepartment = "ALL"
         moduleClassFilter = "ANY"
         moduleRatingFilter = "ANY"
         moduleMountFilter = "ANY"
@@ -160,11 +237,19 @@ Item {
         selectedItem = ({})
         searchField.text = ""
         cockpit.clearShipyardFinder()
-        Qt.callLater(function() { moduleFamilyGrid.positionViewAtBeginning() })
+        var families = moduleFamilyRows()
+        if (moduleGroup === "CORE" && families.length === 1)
+            selectModuleFamily(families[0])
     }
-    function selectModuleDepartment(department) {
-        moduleDepartment = String(department || "ALL")
+    function selectModuleGroup(group) {
+        selectedSlot = ({})
+        brokerFilter = "ALL BROKERS"
+        moduleGroup = String(group || "HARDPOINTS")
+        moduleDepartment = "ALL"
         moduleFamilyKey = ""
+        moduleClassFilter = "ANY"
+        moduleRatingFilter = "ANY"
+        moduleMountFilter = "ANY"
         selectedSymbol = ""
         selectedItem = ({})
         searchField.text = ""
@@ -187,13 +272,14 @@ Item {
         cockpit.clearShipyardFinder()
     }
     function resetMode(nextMode) {
+        selectedSlot = ({})
         mode = nextMode
         selectedSymbol = ""
         selectedItem = ({})
         searchField.text = ""
         if (nextMode === "MODULES") {
             moduleGroup = "HARDPOINTS"
-            moduleDepartment = "LASERS"
+            moduleDepartment = "ALL"
             moduleFamilyKey = ""
             moduleClassFilter = "ANY"
             moduleRatingFilter = "ANY"
@@ -397,11 +483,12 @@ Item {
                                                 elide: Text.ElideRight
                                             }
                                             Label {
+                                                Layout.fillWidth: true
                                                 text: finder.mode === "MODULES"
                                                     ? [modelData.sizeRating || appWindow.t("common.unknown", "UNKNOWN"),
-                                                       modelData.mount || ""].filter(Boolean).join(" · ")
+                                                       modelData.mount || "", modelData.purchaseStatus || "ACQUISITION UNKNOWN"].filter(Boolean).join(" · ")
                                                     : [modelData.manufacturer || "", modelData.size || ""].filter(Boolean).join(" · ")
-                                                color: muted; font.pixelSize: 9
+                                                color: muted; font.pixelSize: 9; elide: Text.ElideRight
                                             }
                                         }
                                     }
@@ -472,7 +559,7 @@ Item {
 
         ShadowCard {
             Layout.fillWidth: true
-            Layout.preferredHeight: finder.mode === "MODULES" ? 282 : 206
+            Layout.preferredHeight: finder.mode === "MODULES" ? 430 : 206
             accent: cyan
             ColumnLayout {
                 anchors.fill: parent; anchors.margins: 12; spacing: 7
@@ -482,7 +569,7 @@ Item {
                         text: finder.mode === "SHIPS"
                             ? appWindow.tf("shipyard.ship_catalog", "SHIP CATALOG · %1 HULLS", [finder.ships.length])
                             : finder.moduleFamilyKey === ""
-                              ? appWindow.t("shipyard.shop_categories", "OUTFITTING · SHOP CATEGORIES")
+                              ? "OUTFITTING · SELECT A SHIP SLOT"
                               : appWindow.t("shipyard.shop_variants", "OUTFITTING · SELECT CLASS / RATING / MOUNT")
                         color: cyan; font.pixelSize: 9; font.bold: true
                     }
@@ -494,79 +581,154 @@ Item {
                 }
                 RowLayout {
                     visible: finder.mode === "MODULES"
+                    Layout.fillWidth: true; spacing: 8
+                    Label {
+                        text: finder.currentShipName || "SHIP UNKNOWN"
+                        color: textPrimary; font.pixelSize: 12; font.bold: true
+                    }
+                    CheckBox {
+                        text: "Follow current ship"
+                        checked: finder.fitCurrentShip
+                        onToggled: {
+                            finder.fitCurrentShip = checked
+                            finder.selectedSlot = ({})
+                        }
+                    }
+                    Repeater {
+                        model: ["HARDPOINTS", "UTILITY", "CORE", "OPTIONAL", "MINING", "TECH BROKER", "POWERPLAY"]
+                        delegate: FinderButton {
+                            required property var modelData
+                            Layout.preferredWidth: 110; Layout.preferredHeight: 30
+                            text: String(modelData)
+                            selected: finder.moduleGroup === String(modelData)
+                            tone: cyan
+                            onClicked: finder.selectModuleGroup(modelData)
+                        }
+                    }
+                    Item { Layout.fillWidth: true }
+                }
+                RowLayout {
+                    visible: finder.mode === "MODULES" && finder.moduleGroup === "TECH BROKER"
+                    Layout.fillWidth: true; spacing: 8
+                    Repeater {
+                        model: ["ALL BROKERS", "HUMAN", "GUARDIAN"]
+                        delegate: FinderButton {
+                            required property var modelData
+                            text: String(modelData); selected: finder.brokerFilter === String(modelData)
+                            tone: orange; Layout.preferredHeight: 28
+                            onClicked: {
+                                finder.brokerFilter = String(modelData)
+                                finder.backToModuleFamilies()
+                                cockpit.clearShipyardFinder()
+                            }
+                        }
+                    }
+                    Item { Layout.fillWidth: true }
+                }
+                RowLayout {
+                    visible: finder.mode === "MODULES"
                     Layout.fillWidth: true; Layout.fillHeight: true; spacing: 9
 
                     Rectangle {
-                        Layout.preferredWidth: 238; Layout.fillHeight: true
-                        radius: 8; color: inputBackground
-                        border.width: 1; border.color: borderTone; clip: true
+                        Layout.preferredWidth: 390; Layout.fillHeight: true
+                        color: "transparent"; clip: true
                         ColumnLayout {
-                            anchors.fill: parent; anchors.margins: 8; spacing: 4
-                            FinderButton {
-                                Layout.fillWidth: true; Layout.preferredHeight: 30
-                                text: finder.fitCurrentShip
-                                    ? appWindow.tf("shipyard.follow_current", "FOLLOW CURRENT · %1",
-                                                   [finder.currentShipName || "SHIP UNKNOWN"])
-                                    : appWindow.t("shipyard.show_all_modules", "SHOW ALL MODULES")
-                                selected: finder.fitCurrentShip; tone: finder.currentShipFitKnown ? green : orange
-                                onClicked: {
-                                    finder.fitCurrentShip = !finder.fitCurrentShip
-                                    moduleFamilyGrid.positionViewAtBeginning()
-                                    moduleVariantGrid.positionViewAtBeginning()
-                                }
-                                ToolTip.visible: hovered
-                                ToolTip.text: finder.currentShipFitKnown
-                                    ? appWindow.t("shipyard.follow_current_help", "Automatically follows the active Journal ship and hides modules that cannot fit its physical slots.")
-                                    : appWindow.t("shipyard.follow_current_unknown", "Current ship slots are unknown. No modules are hidden.")
-                            }
+                            anchors.fill: parent; spacing: 6
                             Label {
-                                Layout.fillWidth: true
-                                text: finder.currentShipFitKnown
-                                    ? appWindow.t("shipyard.slots_verified", "JOURNAL SLOTS VERIFIED")
-                                    : appWindow.t("shipyard.slots_unknown", "SLOTS UNKNOWN · NOTHING HIDDEN")
-                                color: finder.currentShipFitKnown ? green : orange
-                                font.pixelSize: 7; font.bold: true; elide: Text.ElideRight
-                            }
-                            GridLayout {
-                                Layout.fillWidth: true; columns: 2; columnSpacing: 5; rowSpacing: 5
-                                Repeater {
-                                    model: [
-                                        {key: "HARDPOINTS", label: "HARDPOINTS"},
-                                        {key: "UTILITY", label: "UTILITY"},
-                                        {key: "CORE", label: "CORE"},
-                                        {key: "OPTIONAL", label: "OPTIONAL"}
-                                    ]
-                                    delegate: FinderButton {
-                                        required property var modelData
-                                        Layout.fillWidth: true; Layout.preferredHeight: 27
-                                        text: String(modelData.label)
-                                        selected: finder.moduleGroup === String(modelData.key)
-                                        tone: cyan
-                                        onClicked: finder.selectModuleGroup(modelData.key)
-                                    }
-                                }
-                            }
-                            Rectangle { Layout.fillWidth: true; Layout.preferredHeight: 1; color: borderTone }
-                            Label {
-                                text: appWindow.t("shipyard.departments", "DEPARTMENTS")
+                                text: finder.moduleGroup === "TECH BROKER" ? "TECH BROKER · " + finder.brokerFilter
+                                    : finder.moduleGroup === "POWERPLAY" ? "POWERPLAY · UNLOCK REQUIRED"
+                                    : finder.moduleGroup === "MINING" ? "MINING EQUIPMENT"
+                                    : finder.fitCurrentShip && finder.currentShipFitKnown
+                                    ? "SELECT SLOT" : finder.fitCurrentShip
+                                      ? "BROWSE CATEGORIES · SLOTS UNKNOWN" : "BROWSE CATEGORIES"
                                 color: cyan; font.pixelSize: 8; font.bold: true
                             }
-                            GridLayout {
-                                Layout.fillWidth: true
-                                columns: 2; columnSpacing: 4; rowSpacing: 4
-                                Repeater {
-                                    model: finder.moduleDepartments(finder.moduleGroup)
-                                    delegate: FinderButton {
-                                        required property var modelData
-                                        Layout.fillWidth: true; Layout.preferredHeight: 25
-                                        text: String(modelData)
-                                        selected: finder.moduleDepartment === String(modelData)
-                                        tone: orange
-                                        onClicked: finder.selectModuleDepartment(modelData)
-                                    }
+                            ListView {
+                                visible: ["MINING", "TECH BROKER", "POWERPLAY"].indexOf(finder.moduleGroup) >= 0 || !finder.fitCurrentShip || !finder.currentShipFitKnown
+                                Layout.fillWidth: true; Layout.fillHeight: true
+                                model: finder.moduleFamilyRows()
+                                clip: true; spacing: 6
+                                ScrollBar.vertical: CockpitScrollBar {}
+                                delegate: FinderButton {
+                                    required property var modelData
+                                    width: ListView.view.width - 12; height: 64
+                                    text: String(modelData.moduleFamily || "MODULE")
+                                        + "\n" + String(modelData.classLabel || "CLASS UNKNOWN")
+                                    selected: finder.moduleFamilyKey === String(modelData.moduleFamilyKey || "")
+                                    tone: orange
+                                    onClicked: finder.selectModuleFamily(modelData)
+                                    ToolTip.visible: hovered
+                                    ToolTip.text: String(modelData.purchaseStatus || "ACQUISITION UNKNOWN")
+                                        + " · " + String(modelData.purchaseReason || "")
                                 }
                             }
-                            Item { Layout.fillHeight: true }
+                            ListView {
+                                Layout.fillWidth: true; Layout.fillHeight: true
+                                visible: ["MINING", "TECH BROKER", "POWERPLAY"].indexOf(finder.moduleGroup) < 0 && finder.fitCurrentShip && finder.currentShipFitKnown
+                                model: finder.slotRows()
+                                clip: true; spacing: 5
+                                ScrollBar.vertical: CockpitScrollBar {}
+                                delegate: Button {
+                                    id: slotControl
+                                    required property var modelData
+                                    property bool selected: String(finder.selectedSlot.slot || "") === String(modelData.slot || "")
+                                    width: ListView.view.width - 12; height: 102
+                                    background: Rectangle {
+                                        radius: 5
+                                        color: slotControl.selected ? panelRaised : inputBackground
+                                        border.width: 1
+                                        border.color: slotControl.selected ? orange : borderTone
+                                        Rectangle {
+                                            visible: slotControl.selected
+                                            width: 3; anchors.left: parent.left
+                                            anchors.top: parent.top; anchors.bottom: parent.bottom; color: orange
+                                        }
+                                    }
+                                    contentItem: RowLayout {
+                                        spacing: 10
+                                        ColumnLayout {
+                                            Layout.fillWidth: true; Layout.preferredWidth: 1; spacing: 5
+                                            Label {
+                                                Layout.fillWidth: true
+                                                text: finder.slotLabel(slotControl.modelData)
+                                                color: slotControl.selected ? orange : textPrimary
+                                                font.pixelSize: 12; font.bold: true; wrapMode: Text.WordWrap
+                                            }
+                                            Label {
+                                                Layout.fillWidth: true
+                                                text: "CLASS " + String(slotControl.modelData.slotBadge || "—")
+                                                color: textSecondary; font.pixelSize: 10; elide: Text.ElideRight
+                                            }
+                                        }
+                                        Rectangle {
+                                            Layout.fillWidth: true; Layout.preferredWidth: 1; Layout.fillHeight: true
+                                            color: inputBackground; radius: 3
+                                            Label {
+                                                anchors.left: parent.left; anchors.top: parent.top; anchors.margins: 5
+                                                text: slotControl.modelData.empty ? "EMPTY" : String(slotControl.modelData.sizeRating || "—")
+                                                color: textPrimary; font.pixelSize: 14; font.bold: true
+                                            }
+                                            Label {
+                                                anchors.fill: parent; anchors.margins: 8; anchors.topMargin: 25
+                                                text: slotControl.modelData.empty ? "Empty slot"
+                                                    : String(slotControl.modelData.module || "Unknown module")
+                                                color: textSecondary; font.pixelSize: 10
+                                                wrapMode: Text.WordWrap
+                                                verticalAlignment: Text.AlignVCenter
+                                            }
+                                            Label {
+                                                anchors.right: parent.right; anchors.top: parent.top; anchors.margins: 5
+                                                text: slotControl.modelData.engineered ? "ENG" : ""
+                                                color: orange; font.pixelSize: 9
+                                            }
+                                        }
+                                    }
+                                    onClicked: finder.selectSlot(modelData)
+                                    ToolTip.visible: hovered
+                                    ToolTip.text: String(modelData.module || "Empty slot")
+                                        + (modelData.restriction ? " · " + modelData.restriction : "")
+                                }
+                            }
                         }
                     }
 
@@ -586,9 +748,8 @@ Item {
                                 Label {
                                     Layout.fillWidth: true
                                     text: finder.moduleFamilyKey === ""
-                                        ? finder.moduleGroup + " › " + finder.moduleDepartment
-                                        : finder.moduleGroup + " › " + finder.moduleDepartment
-                                          + " › " + String(finder.selectedItem.moduleFamily || searchField.text || "")
+                                        ? finder.moduleGroup + " › " + (finder.selectedSlot.slot ? finder.slotLabel(finder.selectedSlot) : "MODULE TYPES")
+                                        : finder.moduleGroup + " › " + String(finder.selectedItem.moduleFamily || searchField.text || "")
                                     color: orange; font.pixelSize: 10; font.bold: true
                                     elide: Text.ElideRight
                                 }
@@ -598,6 +759,17 @@ Item {
                                         ? appWindow.tf("shipyard.family_count", "%1 MODULE FAMILIES", [finder.moduleFamilyRows().length])
                                         : appWindow.tf("shipyard.variant_count", "%1 COMPATIBLE VARIANTS", [finder.moduleVariantRows().length])
                                     color: muted; font.pixelSize: 7; font.bold: true
+                                }
+                                Label {
+                                    Layout.fillWidth: true
+                                    visible: String(finder.selectedSlot.slot || "") !== ""
+                                    text: "INSTALLED: " + (finder.selectedSlot.empty ? "EMPTY"
+                                        : String(finder.selectedSlot.sizeRating || "") + " "
+                                          + String(finder.selectedSlot.module || "UNKNOWN"))
+                                        + (finder.selectedSlot.engineered ? " · ENGINEERED (CURRENT ONLY)" : "")
+                                        + " · SIZE FIT ONLY"
+                                        + (finder.selectedSlot.restriction ? " · " + finder.selectedSlot.restriction : "")
+                                    color: green; font.pixelSize: 9; wrapMode: Text.WordWrap
                                 }
                             }
                             CockpitComboBox {
@@ -634,6 +806,8 @@ Item {
                         GridView {
                             id: moduleFamilyGrid
                             visible: finder.moduleFamilyKey === ""
+                                && finder.fitCurrentShip && finder.currentShipFitKnown
+                                && String(finder.selectedSlot.slot || "") !== ""
                             Layout.fillWidth: true; Layout.fillHeight: true
                             clip: true; boundsBehavior: Flickable.StopAtBounds
                             cellWidth: Math.max(205, width / 4)
@@ -646,6 +820,8 @@ Item {
                                 height: moduleFamilyGrid.cellHeight - 7
                                 radius: 8; color: panelRaised
                                 border.width: 1; border.color: familyMouse.containsMouse ? orange : borderTone
+                                ToolTip.visible: familyMouse.containsMouse
+                                ToolTip.text: String(modelData.purchaseReason || "")
                                 Rectangle {
                                     anchors.left: parent.left; anchors.top: parent.top; anchors.bottom: parent.bottom
                                     width: 4; radius: 2; color: cyan
@@ -687,6 +863,12 @@ Item {
                                             color: finder.fitCurrentShip ? green : muted; font.pixelSize: 7
                                             elide: Text.ElideRight
                                         }
+                                        Label {
+                                            Layout.fillWidth: true
+                                            text: String(modelData.purchaseStatus || "ACQUISITION UNKNOWN")
+                                            color: finder.purchaseColor(modelData); font.pixelSize: 8
+                                            elide: Text.ElideRight
+                                        }
                                     }
                                 }
                                 MouseArea {
@@ -696,13 +878,24 @@ Item {
                                 }
                             }
                         }
+                        Label {
+                            Layout.fillWidth: true; Layout.fillHeight: true
+                            visible: finder.moduleFamilyKey === ""
+                                && (!finder.fitCurrentShip || !finder.currentShipFitKnown
+                                    || String(finder.selectedSlot.slot || "") === "")
+                            text: "SELECT A MODULE TYPE OR SLOT ON THE LEFT\nThen choose class, rating and mount.\nOr use the module search above."
+                            color: textSecondary; font.pixelSize: 13
+                            horizontalAlignment: Text.AlignHCenter
+                            verticalAlignment: Text.AlignVCenter
+                            wrapMode: Text.WordWrap
+                        }
                         GridView {
                             id: moduleVariantGrid
                             visible: finder.moduleFamilyKey !== ""
                             Layout.fillWidth: true; Layout.fillHeight: true
                             clip: true; boundsBehavior: Flickable.StopAtBounds
                             cellWidth: Math.max(168, width / 6)
-                            cellHeight: 82
+                            cellHeight: 94
                             model: finder.moduleVariantRows()
                             ScrollBar.vertical: CockpitScrollBar {}
                             delegate: Rectangle {
@@ -715,6 +908,7 @@ Item {
                                               ? orange : variantMouse.containsMouse ? cyan : borderTone
                                 ToolTip.visible: variantMouse.containsMouse
                                 ToolTip.text: String(modelData.currentShipFitReason || "")
+                                    + "\n" + String(modelData.purchaseReason || "Acquisition unknown")
                                 RowLayout {
                                     anchors.fill: parent; anchors.margins: 8; spacing: 8
                                     Rectangle {
@@ -740,6 +934,12 @@ Item {
                                             text: [modelData.mount || "",
                                                    modelData.moduleGroupLabel || ""].filter(Boolean).join(" · ")
                                             color: muted; font.pixelSize: 7
+                                            elide: Text.ElideRight
+                                        }
+                                        Label {
+                                            Layout.fillWidth: true
+                                            text: String(modelData.purchaseStatus || "ACQUISITION UNKNOWN")
+                                            color: finder.purchaseColor(modelData); font.pixelSize: 8
                                             elide: Text.ElideRight
                                         }
                                     }
@@ -937,17 +1137,21 @@ Item {
                                 wrapMode: Text.Wrap
                             }
                             Rectangle {
-                                visible: finder.mode === "SHIPS" && finder.selectedSymbol !== ""
-                                Layout.fillWidth: true; Layout.preferredHeight: 38
+                                visible: finder.selectedSymbol !== ""
+                                Layout.fillWidth: true
+                                Layout.preferredHeight: Math.max(48, purchaseExplanation.implicitHeight + 16)
                                 radius: 6
                                 color: String(finder.selectedItem.purchaseTone || "") === "LOCKED"
                                        ? Qt.rgba(1.0, 0.20, 0.30, 0.13)
-                                       : Qt.rgba(0.20, 0.85, 0.55, 0.08)
+                                       : String(finder.selectedItem.purchaseTone || "") === "UNKNOWN"
+                                         ? Qt.rgba(1.0, 0.65, 0.20, 0.08)
+                                         : Qt.rgba(0.20, 0.85, 0.55, 0.08)
                                 border.width: 1
                                 border.color: finder.purchaseColor(finder.selectedItem)
                                 Label {
+                                    id: purchaseExplanation
                                     anchors.fill: parent; anchors.margins: 7
-                                    text: String(finder.selectedItem.purchaseStatus || "OPEN")
+                                    text: String(finder.selectedItem.purchaseStatus || "ACQUISITION UNKNOWN")
                                           + " · " + String(finder.selectedItem.purchaseReason || "")
                                     color: finder.purchaseColor(finder.selectedItem)
                                     font.pixelSize: 8; font.bold: true

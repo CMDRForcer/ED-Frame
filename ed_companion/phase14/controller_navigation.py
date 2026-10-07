@@ -455,6 +455,12 @@ class NavigationMixin:
         if isinstance(getattr(self, "_state", None), dict) else False,
         notify=CoreControllerMixin.stateChanged,
     )
+    shipyardCurrentShipSlots = Property(
+        "QVariantList",
+        lambda self: list(self._state.get("activeShipSlots", []) or [])
+        if isinstance(getattr(self, "_state", None), dict) else [],
+        notify=CoreControllerMixin.stateChanged,
+    )
     shipyardFinderBusy = Property(
         bool,
         lambda self: bool(getattr(self, "_shipyard_finder_busy", False)),
