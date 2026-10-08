@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+### Fixed
+
+- Restore Mining Finder's targeted route verification from QML. Register
+  both verification overloads with `QVariantList`, so copied JavaScript route
+  arrays reach Python instead of failing before worker dispatch. Exercise the
+  production Qt slot from the real Mining Finder page and cover all 100 routes,
+  legacy calls, queued query context and empty results. Existing network budgets,
+  freshness rules and unknown-evidence handling remain unchanged.
+
 ## 1.5.40 — 2026-10-08
 
 ### Improved

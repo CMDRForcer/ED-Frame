@@ -5,6 +5,8 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from types import SimpleNamespace
+from unittest.mock import Mock
 
 
 class MiningResultsStabilityTests(unittest.TestCase):
@@ -20,10 +22,12 @@ class MiningResultsStabilityTests(unittest.TestCase):
 
 
 def run_qml():
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
     from PySide6.QtCore import QObject, QUrl, qInstallMessageHandler
     from PySide6.QtGui import QFontDatabase, QGuiApplication
     from PySide6.QtQml import QQmlComponent, QQmlEngine
     from PySide6.QtTest import QSignalSpy
+    from ed_companion.phase14.controller import CockpitController
 
     app = QGuiApplication([])
     if os.name == "nt":
@@ -39,6 +43,16 @@ def run_qml():
             errors.append(message)
     qInstallMessageHandler(qt_message)
     engine = QQmlEngine()
+    # Exercise the real Python slot, not just a permissive JavaScript stub.
+    # Capture worker dispatch without running HTTP, persistence or startup.
+    verifier = CockpitController.__new__(CockpitController)
+    QObject.__init__(verifier)
+    verifier.profile_context = SimpleNamespace(key="qml-stability-fixture")
+    verifier._profile_generation = 1
+    verifier.mining_catalog_file = Path("unused-mining-fixture.json")
+    verifier._known_mining_origin = Mock(return_value={"coordinates": [1, 2, 3]})
+    verifier._start_network_worker = Mock(return_value=True)
+    engine.rootContext().setContextProperty("productionVerifier", verifier)
     component = QQmlComponent(engine)
     base = Path(__file__).resolve().parents[1] / "qml/pages"
     component.setData(b'''
@@ -118,7 +132,10 @@ Item {
         function refreshMiningMarkets() { miningMarketSyncBusy = true }
         function refreshMiningFinder() {}
         function copySystem() {}
-        function verifyMiningRoutes() { root.verifyCalls += 1 }
+        function verifyMiningRoutes(routes, start, commodity, maxAge, demand, pad) {
+            productionVerifier.verifyMiningRoutes(routes, start, commodity, maxAge, demand, pad)
+            root.verifyCalls += 1
+        }
     }
     MiningFinderPage {
         id: page
@@ -231,9 +248,16 @@ Item {
     obj.start()
     settle()
     assert obj.property("verifyCalls") == 0, "verification started before the regional search finished"
+    verifier._start_network_worker.assert_not_called()
     obj.finishSearch()
     settle()
     assert obj.property("verifyCalls") == 1, "completed search was not verified"
+    verifier._start_network_worker.assert_called_once()
+    assert verifier._mining_verification_busy, "real controller did not start verification"
+    request = verifier._active_mining_verification_request
+    assert request["commodity"] == "platinum" and request["minDemand"] == 5000
+    assert request["maxMarketAgeHours"] == 1 and request["landingPad"] == "LARGE"
+    assert len(request["targets"]) == 30, "copied QML routes did not reach Python"
     route_model = obj.findChild(QObject, "qa-stable-mining-route-model")
     model_resets = QSignalSpy(route_model.modelReset)
     assert obj.property("planArgs").toVariant()[7] == "PLATINUM + RES: HAZARDOUS"

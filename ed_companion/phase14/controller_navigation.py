@@ -4951,8 +4951,11 @@ class NavigationMixin:
         return (now - learned_at.astimezone(timezone.utc)).total_seconds() < 21600
 
 
-    @Slot(object, str)
-    @Slot(object, str, str, int, int, str)
+    # QML snapshots routes into a native JS array before the deferred call.
+    # PyObject slots reject that array before entering Python; QVariantList
+    # preserves its route dictionaries and nested values across the boundary.
+    @Slot("QVariantList", str)
+    @Slot("QVariantList", str, str, int, int, str)
     def verifyMiningRoutes(
         self, routes, start_system, commodity="", max_market_age_hours=0,
         min_demand=0, landing_pad="ANY",
