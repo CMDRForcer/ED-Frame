@@ -48,6 +48,8 @@ class MiningServerIntegrationTests(unittest.TestCase):
             controller.profile_context = Mock(key="alpha")
             controller._profile_generation = 1
             controller.mining_market_cache_file = Path("market-test.json")
+            controller.mining_powerplay_observations_file = Path("powerplay-test.json")
+            controller._save_mining_json = Mock()
             controller._active_mining_market_request = {"id": "test"}
             controller._remember_mining_origin = Mock(return_value=False)
             controller.miningChanged = Mock()
@@ -62,7 +64,7 @@ class MiningServerIntegrationTests(unittest.TestCase):
             })
             self.assertEqual(getattr(controller, "_pending_mining_candidates", []),
                              [] if stale else [ring])
-            self.assertEqual(getattr(controller, "_pending_mining_powerplay_observations", []),
+            self.assertEqual(getattr(controller, "_mining_powerplay_observations", []),
                              [] if stale else [fact])
 
     def test_regional_ring_query_uses_radius_not_exact_system(self):
@@ -76,6 +78,7 @@ class MiningServerIntegrationTests(unittest.TestCase):
         ), [])
         self.assertEqual(calls[0]["params"], {
             "x": 1.0, "y": 2.0, "z": 3.0, "max_distance": 100.0,
+            "snapshot_protocol": 1,
             "max_age_days": 3650, "commodity": "platinum", "limit": 1000, "offset": 0,
             "include_community_overlaps": True,
             "include_ring_candidates": True,

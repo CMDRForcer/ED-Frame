@@ -1225,7 +1225,7 @@ ApplicationWindow {
         id: pageLoader0
         anchors.fill: parent
         active: window.currentPage === 0
-        asynchronous: false
+        asynchronous: !smokeTest
         sourceComponent: Component {
     ScrollView {
         id: operationsViewport
@@ -2451,7 +2451,7 @@ ApplicationWindow {
         id: pageLoader1
         anchors.fill: parent
         active: window.currentPage === 1
-        asynchronous: false
+        asynchronous: !smokeTest
         sourceComponent: Component {
     ColumnLayout {
         objectName: "qa-page-wishlist"
@@ -3165,7 +3165,7 @@ ApplicationWindow {
         id: pageLoader2
         anchors.fill: parent
         active: window.currentPage === 2
-        asynchronous: false
+        asynchronous: !smokeTest
         sourceComponent: Component {
     ColumnLayout {
         id: materialsPage
@@ -3448,7 +3448,7 @@ ApplicationWindow {
         id: pageLoader3
         anchors.fill: parent
         active: window.currentPage === 3
-        asynchronous: false
+        asynchronous: !smokeTest
         sourceComponent: Component {
     ColumnLayout {
         id: engineeringPage
@@ -4475,7 +4475,7 @@ ApplicationWindow {
         id: pageLoader4
         anchors.fill: parent
         active: window.currentPage === 4
-        asynchronous: false
+        asynchronous: !smokeTest
         sourceComponent: Component {
     ColumnLayout {
         id: engineersPage
@@ -5375,7 +5375,7 @@ ApplicationWindow {
         id: pageLoader8
         anchors.fill: parent
         active: window.currentPage === 8
-        asynchronous: false
+        asynchronous: !smokeTest
         sourceComponent: Component {
     ColumnLayout {
         id: hgeFinderPage
@@ -5899,7 +5899,7 @@ ApplicationWindow {
         id: pageLoader9
         anchors.fill: parent
         active: window.currentPage === 9
-        asynchronous: false
+        asynchronous: !smokeTest
         sourceComponent: Component {
             LogbookPage {
                 appWindow: window
@@ -6850,7 +6850,7 @@ ApplicationWindow {
         anchors.fill: parent
         active: window.currentPage === 12 || smokeTest
         visible: window.currentPage === 12
-        asynchronous: false
+        asynchronous: !smokeTest
         sourceComponent: Component {
             MiningFinderPage {
                 appWindow: window
@@ -6863,7 +6863,7 @@ ApplicationWindow {
         anchors.fill: parent
         active: window.currentPage === 17 || smokeTest
         visible: window.currentPage === 17
-        asynchronous: false
+        asynchronous: !smokeTest
         sourceComponent: Component {
             ShipyardPage {
                 appWindow: window
@@ -6875,7 +6875,7 @@ ApplicationWindow {
         id: pageLoader16
         anchors.fill: parent
         active: window.currentPage === 16
-        asynchronous: false
+        asynchronous: !smokeTest
         sourceComponent: Component {
             ExplorationPage {
                 appWindow: window
@@ -6888,7 +6888,7 @@ ApplicationWindow {
         id: pageLoader13
         anchors.fill: parent
         active: window.currentPage === 13
-        asynchronous: false
+        asynchronous: !smokeTest
         sourceComponent: Component {
             ExobiologyPage {
                 appWindow: window
@@ -6901,7 +6901,7 @@ ApplicationWindow {
         id: pageLoader11
         anchors.fill: parent
         active: window.currentPage === 11
-        asynchronous: false
+        asynchronous: !smokeTest
         sourceComponent: Component {
             PowerplayPage {
                 appWindow: window
@@ -6914,7 +6914,7 @@ ApplicationWindow {
         id: pageLoader15
         anchors.fill: parent
         active: window.currentPage === 15
-        asynchronous: false
+        asynchronous: !smokeTest
         sourceComponent: Component {
             NavPage {
                 appWindow: window
@@ -6927,7 +6927,7 @@ ApplicationWindow {
         id: pageLoader14
         anchors.fill: parent
         active: window.currentPage === 14
-        asynchronous: false
+        asynchronous: !smokeTest
         sourceComponent: Component {
             MissionsPage {
                 appWindow: window
@@ -6940,7 +6940,7 @@ ApplicationWindow {
         id: pageLoader5
         anchors.fill: parent
         active: window.currentPage === 5
-        asynchronous: false
+        asynchronous: !smokeTest
         sourceComponent: Component {
     ColumnLayout {
         id: settingsPage
@@ -7264,7 +7264,7 @@ ApplicationWindow {
         id: pageLoader6
         anchors.fill: parent
         active: window.currentPage === 6
-        asynchronous: false
+        asynchronous: !smokeTest
         sourceComponent: Component {
     ColumnLayout {
         id: connectionsPage
@@ -8262,7 +8262,7 @@ ApplicationWindow {
         id: pageLoader7
         anchors.fill: parent
         active: window.currentPage === 7
-        asynchronous: false
+        asynchronous: !smokeTest
         sourceComponent: Component {
     ColumnLayout {
         id: diagnosticsPage

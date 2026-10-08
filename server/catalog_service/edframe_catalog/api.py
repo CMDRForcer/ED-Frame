@@ -15,6 +15,7 @@ from ed_companion.navigation.mining_commodities import MINING_COMMODITIES, minin
 
 from . import __version__
 from .mining_metadata import enrich_ring_metadata
+from .mining_revision import mining_revision, static_revision
 from .mining_overlaps import (
     attach_overlap_reports, catalog as overlap_catalog, overlap_site_identities,
     community_reference_candidates,
@@ -1319,18 +1320,40 @@ def search_mining_powerplay(
     max_distance: Annotated[float, Query(gt=0, le=2000)] = 250,
     max_age_hours: Annotated[int, Query(ge=1, le=168)] = 24,
     limit: Annotated[int, Query(ge=1, le=200)] = 200,
+    cursor: Annotated[str | None, Query(max_length=1024)] = None,
+    system: Annotated[list[str] | None, Query()] = None,
 ) -> dict:
+    clauses = ["observed_at >= NOW() - (%s * INTERVAL '1 hour')"]
+    values: list[object] = [max_age_hours]
+    names = list(dict.fromkeys(name.strip().casefold() for name in system or []))
+    if system is not None:
+        if not names or len(system) > 200 or any(not name or len(name) > 100 for name in names):
+            raise HTTPException(status_code=400, detail="Expected 1 to 200 system names")
+        clauses.append("identity = ANY(%s)")
+        values.append(names)
+    else:
+        clauses.append("POWER(x - %s, 2) + POWER(y - %s, 2) + POWER(z - %s, 2) <= POWER(%s, 2)")
+        values.extend((x, y, z, max_distance))
+    if cursor:
+        stamp, kind, identity = _decode_state_cursor(cursor)
+        if kind != "mining-powerplay" or not identity:
+            raise HTTPException(status_code=400, detail="Invalid Powerplay cursor")
+        clauses.append("(observed_at < %s OR (observed_at = %s AND identity > %s))")
+        values.extend((stamp, stamp, identity))
+    values.append(limit + 1)
     with connection() as conn:
-        rows = conn.execute("""
-            SELECT facts FROM mining_powerplay
-            WHERE observed_at >= NOW() - (%s * INTERVAL '1 hour')
-              AND POWER(x - %s, 2) + POWER(y - %s, 2)
-                  + POWER(z - %s, 2) <= POWER(%s, 2)
+        rows = conn.execute(f"""
+            SELECT facts, observed_at, identity FROM mining_powerplay
+            WHERE {' AND '.join(clauses)}
             ORDER BY observed_at DESC, identity
             LIMIT %s
-        """, (max_age_hours, x, y, z, max_distance, limit + 1)).fetchall()
+        """, tuple(values)).fetchall()
+    more = len(rows) > limit
+    last = rows[limit - 1] if more else None
     return {
-        "generatedAt": _now(), "hasMore": len(rows) > limit,
+        "generatedAt": _now(), "hasMore": more,
+        "nextCursor": _encode_state_cursor(last["observed_at"], "mining-powerplay", last["identity"]) if last else None,
+        "selection": "systems" if system is not None else "region",
         "results": [fact for row in rows[:limit] for fact in row["facts"]],
     }
 
@@ -1349,7 +1372,26 @@ def search_sites(
     include_ring_candidates: bool = False,
     offset: Annotated[int | None, Query(ge=0, le=100000)] = None,
     cursor: Annotated[str | None, Query(max_length=1024)] = None,
+    snapshot_protocol: Annotated[int | None, Query(ge=1, le=1)] = None,
+    known_revision: Annotated[str | None, Query(max_length=80)] = None,
+    snapshot_revision: Annotated[str | None, Query(max_length=80)] = None,
+    snapshot_static: Annotated[str | None, Query(max_length=64)] = None,
 ) -> dict:
+    revision = None
+    revision_query = {
+        "commodity": (commodity or "").strip().casefold(),
+        "system": (system or "").strip().casefold(),
+        "max_age_days": max_age_days, "x": x, "y": y, "z": z,
+        "max_distance": max_distance, "limit": limit,
+        "include_community_overlaps": include_community_overlaps,
+        "include_ring_candidates": include_ring_candidates,
+    }
+    if snapshot_protocol and (offset is None or (not system and not all(
+            v is not None for v in (x, y, z, max_distance)))):
+        raise HTTPException(status_code=400, detail="Snapshot protocol requires a paginated bounded query")
+    if snapshot_protocol and ((known_revision and (offset or cursor or snapshot_revision))
+                              or ((offset or cursor) and not snapshot_revision)):
+        raise HTTPException(status_code=400, detail="Invalid snapshot continuation")
     clauses = ["ms.observed_at >= NOW() - (%s * INTERVAL '1 day')"]
     values: list[object] = [max_age_days]
     ring_types = []
@@ -1397,6 +1439,25 @@ def search_sites(
     values.append(limit + 1 if paginated else limit)
     values.append(0 if cursor else offset or 0)
     with connection() as conn:
+        if snapshot_protocol:
+            # First/last content proofs include tuple versions: even a change
+            # followed by a revert invalidates the proof. Intermediate pages
+            # need no repeated large digest; they remain provisional until the
+            # final page validates the entire domain. Every page checks code/
+            # reference versions, including across rolling API deployments.
+            conn.execute("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ, READ ONLY")
+            if snapshot_revision:
+                if snapshot_static != static_revision():
+                    raise HTTPException(status_code=409, detail="Mining projection changed; restart paging")
+                revision = snapshot_revision
+            else:
+                revision = mining_revision(conn, revision_query)
+            if known_revision == revision:
+                return {"generatedAt": _now(), "snapshotProtocol": 1,
+                        "revision": revision, "notModified": True,
+                        "snapshotStatic": static_revision(), "snapshotComplete": True,
+                        "results": [], "communityReferences": [], "hasMore": False,
+                        "nextCursor": None, "nextOffset": None}
         if commodity and include_community_overlaps:
             identities = overlap_site_identities(conn, commodity.strip().casefold())
             if identities:
@@ -1477,7 +1538,13 @@ def search_sites(
             # behind a full page of ordinary observations. Keep the total bounded.
             if not paginated:
                 rows = references + rows[:max(0, limit - len(references))]
-    return {"generatedAt": _now(), "results": rows,
+        if snapshot_protocol and snapshot_revision and not has_more:
+            if mining_revision(conn, revision_query) != snapshot_revision:
+                raise HTTPException(status_code=409, detail="Mining snapshot changed; restart paging")
+    return {**({"snapshotProtocol": 1, "revision": revision, "notModified": False}
+               if snapshot_protocol else {}), "generatedAt": _now(), "results": rows,
+            **({"snapshotStatic": static_revision(), "snapshotComplete": not has_more}
+               if snapshot_protocol else {}),
             "communityReferences": references if paginated else [],
             "hasMore": has_more,
             "nextCursor": next_cursor,

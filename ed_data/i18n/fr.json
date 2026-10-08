@@ -1323,4 +1323,8 @@
   "commodities.prohibited": "Reported prohibited commodity"
 ,
   "commodities.rare": "RARE GOODS"
+,
+  "mining.calculating_routes": "CALCUL DES ITINÉRAIRES",
+  "mining.calculating_routes_help": "Filtrage des données et évaluation des itinéraires en arrière-plan. Vous pouvez continuer à utiliser l’application.",
+  "mining.updating_routes": "MISE À JOUR DES ITINÉRAIRES · LES RÉSULTATS RESTENT VISIBLES"
 }

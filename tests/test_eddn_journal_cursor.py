@@ -13,6 +13,68 @@ def _line(event):
 
 
 class EddnJournalCursorTests(unittest.TestCase):
+    def test_production_scan_budget_is_shared_across_files_and_resumes_without_loss(self):
+        with TemporaryDirectory() as directory:
+            first = Path(directory) / "Journal.01.log"
+            second = Path(directory) / "Journal.02.log"
+            event = {"timestamp": "2026-10-08T10:00:00Z", "event": "FSDJump",
+                     "StarSystem": "Budget", "StarPos": [1, 2, 3], "SystemAddress": 42}
+            first.write_text(_line(event) * 300, encoding="utf-8")
+            second.write_text(_line(event) * 901, encoding="utf-8")
+            controller = self._controller([first, second])
+            controller._network_threads_lock = object()
+            controller._scan_local_mining_market_file = mock.Mock()
+            controller._scan_local_shipyard_price_file = mock.Mock()
+            self._scan(controller, [first, second])
+            self.assertEqual(len(controller._queued_for_test), 500)
+            self.assertEqual(controller._journal_offsets[first.name], first.stat().st_size)
+            self.assertLess(controller._journal_offsets[second.name], second.stat().st_size)
+            self._scan(controller, [first, second])
+            self.assertEqual(len(controller._queued_for_test), 1000)
+            self._scan(controller, [first, second])
+            self.assertEqual(len(controller._queued_for_test), 1201)
+            self.assertEqual(controller._journal_offsets[second.name], second.stat().st_size)
+            self._scan(controller, [first, second])
+            self.assertEqual(len(controller._queued_for_test), 1201)
+
+    def test_production_budget_also_counts_invalid_and_unsupported_records(self):
+        with TemporaryDirectory() as directory:
+            path = Path(directory) / "Journal.01.log"
+            path.write_text('bad-json\n' * 500 + _line({"event": "NotSupported"}), encoding="utf-8")
+            controller = self._controller([path])
+            controller._network_threads_lock = object()
+            controller._scan_local_mining_market_file = mock.Mock()
+            controller._scan_local_shipyard_price_file = mock.Mock()
+            self._scan(controller, [path])
+            self.assertEqual(controller._journal_offsets[path.name], path.read_bytes().index(b'{'))
+            self.assertEqual(controller._queued_for_test, [])
+            self._scan(controller, [path])
+            self.assertEqual(controller._journal_offsets[path.name], path.stat().st_size)
+
+    def test_unverified_production_profile_cannot_establish_upload_baseline(self):
+        with TemporaryDirectory() as directory:
+            path = Path(directory) / "Journal.01.log"
+            path.write_text(_line({"event": "Fileheader"}), encoding="utf-8")
+            controller = self._controller([path])
+            controller._network_threads_lock = object()
+            controller._eddn_baseline_established = False
+            controller.profile_context = mock.Mock(key="alpha")
+            controller._live_profile_location = mock.Mock(return_value={})
+            controller._live_location_key = mock.Mock(return_value=(3, "alpha", "stamp"))
+            controller._sync_eddn_profile = CockpitController._sync_eddn_profile.__get__(controller)
+            controller._scan_local_mining_market_file = mock.Mock()
+            controller._scan_local_shipyard_price_file = mock.Mock()
+            self.assertFalse(controller._baseline_eddn_journal_files())
+            self.assertFalse(controller._eddn_baseline_established)
+            self._scan(controller, [path])
+            self.assertFalse(controller._eddn_baseline_established)
+            self.assertEqual(controller._journal_offsets, {})
+            controller._journal_location_cache = {"key": (3, "alpha", "stamp"),
+                                                  "context": controller.profile_context}
+            self._scan(controller, [path])
+            self.assertTrue(controller._eddn_baseline_established)
+            self.assertEqual(controller._journal_offsets[path.name], path.stat().st_size)
+
     def _controller(self, paths):
         controller = CockpitController.__new__(CockpitController)
         controller._eddn_config = {"consent": True, "upload_enabled": True}

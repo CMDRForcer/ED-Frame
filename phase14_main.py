@@ -6,6 +6,7 @@ import sys
 import time
 import traceback
 from pathlib import Path
+from types import SimpleNamespace
 
 from ed_companion.persistence import atomic_write, cleanup_stale_atomic_temps
 from ed_companion.logging_security import redact_secrets
@@ -53,7 +54,8 @@ from PySide6.QtCore import (
     qInstallMessageHandler,
 )
 from PySide6.QtGui import QAction, QFont
-from PySide6.QtQml import QQmlApplicationEngine
+from PySide6.QtQml import QQmlApplicationEngine, QQmlEngine, QQmlExpression
+from PySide6.QtQuick import QQuickItem
 from PySide6.QtNetwork import QLocalServer, QLocalSocket
 from PySide6.QtWidgets import QApplication, QMenu, QStyle, QSystemTrayIcon
 
@@ -63,9 +65,9 @@ from ed_companion.phase14 import CockpitController
 from ed_companion.overlay import OverlaySettings, OverlayWindowRuntime
 from ed_companion.diagnostics import (
     clean_diagnostic_log,
-    INCUBATION_DELEGATE_FRAGMENT,
     INCUBATION_TEARDOWN_FRAGMENT,
     is_benign_qt_message,
+    is_qt_delegate_failure,
 )
 
 
@@ -264,9 +266,8 @@ def install_diagnostics(smoke_messages=None):
     """
     directory = diagnostics_dir()
     clean_diagnostic_log(directory / "phase14.log")
-    previous_qt_message = ""
-    last_incubation_teardown_at = 0.0
-    pending_delegate_failure = None  # (context, message), awaiting pairing
+    previous_teardown = None  # (source file, monotonic timestamp), consumed once
+    pending_delegate_failure = None  # (context, message, timestamp), awaiting pairing
 
     def crash_hook(exc_type, exc_value, exc_traceback):
         rendered = redact_secrets("".join(traceback.format_exception(
@@ -312,45 +313,51 @@ def install_diagnostics(smoke_messages=None):
     def flush_pending_delegate_failure():
         nonlocal pending_delegate_failure
         if pending_delegate_failure is not None:
-            context, message = pending_delegate_failure
+            context, message, _stamp = pending_delegate_failure
             pending_delegate_failure = None
             emit_message(context, message)
 
     def qt_message_handler(_mode, context, message):
-        nonlocal previous_qt_message, last_incubation_teardown_at
+        nonlocal previous_teardown
         nonlocal pending_delegate_failure
         folded = str(message or "").casefold()
         now = time.monotonic()
+        source = str(getattr(context, "file", "") or "")
         if INCUBATION_TEARDOWN_FRAGMENT in folded:
-            last_incubation_teardown_at = now
-            # The failure this teardown belongs to may have already
-            # arrived and still be pending - Qt does not guarantee which
-            # of the pair it emits first (see is_benign_qt_message).
-            pending_delegate_failure = None
-        teardown_recent = (
-            bool(last_incubation_teardown_at)
-            and now - last_incubation_teardown_at <= 1.0
-        )
-        benign = is_benign_qt_message(
-            message, previous_qt_message, teardown_recent
-        )
-        if INCUBATION_DELEGATE_FRAGMENT in folded:
-            last_incubation_teardown_at = 0.0
-        previous_qt_message = str(message or "")
-        if benign:
+            if pending_delegate_failure is not None:
+                failure_context, _failure_message, failure_at = pending_delegate_failure
+                failure_source = str(getattr(failure_context, "file", "") or "")
+                if source and source == failure_source and now - failure_at <= 0.05:
+                    # One cancelled incubation, emitted in failure-first order.
+                    pending_delegate_failure = None
+                    previous_teardown = None
+                    return
+                flush_pending_delegate_failure()
+            previous_teardown = (source, now)
             return
-        if INCUBATION_DELEGATE_FRAGMENT in folded:
-            # Not yet paired with a teardown message that already
-            # arrived - Qt may still emit one immediately after this one,
-            # since it does not guarantee the order. Hold it briefly
-            # rather than judge it a real failure right away; any earlier
-            # still-pending one clearly was not paired, so it is real.
+        if is_qt_delegate_failure(message):
+            preceding_teardown = previous_teardown
+            previous_teardown = None
             flush_pending_delegate_failure()
-            pending_delegate_failure = (context, message)
-            QTimer.singleShot(50, flush_pending_delegate_failure)
+            if (preceding_teardown is not None and source
+                    and source == preceding_teardown[0]
+                    and now - preceding_teardown[1] <= 0.05):
+                return  # Same pair, teardown-first order; never a global grace period.
+            # Qt owns the callback's native log context; retain values rather
+            # than its temporary wrapper until the deferred flush runs.
+            saved_context = SimpleNamespace(file=source, line=getattr(context, "line", 0) or 0)
+            pending_delegate_failure = (saved_context, str(message), now)
+            pending = pending_delegate_failure
+            def flush_this_failure():
+                # An older timer must not flush a later, still-pairable failure.
+                if pending_delegate_failure is pending:
+                    flush_pending_delegate_failure()
+            QTimer.singleShot(50, flush_this_failure)
             return
+        previous_teardown = None
         flush_pending_delegate_failure()
-        emit_message(context, message)
+        if not is_benign_qt_message(message):
+            emit_message(context, message)
 
     sys.excepthook = crash_hook
     qInstallMessageHandler(qt_message_handler)
@@ -429,7 +436,30 @@ class SmokeTestRunner(QObject):
         QTimer.singleShot(0, self._next)
 
     def _find(self, object_name):
-        return self.window.findChild(QObject, object_name)
+        targets = self.window.findChildren(QObject, object_name)
+        # Popups reparent visually to the overlay and may outlive the page
+        # creation context. Their original QObject loader ancestry is not a
+        # readiness predicate for opening a dialog.
+        if object_name.startswith("qa-dialog-"):
+            return targets[0] if targets else None
+        for target in targets:
+            ancestor = target
+            ready = True
+            while ancestor is not None and ancestor is not self.window:
+                if ancestor.inherits("QQuickLoader"):
+                    # Ignore partial incubation and old QObject contexts still
+                    # alive because a dialog retains them. Only the nearest
+                    # loader owns this page; outer QObject creation contexts
+                    # need not be its active visual ancestors.
+                    ready = bool(ancestor.property("active")) and bool(QQmlExpression(
+                        QQmlEngine.contextForObject(ancestor), ancestor, "status === 1",
+                    ).evaluate()[0])
+                    break
+                ancestor = ((ancestor.parentItem() or ancestor.parent()) if isinstance(ancestor, QQuickItem)
+                            else ancestor.parent())
+            if ready:
+                return target
+        return None
 
     def _module_comparison(self):
         self.window.setProperty("currentPage", 17)
@@ -868,7 +898,11 @@ def run():
         "smokeInjectQmlError",
         smoke_test and os.environ.get("PHASE14_SMOKE_INJECT_QML_ERROR") == "1",
     )
-    engine.rootContext().setContextProperty("smokeTest", smoke_test)
+    # Exercise the real lazy/asynchronous QML page path in an isolated smoke
+    # profile too; Python diagnostics and the smoke runner remain enabled.
+    engine.rootContext().setContextProperty(
+        "smokeTest", smoke_test and os.environ.get("PHASE14_SMOKE_ASYNC_PAGES") != "1",
+    )
     try:
         preview_cmdr_section = max(
             0, min(2, int(os.environ.get("PHASE14_PREVIEW_CMDR_SECTION", "0")))

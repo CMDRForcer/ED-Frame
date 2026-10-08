@@ -2,6 +2,113 @@
 
 ## Unreleased
 
+## 1.5.40 — 2026-10-08
+
+### Improved
+
+- Recognize Qt's Loader-ancestor delegate teardown messages as a cancelled
+  page load only when immediately paired with incubation teardown from the
+  same QML file (within 50 ms). Unpaired failures remain diagnostic errors;
+  deferred messages retain their original source context. Exercise Engineers,
+  unlock guides and Tech Brokers through 75 rapid unload/reload cycles in both
+  loader modes, and require the full synchronous QML smoke test to pass without
+  a retry.
+
+- Complete Mining Finder Powerplay paging and batch missing mine AND sale
+  systems across all 100 displayed routes. Wait for regional data/ring merging
+  before route verification; fresh explicit facts and retry cooldowns prevent
+  redundant lookups. Publish search Powerplay facts without the relay batch
+  delay, retain the specific missing-evidence reason and never treat a successful
+  ring lookup or an empty Powerplay response as verified Merit eligibility.
+  Newer indexed facts take priority over older ring/market metadata; explicit
+  unoccupied observations clear historic controller assertions.
+  Older servers retain a bounded, coordinate-based Powerplay fallback.
+
+- Prepare CMDR cards and every finance-chart time window on a tracked worker;
+  getters reuse complete profile-fenced snapshots instead of traversing the
+  Journal from Qt. Journal profile/location and health checks also run off-thread.
+  Unknown current locations remain unknown until verified, never another
+  system's exobiology distance. EDDN backlog scans process at most 500 complete
+  records per tick across all files, with queue-before-cursor persistence and
+  partial-line retry unchanged. Sharing cannot baseline unverified profile paths.
+- Merge/archive live State Finds observations off-thread. Concurrent server
+  pages trigger rebasing; additional inputs coalesce and original-profile facts
+  are archived before publication. Manual refresh counts publish after completion
+  and final shutdown reclaims unpublished batches. BGS predictions, retention
+  rules and signal lifetimes are unchanged.
+
+- Keep catalog synchronization persistence off the GUI thread: defer source
+  status and warm-target writes, local market ingestion, route-verification
+  market saves and State Finds page merge/archive/save. Rebase pages against
+  concurrent Journal updates and queued saves; facts remain durable before
+  advancing the sync cursor. Profile/reset/location guards and explicit retry
+  states preserve existing data and controls during background imports.
+
+- Keep Mining Finder results visible during same-query background refreshes.
+  Coalesce result publication, skip unchanged snapshots and update route rows
+  in place while preserving the selected ring and scroll anchor. Failed
+  refreshes retain the last complete result; new queries/profiles stay isolated.
+
+- Keep ordinary SQLite/WAL reads independent of catalog imports and serialize
+  JSON writes per target file, so a large snapshot cannot lock a tab's small
+  settings save. Debounce tab persistence and incubate normal page loads
+  asynchronously; shutdown still saves the latest selection.
+- Stream large Mining/Powerplay JSON loads and saves, share repeated strings,
+  reuse immutable source rows and retain the shared Mining view between tabs.
+  Build labels only for actual search results and evaluate filters, route
+  planning and market diagnostics on a tracked, profile-fenced worker.
+- Store new historical payloads losslessly compressed and deduplicate repeated
+  retrievals of the same Mining facts; changed observation timestamps/evidence
+  still create history. New recovery snapshots use verified gzip with legacy
+  recovery fallback. Existing history, JSON files and legacy backups are not
+  migrated, compacted or removed by this change.
+
+- Revalidate complete, compressed profile-local Mining ring snapshots against
+  query-bound server revisions. Unchanged regions need one small confirmation
+  instead of retransmitting every page; observation timestamps are preserved.
+  Changes in yields, hotspots, metadata, references or reference positions
+  invalidate the snapshot. Markets and Powerplay continue their fresh lookups.
+- Prove versioned paging with start/end content and database tuple versions,
+  plus projection checks on every page. Changed pagination retries once; a
+  continuously changing domain falls back to provisional fresh rows, never a
+  cacheable completeness claim. Old/overloaded servers and radii above 500 LY
+  retain the original paging path. Reset/profile guards fence snapshot saves.
+
+- Reuse HTTP connections for each Mining Finder lookup and fetch regional
+  rings, Powerplay and markets concurrently with at most three independent
+  sessions. Cursor paging, provider fallback, limits and freshness stay intact.
+- Persist lookup results, retry metadata and coordinate snapshots on the
+  tracked background worker instead of the GUI completion slot. Profile and
+  request guards plus reset serialization prevent stale cache writes; save
+  failures remain visible without discarding usable results.
+- Let explicit Mining Finder searches preempt background market warming;
+  canceled warm targets remain queued and stale completions cannot replace a
+  newer search. Already-running foreground searches keep their followup queue.
+- Merge incoming regional/live rings and current-system refreshes, compact
+  their snapshots and archive displaced observations on a tracked worker.
+  Concurrent catalog changes trigger a lossless rebase; profile/reset guards
+  prevent stale publication. Shutdown still performs a final durable flush.
+  BGS prediction and retention processing is unchanged.
+- Keep Mining Finder ring/filter caches across unrelated Journal state or
+  balance updates. Worker-built local-evidence fingerprints avoid hashing
+  large snapshots in UI getters; profile, position, observations, catalog,
+  market/Powerplay facts, verification and loadout changes still invalidate
+  their own domains. Minute freshness checks and hourly full projections
+  continue independently of Journal activity.
+- Reuse fleet projections and avoid fleet-model notifications for unrelated
+  updates. Fleet rows, profile, ship definitions and image mapping/file changes
+  remain dependencies. Broad finance and BGS cache behavior is unchanged.
+
+### Notes
+
+- Existing profile history, catalogs and legacy recovery files remain intact;
+  this release does not compact or remove the existing app-data folder.
+- The Powerplay paging/batch API fix is deployed. Conditional ring snapshot
+  reuse requires its matching server endpoint; older servers retain ordinary
+  complete paging. BGS prediction rules are unchanged.
+- Verified with 1,125 app tests, including real synchronous/asynchronous QML
+  page loads and 600 rapid Engineers mode/unload actions.
+
 ## 1.5.39 — 2026-10-07
 
 ### Improved

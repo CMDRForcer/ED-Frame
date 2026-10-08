@@ -15,6 +15,7 @@ class Emitter:
 class ControllerStub:
     connectionChanged = Emitter()
     miningChanged = Emitter()
+    _record_catalog_source_result = NavigationMixin._record_catalog_source_result
 
     def __init__(self):
         self._active_edframe_catalog_request = {"id": "request"}
@@ -209,7 +210,7 @@ class EdFrameCatalogStatusTests(unittest.TestCase):
         controller._edframe_catalog_sync_busy = True
         controller._edframe_catalog_sync_rows = 0
         controller._mining_market_revision = 0
-        controller._mining_market_cache_status = lambda: "321 retained"
+        controller._mining_market_cache_status = lambda **kwargs: "321 retained"
 
         NavigationMixin._finish_edframe_catalog_sync(controller, {
             "id": "sync", "generation": 7, "success": True,

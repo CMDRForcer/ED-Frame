@@ -28,6 +28,7 @@ from ed_companion.i18n import (
 )
 from ed_companion.persistence import atomic_write, load_json_file
 from ed_companion.history_archive import HistoryArchive
+from .dependency_cache import invalidate_state_cache
 from ed_companion.integrations.inara import (
     INARA_BATCH_WINDOW_SECONDS,
     INARA_MAX_REQUESTS_PER_MINUTE,
@@ -329,7 +330,7 @@ FRONTIER_REQUEST_WATCHDOG_MS = 120_000
 # network request cannot make Windows report the app as hung during exit.
 SHUTDOWN_GRACE_SECONDS = 1.5
 SHUTDOWN_PRIORITY_WORKER_PREFIXES = (
-    "hge-cache-save", "mining-catalog-save",
+    "hge-cache-save", "hge-observation-merge", "mining-catalog-save", "mining-observation-merge",
     "initial-journal-state", "journal-state-",
 )
 
@@ -415,7 +416,7 @@ class CockpitController(
         )
         if migration_required:
             store.set_metadata("legacy_migrated", "1")
-        if migration_required or imported or not store.backup_path.is_file():
+        if migration_required or imported or not store.has_backup():
             store.backup()
         return store
 
@@ -617,6 +618,9 @@ class CockpitController(
         self.connectionChanged.connect(self._invalidate_connection_cache)
         self.connectionChanged.connect(self.commanderCardsChanged.emit)
         self.stateChanged.connect(self.commanderCardsChanged.emit)
+        self.commanderProjectionReady.connect(self._finish_commander_projection)
+        self.journalLocationReady.connect(self._finish_journal_location)
+        self.journalHealthReady.connect(self._finish_journal_health)
         self.stateChanged.connect(self.stationServicesChanged.emit)
         self.stationServicesFinished.connect(self._finish_station_services)
         self.stateChanged.connect(self.commoditiesChanged.emit)
@@ -685,17 +689,22 @@ class CockpitController(
         self._mining_rows_build_dirty = False
         self.miningCatalogLoaded.connect(self._finish_mining_catalog_load)
         self.miningRowsReady.connect(self._finish_mining_rows_build)
+        self._async_mining_plan_enabled = True
+        self.miningPlanReady.connect(self._finish_mining_plan)
         self._start_mining_catalog_load()
         self._mining_sync_busy = False
         self._mining_sync_status = "Ready"
         self._active_mining_request = None
         self.miningSyncFinished.connect(self._finish_mining_sync)
+        self._active_mining_observation_batch = None
+        self.miningObservationBatchFinished.connect(self._finish_mining_observation_batch)
         self._mining_verification_busy = False
         self._mining_verification_status = "Ready · verifies top routes after search"
         self._mining_verification_completed = 0
         self._mining_verification_total = 0
         self._mining_verification_failures = 0
         self._mining_verification_cache = {}
+        self._mining_powerplay_lookup_cache = {}
         self._mining_powerplay_market_verification_cache = {}
         self._active_mining_verification_request = None
         self._pending_mining_verification = None
@@ -732,6 +741,7 @@ class CockpitController(
         self._active_mining_market_request = None
         self._pending_mining_market_query = None
         self.miningMarketFinished.connect(self._finish_mining_market_sync)
+        self.localMiningMarketFinished.connect(self._finish_local_mining_market)
         self.edFrameCatalogStatusFinished.connect(
             self._finish_edframe_catalog_status
         )
@@ -751,16 +761,10 @@ class CockpitController(
         self.edFrameStationPriceUploadFinished.connect(
             self._finish_edframe_station_price_upload
         )
-        self._mining_powerplay_catalog = self._read_local_json(
-            self.mining_powerplay_catalog_file, {}
-        )
-        if not isinstance(self._mining_powerplay_catalog, dict):
-            self._mining_powerplay_catalog = {}
-        self._mining_powerplay_observations = self._read_local_json(
-            self.mining_powerplay_observations_file, []
-        )
-        if not isinstance(self._mining_powerplay_observations, list):
-            self._mining_powerplay_observations = []
+        # The catalog worker loads these public links too; don't parse another
+        # 50 MB of JSON on the first-frame/profile-switch UI path.
+        self._mining_powerplay_catalog = {}
+        self._mining_powerplay_observations = []
         self._pending_mining_powerplay_observations = []
         self._mining_powerplay_busy = False
         powerplay_count = len(
@@ -920,6 +924,10 @@ class CockpitController(
         self.refreshDebounceTimer.setInterval(180)
         self.refreshDebounceTimer.setSingleShot(True)
         self.refreshDebounceTimer.timeout.connect(self._launch_state_refresh)
+        self.uiConfigSaveTimer = QTimer(self)
+        self.uiConfigSaveTimer.setInterval(400)
+        self.uiConfigSaveTimer.setSingleShot(True)
+        self.uiConfigSaveTimer.timeout.connect(self._save_ui_config)
         self.craftConfirmationTimer = QTimer(self)
         self.craftConfirmationTimer.setInterval(5500)
         self.craftConfirmationTimer.setSingleShot(True)
@@ -927,6 +935,7 @@ class CockpitController(
         self.hgeBatchTimer = QTimer(self)
         self.hgeBatchTimer.setInterval(3000)
         self.hgeBatchTimer.timeout.connect(self.flushHgeObservationBatch)
+        self.hgeObservationBatchFinished.connect(self._finish_hge_observation_batch)
         self.hgeBatchTimer.start()
         self.spanshAutoRefreshTimer = QTimer(self)
         self.spanshAutoRefreshTimer.setInterval(5 * 60 * 1000)
@@ -952,6 +961,7 @@ class CockpitController(
         QTimer.singleShot(30_000, self._maybe_auto_refresh_spansh)
         QTimer.singleShot(60_000, self._maybe_auto_refresh_mining_markets)
         QTimer.singleShot(5_000, self.refreshEdFrameCatalogStatus)
+        QTimer.singleShot(20_000, self._schedule_mining_market_backup)
         self._ensure_eddn_listener()
 
     def _start_initial_state_load(self):
@@ -1030,11 +1040,15 @@ class CockpitController(
         Journal lines usually land in more than one debounced refresh.
         Compare against ``previous`` and skip a domain whose exposed keys
         did not actually change; ``previous=None`` (first load, or a
-        caller that already mutated ``self._state`` in place) always
-        emits, matching the prior unconditional behavior.
+        caller that already mutated ``self._state`` in place) still emits
+        for broad-state domains. Fleet additionally keeps a private dependency
+        snapshot, so it can recognize unchanged and in-place updates safely.
         """
         self._state_revision += 1
-        self._derived_cache.clear()
+        invalidate_state_cache(self)
+        fleet_key = self._commander_fleet_key()
+        previous_fleet_key = getattr(self, "_published_fleet_key", None)
+        self._published_fleet_key = fleet_key
         self.stateChanged.emit()
         state = self._state
         if previous is None or any(
@@ -1042,7 +1056,10 @@ class CockpitController(
             for key in ("materials", "trades", "traderRoute", "tradeHistory")
         ):
             self.materialsChanged.emit()
-        self.fleetChanged.emit()
+        if ((previous is None and previous_fleet_key is None)
+                or (previous is not None and previous.get("fleet") != state.get("fleet"))
+                or (previous_fleet_key is not None and previous_fleet_key != fleet_key)):
+            self.fleetChanged.emit()
         if previous is None or any(
             previous.get(key) != state.get(key)
             for key in (
@@ -1223,6 +1240,7 @@ class CockpitController(
     ) -> Any:
         key = (name, revision)
         if key not in self._derived_cache:
+            self._drop_derived({name})
             self._derived_cache[key] = builder()
         return self._derived_cache[key]
 
@@ -1237,6 +1255,7 @@ class CockpitController(
         revision = (
             self._state_revision, self._hge_revision, self._eddn_revision,
         )
+        self._drop_derived({"state_find_rows"})
         self._derived_cache[("state_find_rows", revision)] = rows
 
     @Slot()
@@ -1251,7 +1270,7 @@ class CockpitController(
 
     def _drop_derived(self, names: set[str]) -> None:
         for key in list(self._derived_cache):
-            if key[0] in names:
+            if isinstance(key, tuple) and key[0] in names:
                 self._derived_cache.pop(key, None)
 
 
@@ -1276,14 +1295,15 @@ class CockpitController(
     def _crash_reports(self):
         directory = self.config_dir / "crashes"
         try:
-            paths = sorted(
-                directory.glob("crash-*.log"),
-                key=lambda path: path.stat().st_mtime,
-                reverse=True,
-            )
+            cache_key = (str(directory), directory.stat().st_mtime_ns, int(time.monotonic() // 5))
+            if getattr(self, "_crash_reports_key", None) == cache_key:
+                return self._crash_reports_cache
+            # Timestamped names sort chronologically. Only stat the newest
+            # 20, not every one of 18,000 old exception reports on UI polls.
+            paths = sorted(directory.glob("crash-*.log"), reverse=True)[:20]
         except OSError:
-            paths = []
-        return [
+            return []
+        result = [
             {
                 "name": path.name,
                 "path": str(path),
@@ -1291,6 +1311,9 @@ class CockpitController(
             }
             for path in paths[:20]
         ]
+        self._crash_reports_key = cache_key
+        self._crash_reports_cache = result
+        return result
 
     def _write_log(self, message):
         if not self._debug_mode:
@@ -1379,15 +1402,24 @@ class CockpitController(
             return -1.0
 
     def _system_coordinate_index(self):
+        paths = (self._reference_data_dir / "system_coordinates.json",
+                 self._data_dir / "system_coordinates.json")
+        key = tuple((str(path), path.stat().st_mtime_ns, path.stat().st_size)
+                    if path.exists() else (str(path), None, None) for path in paths)
+        if getattr(self, "_coordinate_index_key", None) == key:
+            return self._coordinate_index_cache
         coordinates = {
             **read_json(self._reference_data_dir / "system_coordinates.json", {}),
             **read_json(self._data_dir / "system_coordinates.json", {}),
         }
-        return {
+        result = {
             str(system).strip().casefold(): position
             for system, position in coordinates.items()
             if str(system).strip() and self._valid_star_position(position)
         }
+        self._coordinate_index_key = key
+        self._coordinate_index_cache = result
+        return result
 
     def _state_find_origin(
         self, coordinates, state=None, eddn_context=None,
@@ -2593,6 +2625,19 @@ class CockpitController(
         if self._eddn_busy:
             LOGGER.warning("EDDN profile switch deferred while an upload is active")
             return False
+        if hasattr(self, "_network_threads_lock") and (
+            getattr(self, "_active_hge_observation_batch", None)
+            or getattr(self, "_active_mining_observation_batch", None)
+            or getattr(self, "_pending_bgs_snapshots", [])
+            or getattr(self, "_pending_hge_observations", [])
+            or getattr(self, "_pending_mining_candidates", [])
+            or getattr(self, "_pending_mining_powerplay_observations", [])
+        ):
+            # Finish original-profile inputs before rebinding paths/archives.
+            # In particular, an archive error must not lose a retained retry
+            # batch merely because a different Commander has just logged in.
+            self.flushHgeObservationBatch(True)
+            return False  # The refresh completion already schedules a retry.
         self._active_inara_request = None
         self._inara_busy = False
         self._active_mining_request = None
@@ -2606,6 +2651,7 @@ class CockpitController(
         self._mining_verification_total = 0
         self._mining_verification_failures = 0
         self._mining_verification_cache = {}
+        self._mining_powerplay_lookup_cache = {}
         self._mining_powerplay_market_verification_cache = {}
         self._active_edframe_catalog_sync_request = None
         self._edframe_catalog_sync_busy = False
@@ -2698,16 +2744,8 @@ class CockpitController(
             ),
         })
         self._mining_market_status = self._mining_market_cache_status()
-        self._mining_powerplay_catalog = self._read_local_json(
-            self.mining_powerplay_catalog_file, {}
-        )
-        if not isinstance(self._mining_powerplay_catalog, dict):
-            self._mining_powerplay_catalog = {}
-        self._mining_powerplay_observations = self._read_local_json(
-            self.mining_powerplay_observations_file, []
-        )
-        if not isinstance(self._mining_powerplay_observations, list):
-            self._mining_powerplay_observations = []
+        self._mining_powerplay_catalog = {}
+        self._mining_powerplay_observations = []
         powerplay_count = len(
             self._mining_powerplay_catalog.get("systems", [])
         )
@@ -2936,13 +2974,25 @@ class CockpitController(
         self.flushHgeObservationBatch(True)
         batch = dict(self._last_hge_batch_stats)
         previous_count = len(self._hge_sightings)
-        self._save_hge_cache()
+        if not getattr(self, "_active_hge_observation_batch", None):
+            self._save_hge_cache()
         if getattr(self, "_edframe_catalog_enabled", True):
             QTimer.singleShot(0, self.syncEdFrameStateFinds)
         removed = max(0, previous_count - len(self._hge_sightings))
         self._ensure_eddn_listener()
         self._scan_eddn_journal()
         self.refresh()
+        if getattr(self, "_active_hge_observation_batch", None):
+            self._state_find_refresh_batch_pending = True
+            self._state_find_refresh_batch_totals = {}
+            self._state_find_refresh_status = "REFRESHING · local observations are merging in the background"
+            self.hgeChanged.emit()
+            return
+        batch["expiredRemoved"] = int(batch.get("expiredRemoved", 0) or 0) + removed
+        self._complete_state_find_refresh(batch)
+
+    def _complete_state_find_refresh(self, batch):
+        """Publish refresh counts only after the corresponding merge completes."""
         listener = self._eddn_listener_status
         self._last_state_find_refresh_stats = {
             "refreshedAt": time.strftime("%H:%M"),
@@ -2950,13 +3000,13 @@ class CockpitController(
             "signalsMerged": int(batch.get("signalsMerged", 0) or 0),
             "expiredRemoved": int(
                 batch.get("expiredRemoved", 0) or 0
-            ) + int(removed or 0),
+            ),
         }
         self._state_find_refresh_status = (
             f"REFRESHED {self._last_state_find_refresh_stats['refreshedAt']} · {listener}"
             f" · {batch.get('bgsApplied', 0)} BGS SNAPSHOTS APPLIED"
             f" · {batch.get('signalsMerged', 0)} SIGNALS MERGED"
-            f" · {batch.get('expiredRemoved', 0) + removed} EXPIRED REMOVED"
+            f" · {batch.get('expiredRemoved', 0)} EXPIRED REMOVED"
         )
         self.hgeChanged.emit()
 
@@ -2974,6 +3024,7 @@ class CockpitController(
         # cannot mutate or re-persist queue state after this point.
         for timer_name in (
             "timer", "refreshDebounceTimer", "craftConfirmationTimer",
+            "uiConfigSaveTimer",
             "hgeBatchTimer", "spanshAutoRefreshTimer",
             "miningMarketAutoRefreshTimer", "edFrameCatalogStatusTimer",
             "_mining_market_retry_timer",
@@ -3069,20 +3120,16 @@ class CockpitController(
             if self._last_page == 3 and page != 3:
                 self.clearCraftConfirmation()
             if self._last_page == 12 and page != 12:
-                # The lazy Mining page no longer needs its 70k+ enriched row
-                # projection. Keep the persisted source catalog, but release
-                # this derived view until Mining Finder is opened again.
-                self._mining_rows_build_token = getattr(
-                    self, "_mining_rows_build_token", 0
-                ) + 1
-                self._mining_rows_build_in_flight = False
-                self._mining_rows_build_dirty = False
-                self._mining_rows_cache_key = None
-                self._mining_rows_cache = []
+                # The view now shares source records rather than a giant
+                # decorated clone. Keep it for instant return navigation.
                 self._mining_find_cache_key = None
                 self._mining_find_cache = []
             self._last_page = page
-            self._save_ui_config()
+            timer = getattr(self, "uiConfigSaveTimer", None)
+            if timer is not None:
+                timer.start()
+            else:
+                self._save_ui_config()
 
 
 

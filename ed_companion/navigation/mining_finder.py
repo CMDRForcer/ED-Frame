@@ -4,12 +4,14 @@ from __future__ import annotations
 
 import json
 import hashlib
+import requests
 from datetime import datetime, timezone
 from math import sqrt
 from typing import Any, Iterable
 
 from .mining_contract import MINING_FRESHNESS_SECONDS
 from .mining_commodities import RHINO_SURFACE, mining_commodity_id
+from .mining_snapshot import snapshot_key, valid_revision
 
 SPANSH_DUMP_URL = "https://spansh.co.uk/api/dump/{system_address}"
 EDFRAME_CATALOG_SITES_URL = (
@@ -119,8 +121,57 @@ def fetch_edframe_mining_candidates(
     system: str, get: Any, *, commodity: str = "", origin: Any = None,
     timeout: int = 20, max_distance: float | None = None,
     diagnostics: dict | None = None,
+    snapshot_store: Any = None,
 ) -> list[dict[str, Any]]:
-    """Fetch one system from the central catalog without identity data."""
+    """Fetch a complete regional snapshot, retrying one changing-page race.
+
+    An unchanged server revision is usable only with a checksum-validated
+    complete local snapshot. Legacy servers still take the full paging path.
+    """
+    if diagnostics is not None:
+        for name in ("_snapshot", "revision", "notModified", "consistent", "snapshotStatus"):
+            diagnostics.pop(name, None)
+    for attempt in range(2):
+        try:
+            return _fetch_edframe_mining_snapshot(
+                system, get, commodity=commodity, origin=origin,
+                timeout=timeout, max_distance=max_distance,
+                diagnostics=diagnostics, snapshot_store=snapshot_store,
+                use_snapshot=max_distance is None or float(max_distance) <= 500,
+            )
+        except _MiningSnapshotUnavailable:
+            # Versioning is an optimization, not a dependency for coverage.
+            # Overloaded/mismatched servers retain the original fresh path.
+            return _fetch_edframe_mining_snapshot(
+                system, get, commodity=commodity, origin=origin,
+                timeout=timeout, max_distance=max_distance,
+                diagnostics=diagnostics, snapshot_store=None, use_snapshot=False,
+            )
+        except _MiningSnapshotChanged:
+            if attempt:
+                rows = _fetch_edframe_mining_snapshot(
+                    system, get, commodity=commodity, origin=origin,
+                    timeout=timeout, max_distance=max_distance,
+                    diagnostics=diagnostics, snapshot_store=None, use_snapshot=False,
+                )
+                if diagnostics is not None:
+                    diagnostics.update(bounded=True, consistent=False,
+                                       snapshotStatus="Changed while paging; provisional results")
+                return rows
+
+
+class _MiningSnapshotChanged(Exception):
+    pass
+
+
+class _MiningSnapshotUnavailable(Exception):
+    pass
+
+
+def _fetch_edframe_mining_snapshot(
+    system, get, *, commodity, origin, timeout, max_distance,
+    diagnostics, snapshot_store, use_snapshot,
+):
     requested = _text(system)
     if not requested:
         raise ValueError("A system name is required")
@@ -141,18 +192,73 @@ def fetch_edframe_mining_candidates(
     commodity_id = mining_commodity_id(commodity)
     if commodity_id and commodity_id != "allcommodities":
         params["commodity"] = commodity_id
+    key = snapshot_key(EDFRAME_CATALOG_SITES_URL, params)
+    cached = snapshot_store.load(key) if snapshot_store is not None and use_snapshot else None
+    if use_snapshot:
+        params["snapshot_protocol"] = 1
+    if cached:
+        params["known_revision"] = cached["revision"]
     candidates = []
     bounded = False
     seen_cursors = set()
+    revision = None
     for page in range(50):
-        response = get(EDFRAME_CATALOG_SITES_URL, params=dict(params), timeout=timeout)
+        try:
+            response = get(EDFRAME_CATALOG_SITES_URL, params=dict(params),
+                           timeout=max(30, timeout) if use_snapshot else timeout)
+        except requests.Timeout:
+            if use_snapshot:
+                raise _MiningSnapshotUnavailable() from None
+            raise
+        if use_snapshot and getattr(response, "status_code", None) in (400, 422, 500, 502, 503, 504):
+            raise _MiningSnapshotUnavailable()
+        if getattr(response, "status_code", None) == 409:
+            raise _MiningSnapshotChanged()
         response.raise_for_status()
         payload = response.json()
-        candidates.extend(project_edframe_mining_candidates(payload, origin))
+        if not isinstance(payload, dict):
+            raise ValueError("ED-Frame mining catalog returned invalid data")
+        versioned = use_snapshot and type(payload.get("snapshotProtocol")) is int and payload["snapshotProtocol"] == 1
+        if versioned and not valid_revision(payload.get("revision")):
+            raise ValueError("ED-Frame mining catalog returned an invalid revision")
+        if payload.get("notModified"):
+            if (page != 0 or not cached or not versioned or payload.get("revision") != cached["revision"]
+                    or payload.get("notModified") is not True or payload.get("hasMore") is not False
+                    or payload.get("snapshotComplete") is not True
+                    or payload.get("results") != [] or payload.get("communityReferences", []) != []):
+                raise ValueError("ED-Frame mining catalog returned an invalid unchanged snapshot")
+            candidates = cached["candidates"]
+            if diagnostics is not None:
+                diagnostics.update(count=len(candidates), bounded=False, pages=1,
+                                   notModified=True, revision=cached["revision"])
+            return candidates
+        if page == 0 and versioned:
+            revision = payload["revision"]
+            static = payload.get("snapshotStatic")
+            if not isinstance(static, str) or len(static) != 64:
+                raise ValueError("Mining snapshot projection version is unknown")
+            params.pop("known_revision", None)
+            params["snapshot_revision"] = revision
+            params["snapshot_static"] = static
+        elif revision and (not versioned or payload["revision"] != revision):
+            raise _MiningSnapshotChanged()
+        elif revision and payload.get("snapshotStatic") != params["snapshot_static"]:
+            raise _MiningSnapshotChanged()
+        projected = project_edframe_mining_candidates(payload, origin)
+        if versioned and len(projected) != len(payload["results"]):
+            raise ValueError("Incomplete mining snapshot projection")
+        candidates.extend(projected)
         references = payload.get("communityReferences", [])
         if page == 0 and references:
-            candidates.extend(project_edframe_mining_candidates({"results": references}, origin))
+            projected_refs = project_edframe_mining_candidates({"results": references}, origin)
+            if versioned and len(projected_refs) != len(references):
+                raise ValueError("Incomplete mining reference projection")
+            candidates.extend(projected_refs)
+        if versioned and type(payload.get("hasMore")) is not bool:
+            raise ValueError("Mining snapshot completeness is unknown")
         if not payload.get("hasMore"):
+            if versioned and payload.get("snapshotComplete") is not True:
+                raise ValueError("Mining snapshot completeness is unproven")
             # Older servers cannot paginate: expose that limit, never pretend complete.
             bounded = "hasMore" not in payload and len(payload["results"]) >= params["limit"]
             break
@@ -170,6 +276,10 @@ def fetch_edframe_mining_candidates(
     candidates = merge_mining_candidates(candidates)
     if diagnostics is not None:
         diagnostics.update({"count": len(candidates), "bounded": bounded, "pages": page + 1})
+        if revision and not bounded:
+            diagnostics["revision"] = revision
+            diagnostics["_snapshot"] = {"key": key, "revision": revision,
+                                        "complete": True, "candidates": candidates}
     return candidates
 
 

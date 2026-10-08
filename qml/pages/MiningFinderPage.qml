@@ -98,7 +98,10 @@ Item {
         "CIVIL WAR", "ELECTION", "EXPANSION", "FAMINE", "INVESTMENT",
         "LOCKDOWN", "OUTBREAK", "PUBLIC HOLIDAY", "RETREAT", "WAR"
     ]
-    readonly property var readiness: cockpit.miningLoadoutReadiness(miningMethod)
+    readonly property var readiness: {
+        let revision = _miningRevisionSnapshot
+        return cockpit.miningLoadoutReadiness(miningMethod)
+    }
     readonly property var commodityOptions: {
         let revision = _miningRevisionSnapshot
         return cockpit.miningCommodityFiltersForMethod(miningMethod)
@@ -112,11 +115,14 @@ Item {
         let revision = _miningRevisionSnapshot
         return cockpit.miningSystemSuggestions(startSystem, 8)
     }
-    readonly property var resultRows: {
-        let revision = _miningRevisionSnapshot + searchRevision
+    property var resultRows: []
+    property string _resultSignature: "[]"
+    function refreshResults() {
+        // Coalesce notifications/filter assignments, then publish one complete
+        // snapshot. Busy notifications must not reset an unchanged view model.
         if (searchRevision === 0)
-            return []
-        return cockpit.miningPlanRoutes(
+            return
+        let rows = cockpit.miningPlanRoutes(
                     appliedStartSystem, appliedCommodityFilter, appliedNearbyLy,
                     appliedReserveFilter, appliedRingFilter,
                     appliedRingsOnly,
@@ -128,7 +134,17 @@ Item {
                     appliedLandingPad, appliedPower || powerName,
                     appliedPowerGoal, appliedOpposingPower,
                     appliedSystemState)
+        let signature = JSON.stringify(rows)
+        if (signature !== _resultSignature) {
+            _resultSignature = signature
+            resultRows = rows
+        }
+        verifyCurrentSearch()
     }
+    onSearchRevisionChanged: Qt.callLater(refreshResults)
+    on_MiningRevisionSnapshotChanged: Qt.callLater(refreshResults)
+    onPowerNameChanged: Qt.callLater(refreshResults)
+    Component.onCompleted: Qt.callLater(refreshResults)
     readonly property var marketDiagnostics: {
         let revision = _miningRevisionSnapshot + searchRevision
         if (searchRevision === 0)
@@ -139,8 +155,8 @@ Item {
                     appliedMaxMarketAgeHours, appliedLandingPad)
     }
     readonly property bool marketQueryPending: searchRevision > 0
-            && cockpit.miningMarketSyncBusy
-            && !Boolean(marketDiagnostics.cacheMatches)
+            && (cockpit.miningPlanBusy || (cockpit.miningMarketSyncBusy
+            && !Boolean(marketDiagnostics.cacheMatches)))
     readonly property var bestRoute: resultRows.length
             ? resultRows[activeRouteIndex] : ({})
     readonly property var catalogCoverage: cockpit.miningCacheSummary || ({})
@@ -513,6 +529,20 @@ Item {
     function executeSearch() {
         applySearch()
         searchGoalExpanded = false
+        cockpit.refreshMiningMarkets(
+                    appliedStartSystem, appliedCommodityFilter,
+                    appliedNearbyLy, appliedMinDemand,
+                    appliedMaxMarketAgeHours, appliedLandingPad)
+        _miningRevisionSnapshot = cockpit.miningRevision
+        Qt.callLater(refreshResults)
+    }
+    property int verifiedSearchRevision: -1
+    function verifyCurrentSearch() {
+        if (searchRevision === 0 || verifiedSearchRevision === searchRevision
+                || cockpit.miningPlanBusy || cockpit.miningMarketSyncBusy
+                || !resultRows.length)
+            return
+        verifiedSearchRevision = searchRevision
         // Snapshot typed values before yielding. The page may be reloaded or
         // navigated away from before callLater runs; reading its properties
         // from the delayed closure would then pass undefined to the C++ slot.
@@ -524,11 +554,14 @@ Item {
         let verificationMaxAge = Number(appliedMaxMarketAgeHours || 0)
         let verificationMinDemand = Number(appliedMinDemand || 0)
         let verificationLandingPad = String(appliedLandingPad || "ANY")
-        cockpit.refreshMiningMarkets(
-                    appliedStartSystem, appliedCommodityFilter,
-                    appliedNearbyLy, appliedMinDemand,
-                    appliedMaxMarketAgeHours, appliedLandingPad)
+        let verificationRevision = searchRevision
         Qt.callLater(function() {
+            if (verificationRevision !== searchRevision
+                    || cockpit.miningMarketSyncBusy || cockpit.miningPlanBusy) {
+                if (verifiedSearchRevision === verificationRevision)
+                    verifiedSearchRevision = -1
+                return
+            }
             cockpit.verifyMiningRoutes(
                         verificationRoutes,
                         verificationStartSystem,
@@ -537,7 +570,6 @@ Item {
                         verificationMinDemand,
                         verificationLandingPad)
         })
-        _miningRevisionSnapshot = cockpit.miningRevision
     }
 
     Connections {
@@ -545,6 +577,7 @@ Item {
         function onMiningChanged() {
             if (!cockpit.miningMarketSyncBusy)
                 miningFinderPage._miningRevisionSnapshot = cockpit.miningRevision
+            Qt.callLater(miningFinderPage.refreshResults)
         }
     }
 
@@ -1241,7 +1274,9 @@ Item {
         Label {
             Layout.minimumWidth: 0
             Layout.fillWidth: true
-            text: cockpit.miningMarketSyncBusy
+            text: resultRows.length > 0 && cockpit.miningPlanBusy
+                  ? appWindow.t("mining.updating_routes", "UPDATING ROUTES · EXISTING RESULTS REMAIN VISIBLE")
+                  : cockpit.miningMarketSyncBusy
                   ? appWindow.t("mining.market_checking", "CHECKING EDDN MARKET DATA…")
                   : (miningFinderPage.searchRevision > 0
                      && miningFinderPage.marketDiagnostics.cacheMatches
@@ -1304,7 +1339,8 @@ Item {
         Layout.preferredHeight: 280
         Layout.maximumHeight: 280
         spacing: 10
-        visible: resultRows.length > 0 && !marketQueryPending
+        objectName: "qa-mining-results"
+        visible: resultRows.length > 0
 
         Rectangle {
             Layout.fillWidth: true; Layout.fillHeight: true
@@ -1488,7 +1524,7 @@ Item {
         Layout.fillWidth: true
         Layout.minimumHeight: 160
         Layout.fillHeight: true
-        visible: resultRows.length === 0 || marketQueryPending
+        visible: resultRows.length === 0
 
         EmptyState {
             width: Math.min(parent.width, 720)
@@ -1496,7 +1532,9 @@ Item {
             anchors.top: parent.top
             anchors.topMargin: 20
             symbol: "◇"
-            title: marketQueryPending
+            title: cockpit.miningPlanBusy
+                   ? appWindow.t("mining.calculating_routes", "CALCULATING ROUTES")
+                   : marketQueryPending
                    ? (!Boolean(marketDiagnostics.originKnown)
                       ? appWindow.t("mining.origin_loading", "RESOLVING START SYSTEM")
                       : appWindow.t("mining.market_loading", "CHECKING SAME-SYSTEM MARKETS"))
@@ -1505,7 +1543,9 @@ Item {
                       : (!Boolean(marketDiagnostics.originKnown)
                          ? appWindow.t("mining.origin_unknown", "START SYSTEM COULD NOT BE RESOLVED")
                          : appWindow.t("mining.empty", "NO MATCHING MINING EVIDENCE")))
-            detail: marketQueryPending
+            detail: cockpit.miningPlanBusy
+                    ? appWindow.t("mining.calculating_routes_help", "Filtering evidence and evaluating routes in the background. You can continue using the app.")
+                    : marketQueryPending
                     ? (!Boolean(marketDiagnostics.originKnown)
                        ? appWindow.t("mining.origin_loading_help", "Coordinates are loading so the selected search radius can be applied safely.")
                        : appWindow.t("mining.market_loading_help", "EDDN market evidence is loading. Routes appear only after the current search can be evaluated."))
@@ -1522,7 +1562,7 @@ Item {
         Layout.fillWidth: true
         Layout.fillHeight: true
         Layout.minimumHeight: 120
-        visible: resultRows.length > 0 && !marketQueryPending
+        visible: resultRows.length > 0
         spacing: 5
         RowLayout {
             Layout.fillWidth: true
@@ -1551,13 +1591,16 @@ Item {
                 Label { Layout.minimumWidth: routeSelectWidth; Layout.preferredWidth: routeSelectWidth; Layout.maximumWidth: routeSelectWidth; text: appWindow.t("mining.select", "SELECT"); color: muted; font.pixelSize: UiMetrics.caption; font.bold: true; horizontalAlignment: Text.AlignHCenter }
             }
         }
-        ListView {
+        StableMiningRouteList {
             id: routesList
+            objectName: "qa-mining-routes"
             Layout.fillWidth: true; Layout.fillHeight: true
             spacing: 5; clip: true
             reuseItems: true
             cacheBuffer: 240
-            model: alternativeRows
+            sourceRows: alternativeRows
+            queryRevision: miningFinderPage.searchRevision
+            keyForRow: miningFinderPage.routeKey
             section.property: "verificationGroupLabel"
             section.criteria: ViewSection.FullString
             section.delegate: Rectangle {
@@ -1588,7 +1631,8 @@ Item {
             onContentYChanged: miningFinderPage._listScrollY = contentY
             delegate: Rectangle {
                 id: routeRow
-                required property var modelData
+                required property var route
+                readonly property var modelData: route
                 required property int index
                 width: routesList.width; height: 88; radius: 8
                 clip: true

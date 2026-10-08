@@ -1,5 +1,7 @@
 """Small, deterministic filters for user-facing diagnostics."""
 
+import re
+
 from ed_companion.persistence import atomic_write
 
 
@@ -9,7 +11,15 @@ BENIGN_QT_MESSAGE_FRAGMENTS = (
     "qeventdispatcherwin32::wakeup: failed to post a message",
 )
 INCUBATION_TEARDOWN_FRAGMENT = "object or context destroyed during incubation"
-INCUBATION_DELEGATE_FRAGMENT = "qml component: cannot create delegate"
+_DELEGATE_FAILURE = re.compile(
+    r"\bqml (?:component|[\w.]+ \(parent or ancestor of component\)):\s*"
+    r"cannot create delegate\s*$", re.IGNORECASE,
+)
+
+
+def is_qt_delegate_failure(message):
+    """Recognize Qt's Component and anonymous-Component ancestor formats."""
+    return bool(_DELEGATE_FAILURE.search(str(message or "")))
 
 
 def is_benign_qt_message(
@@ -23,7 +33,7 @@ def is_benign_qt_message(
         return True
     if INCUBATION_TEARDOWN_FRAGMENT in folded:
         return True
-    if INCUBATION_DELEGATE_FRAGMENT not in folded:
+    if not is_qt_delegate_failure(message):
         return False
     # Qt pairs a delegate-creation failure with the teardown message for
     # one single benign event - a lazily-unloaded page's ListView aborting

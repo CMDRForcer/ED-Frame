@@ -32,7 +32,18 @@ class MiningPowerplayError(RuntimeError):
 
 
 def fetch_edframe_powerplay(*, origin: list, max_distance: float, get: Any,
-                           timeout: int = 10, diagnostics: dict | None = None) -> list[dict[str, Any]]:
+                           timeout: int = 10, diagnostics: dict | None = None,
+                           systems: list[str] | None = None) -> list[dict[str, Any]]:
+    """Read all advertised pages, retaining usable facts on continuation failure.
+
+    ``systems`` requests exact systems (including sale systems outside the mine
+    radius). Older servers are detected explicitly, never mistaken for a
+    successful exact lookup just because they ignored the new query parameter.
+    """
+    if systems and not origin:
+        # Named batches do not use a spatial origin on the server. This is a
+        # query placeholder only, never stored as system coordinates.
+        origin = [0, 0, 0]
     if len(origin or []) != 3:
         raise MiningPowerplayError("Powerplay query requires coordinates")
     try:
@@ -41,19 +52,54 @@ def fetch_edframe_powerplay(*, origin: list, max_distance: float, get: Any,
             raise ValueError("Non-finite coordinates")
     except (TypeError, ValueError) as exc:
         raise MiningPowerplayError("Invalid Powerplay coordinates") from exc
-    response = get(EDFRAME_POWERPLAY_URL, params={
+    params = {
         **dict(zip(("x", "y", "z"), origin)),
         "max_distance": max(1, min(2000, float(max_distance))),
         "max_age_hours": 24, "limit": 200,
-    }, timeout=timeout)
-    response.raise_for_status()
-    payload = response.json()
-    if not isinstance(payload, dict) or not isinstance(payload.get("results"), list):
-        raise MiningPowerplayError("Invalid server Powerplay response")
-    if diagnostics is not None:
-        diagnostics.update({"bounded": bool(payload.get("hasMore"))})
+    }
+    wanted = list(dict.fromkeys(str(name).strip().casefold() for name in systems or []
+                               if str(name).strip()))
+    if wanted:
+        if len(wanted) > 200 or any(len(name) > 100 for name in wanted):
+            raise MiningPowerplayError("Powerplay lookup exceeds the system batch limit")
+        params["system"] = wanted
     rows = []
-    for source in payload["results"]:
+    cursors = set()
+    for page in range(100):
+        try:
+            response = get(EDFRAME_POWERPLAY_URL, params=dict(params), timeout=timeout)
+            response.raise_for_status()
+            payload = response.json()
+            if not isinstance(payload, dict) or not isinstance(payload.get("results"), list):
+                raise MiningPowerplayError("Invalid server Powerplay response")
+            if wanted and payload.get("selection") != "systems":
+                raise MiningPowerplayError("Server does not support exact Powerplay batches yet")
+        except Exception as exc:
+            if not rows or diagnostics is None:
+                raise
+            diagnostics.update(bounded=True, partialError=type(exc).__name__)
+            break
+        rows.extend(_public_powerplay_rows(payload["results"]))
+        has_more = bool(payload.get("hasMore"))
+        if diagnostics is not None:
+            diagnostics.update(bounded=has_more, pages=page + 1)
+        if not has_more:
+            break
+        cursor = payload.get("nextCursor")
+        if not isinstance(cursor, str) or not cursor or cursor in cursors:
+            break  # Legacy/truncated response: preserve facts, report incomplete.
+        cursors.add(cursor)
+        params["cursor"] = cursor
+    if wanted:
+        rows = [row for row in rows if str(row["system"]).casefold() in wanted]
+    return merge_powerplay_observations([], rows, limit=max(20_000, len(rows)))
+
+
+def _public_powerplay_rows(sources: list) -> list[dict[str, Any]]:
+    """Validate public live facts without inventing control from presence."""
+    rows = []
+    now = datetime.now(timezone.utc)
+    for source in sources:
         if not isinstance(source, dict):
             continue
         # Whitelist public fields. An explicit controller must be present;
@@ -63,7 +109,7 @@ def fetch_edframe_powerplay(*, origin: list, max_distance: float, get: Any,
         try:
             stamp = datetime.fromisoformat(str(source["observedAt"]).replace("Z", "+00:00"))
             stamp = stamp.replace(tzinfo=timezone.utc) if stamp.tzinfo is None else stamp
-            age = (datetime.now(timezone.utc) - stamp).total_seconds()
+            age = (now - stamp).total_seconds()
         except ValueError:
             continue
         if not -300 <= age <= 24 * 3600 or source.get("powerState") not in POWERPLAY_STATES:
@@ -81,6 +127,102 @@ def fetch_edframe_powerplay(*, origin: list, max_distance: float, get: Any,
         })
         rows.append(row)
     return rows
+
+
+def missing_powerplay_targets(routes, observations=(), *, retry_after=None,
+                             now=None) -> list[dict[str, Any]]:
+    """Deduplicate mine AND sale systems across all displayed unknown routes.
+
+    Ring freshness is unrelated to Powerplay freshness. Only a recent explicit
+    control/state observation (or an explicit Unoccupied state) avoids a lookup.
+    """
+    now = now or datetime.now(timezone.utc)
+    retry_after = retry_after or {}
+    targets = {}
+    for row in routes:
+        if (row.get("optimization") != "POWERPLAY MERITS"
+                or row.get("powerplayStatus") != "POWERPLAY_DATA_MISSING"):
+            continue
+        if "selectedPower" in row and str(row["selectedPower"] or "").strip().casefold() in {"", "any", "unconfirmed"}:
+            continue  # Selecting a Power is user input, not missing server data.
+        for name, coordinates in ((row.get("system"), row.get("coordinates")),
+                                  (row.get("sellSystem"), row.get("sellCoordinates"))):
+            name = str(name or "").strip()
+            key = name.casefold()
+            if not key or float(retry_after.get(key, 0) or 0) > now.timestamp():
+                continue
+            target = targets.setdefault(key, {"system": name, "coordinates": []})
+            if isinstance(coordinates, (list, tuple)) and len(coordinates) == 3:
+                target["coordinates"] = list(coordinates)
+    for fact in observations or ():
+        if not isinstance(fact, dict):
+            continue
+        key = str(fact.get("system") or "").strip().casefold()
+        if key not in targets:
+            continue
+        try:
+            stamp = datetime.fromisoformat(str(fact.get("observedAt") or "").replace("Z", "+00:00"))
+            stamp = stamp.replace(tzinfo=timezone.utc) if stamp.tzinfo is None else stamp
+            fresh = -300 <= (now - stamp).total_seconds() <= 86400
+        except ValueError:
+            continue
+        coordinates = fact.get("coordinates") or targets[key].get("coordinates")
+        if (fresh and isinstance(coordinates, (list, tuple)) and len(coordinates) == 3
+                and fact.get("powerState") in POWERPLAY_STATES and (
+                fact.get("controllingPower") or fact.get("powerState") == "Unoccupied")):
+            targets.pop(key)
+    return list(targets.values())
+
+
+def fetch_powerplay_targets(targets, *, origin, get, diagnostics=None):
+    """Batch precise missing systems; old servers use small spatial lookups.
+
+    The compatibility path uses only known coordinates, never a galaxy dump or
+    another ring query. Its facts still undergo the same freshness/whitelist
+    validation. Callers run this on a cancellable network worker.
+    """
+    diagnostics = diagnostics if diagnostics is not None else {}
+    rows, checked, failed = [], [], []
+    targets = list(targets)
+    legacy = False
+    for start in range(0, len(targets), 200):
+        batch = targets[start:start + 200]
+        names = [target["system"] for target in batch]
+        if not legacy:
+            try:
+                rows.extend(fetch_edframe_powerplay(
+                    origin=origin, max_distance=2000, get=get, systems=names,
+                    diagnostics=diagnostics,
+                ))
+                if diagnostics.get("bounded"):
+                    raise MiningPowerplayError("Incomplete exact Powerplay lookup")
+                checked.extend(names)
+                continue
+            except MiningPowerplayError as exc:
+                if "does not support exact" not in str(exc):
+                    raise
+                legacy = True
+        diagnostics["legacy"] = True
+        for target in batch:
+            coordinates = target.get("coordinates") or []
+            if len(coordinates) != 3:
+                failed.append(target["system"])
+                continue
+            local_coverage = {}
+            try:
+                facts = fetch_edframe_powerplay(
+                    origin=coordinates, max_distance=1, get=get,
+                    diagnostics=local_coverage,
+                )
+                if local_coverage.get("bounded"):
+                    failed.append(target["system"])
+                    continue
+                rows.extend(fact for fact in facts if str(fact["system"]).casefold()
+                            == target["system"].casefold())
+                checked.append(target["system"])
+            except Exception:
+                failed.append(target["system"])
+    return {"rows": rows, "checked": checked, "failed": failed}
 
 
 def _coordinates(value: Any) -> list[float]:

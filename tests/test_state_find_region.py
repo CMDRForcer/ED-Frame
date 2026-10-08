@@ -1,7 +1,7 @@
 import threading
 import unittest
 from datetime import datetime, timezone
-from types import SimpleNamespace
+from types import MethodType, SimpleNamespace
 from unittest.mock import Mock, patch
 
 from ed_companion.navigation.mining_market import MiningMarketError
@@ -54,7 +54,7 @@ class StateFindRegionTests(unittest.TestCase):
 
     def shell(self):
         region = state_find_region([1, 2, 3])
-        return SimpleNamespace(
+        controller = SimpleNamespace(
             _state={"currentPosition": [1, 2, 3]},
             _edframe_catalog_enabled=True, _profile_generation=4,
             _edframe_state_find_sync_meta={"region": region, "cursor": "old"},
@@ -65,6 +65,9 @@ class StateFindRegionTests(unittest.TestCase):
             edFrameStateFindSyncFinished=Mock(), _start_network_worker=Mock(return_value=True),
             _maybe_refresh_regional_state_finds=Mock(),
         )
+        for name in ("_finish_legacy_state_find_storage", "_publish_state_find_page"):
+            setattr(controller, name, MethodType(getattr(NavigationMixin, name), controller))
+        return controller
 
     def test_cursor_reused_only_at_same_origin(self):
         for changed in (False, True):

@@ -152,8 +152,8 @@ class PublishFullStateTests(unittest.TestCase):
         self.assertEqual(controller.materialsChanged.calls, 0)
         self.assertEqual(controller.wishlistChanged.calls, 0)
         self.assertEqual(controller.exobiologyChanged.calls, 0)
-        # Domains without a cheap identity check still always notify.
-        self.assertEqual(controller.fleetChanged.calls, 1)
+        # Fleet has a dependency-specific key; unrelated state is not a reset.
+        self.assertEqual(controller.fleetChanged.calls, 0)
         self.assertEqual(controller.operationsChanged.calls, 1)
 
     def test_changed_exobiology_findings_still_notifies(self):

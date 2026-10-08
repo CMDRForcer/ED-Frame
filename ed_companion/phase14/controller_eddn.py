@@ -865,8 +865,8 @@ class EddnMixin:
         if (
             self._eddn_config["upload_enabled"]
             and not self._eddn_baseline_established
+            and self._baseline_eddn_journal_files()
         ):
-            self._baseline_eddn_journal_files()
             for filename in ("Market.json", "Outfitting.json", "Shipyard.json"):
                 path = journal_dir() / filename
                 try:
@@ -892,6 +892,9 @@ class EddnMixin:
             return []
         signature = (identity, journal_change_signature())
         if signature != self._eddn_profile_paths_signature:
+            if hasattr(self, "_network_threads_lock"):
+                self._live_profile_location()
+                return []  # Never wait for the full Journal cache from Qt.
             self._eddn_profile_paths_cache = journal_paths_for_profile(identity)
             self._eddn_profile_paths_signature = signature
         return list(self._eddn_profile_paths_cache)
@@ -915,6 +918,14 @@ class EddnMixin:
             str(os.environ.get("ED_FRAME_PROFILE_FID") or "").strip(),
             journal_change_signature(),
         )
+        if hasattr(self, "_network_threads_lock"):
+            self._live_profile_location()
+            cached = getattr(self, "_journal_location_cache", {})
+            key = self._live_location_key()
+            if cached.get("key") != key or cached.get("context") != self.profile_context:
+                return False  # Wait for a coherent worker-verified profile.
+            self._profile_sync_signature = signature
+            return True
         if getattr(self, "_profile_sync_signature", None) == signature:
             return True
         if not self._switch_profile_context(resolve_profile_context()):
@@ -934,12 +945,19 @@ class EddnMixin:
 
     def _baseline_eddn_journal_files(self):
         """Start opt-in after existing Journal bytes; rotations start at zero."""
+        if hasattr(self, "_network_threads_lock"):
+            self._live_profile_location()
+            cached = getattr(self, "_journal_location_cache", {})
+            if (cached.get("key") != self._live_location_key()
+                    or cached.get("context") != self.profile_context):
+                return False  # Enabling sharing must not baseline an unready path list.
         for path in self._eddn_profile_journal_paths():
             try:
                 self._journal_offsets[path.name] = path.stat().st_size
             except OSError:
                 LOGGER.warning("EDDN could not initialize cursor for %s", path)
         self._eddn_baseline_established = True
+        return True
 
 
     def _enqueue_eddn(self, prepared):
@@ -1014,7 +1032,8 @@ class EddnMixin:
             LOGGER.warning("EDDN upload skipped: no active Commander FID")
             return
         if not self._eddn_baseline_established:
-            self._baseline_eddn_journal_files()
+            if not self._baseline_eddn_journal_files():
+                return
             self._save_eddn_cursor()
             if eddn_allowed:
                 self._scan_eddn_station_files()
@@ -1044,8 +1063,9 @@ class EddnMixin:
             if isinstance(job, dict)
         )
         saturated = False
+        scan_budget = 500 if hasattr(self, "_network_threads_lock") else None
         for path in paths:
-            if saturated:
+            if saturated or scan_budget == 0:
                 break
             try:
                 size = path.stat().st_size
@@ -1054,7 +1074,9 @@ class EddnMixin:
                 offset = int(self._journal_offsets.get(path.name, 0))
                 if offset > size:
                     offset = 0
-                _tail_committed, records = read_journal_tail_records(path, offset)
+                _tail_committed, records = read_journal_tail_records(path, offset, limit=scan_budget)
+                if scan_budget is not None:
+                    scan_budget -= len(records)
             except OSError:
                 LOGGER.warning("EDDN Journal read failed for %s", path)
                 continue
@@ -1163,7 +1185,7 @@ class EddnMixin:
             snapshot = json.loads(path.read_text(
                 encoding="utf-8-sig", errors="strict"
             ))
-            self._ingest_local_mining_market_snapshot(snapshot)
+            self._ingest_local_mining_market_snapshot(snapshot, fingerprint=fingerprint)
             self._local_market_snapshot_fingerprint = fingerprint
         except (OSError, UnicodeError, ValueError, TypeError) as exc:
             LOGGER.debug("Local mining Market.json not retained yet: %s", exc)

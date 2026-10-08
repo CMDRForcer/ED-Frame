@@ -547,7 +547,7 @@ def journal_paths_for_profile(identity: str) -> list[Path]:
 
 
 def read_journal_tail_records(
-    path: Path, offset: int,
+    path: Path, offset: int, *, limit: int | None = None,
 ) -> tuple[int, list[tuple[int, int, dict[str, Any] | None]]]:
     """Read complete lines with offsets, retaining an incomplete trailing line."""
     records = []
@@ -568,6 +568,8 @@ def read_journal_tail_records(
             except (TypeError, ValueError):
                 event = None
             records.append((line_start, committed, event if isinstance(event, dict) else None))
+            if limit is not None and len(records) >= max(1, limit):
+                break  # Remaining complete/partial bytes are read on the next batch.
     return committed, records
 
 

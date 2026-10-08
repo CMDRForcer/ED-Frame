@@ -13,6 +13,7 @@ from pathlib import Path
 
 
 _WRITE_LOCK = threading.RLock()
+_PATH_WRITE_LOCKS = {}
 _CORRUPT_JSON: dict[str, dict[str, str]] = {}
 STALE_ATOMIC_TEMP_SECONDS = 60 * 60
 _ATOMIC_TEMP_NAME = re.compile(
@@ -74,8 +75,16 @@ def _replace_with_retry(temporary, path):
 
 def atomic_write(path, text, encoding="utf-8"):
     """Flush one unique sibling temp file and atomically replace its target."""
+    return atomic_write_chunks(path, (str(text),), encoding=encoding)
+
+
+def atomic_write_chunks(path, chunks, encoding="utf-8"):
+    """Stream a snapshot atomically without blocking writes to other files."""
     path = Path(path)
     with _WRITE_LOCK:
+        resolved = str(path.resolve())
+        path_lock = _PATH_WRITE_LOCKS.setdefault(resolved, threading.RLock())
+    with path_lock:
         if str(path.resolve()) in _CORRUPT_JSON:
             return False
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -86,7 +95,7 @@ def atomic_write(path, text, encoding="utf-8"):
         try:
             with os.fdopen(descriptor, "w", encoding=encoding) as handle:
                 descriptor = None
-                handle.write(str(text))
+                handle.writelines(chunks)
                 handle.flush()
                 os.fsync(handle.fileno())
             _replace_with_retry(temporary, path)
@@ -100,21 +109,19 @@ def atomic_write(path, text, encoding="utf-8"):
     return True
 
 
-def load_json_file(path, default, encoding="utf-8-sig"):
+def load_json_file(path, default, encoding="utf-8-sig", *, loader=None):
     """Load persistent JSON without converting corruption into writable state."""
     path = Path(path)
     resolved = str(path.resolve())
     try:
-        text = path.read_text(encoding=encoding)
+        loaded = loader(path, default) if loader is not None else json.loads(
+            path.read_text(encoding=encoding)
+        )
     except FileNotFoundError:
         with _WRITE_LOCK:
             _CORRUPT_JSON.pop(resolved, None)
         return deepcopy(default)
-    except OSError as exc:
-        return _protect_corrupt_json(path, default, type(exc).__name__)
-    try:
-        loaded = json.loads(text)
-    except (ValueError, TypeError) as exc:
+    except (OSError, ValueError, TypeError) as exc:
         return _protect_corrupt_json(path, default, type(exc).__name__)
     if default is not None and not isinstance(loaded, type(default)):
         return _protect_corrupt_json(path, default, "unexpected JSON root type")

@@ -1323,4 +1323,8 @@
   "commodities.prohibited": "Ware als verboten gemeldet"
 ,
   "commodities.rare": "SELTENE GÜTER"
+,
+  "mining.calculating_routes": "ROUTEN WERDEN BERECHNET",
+  "mining.calculating_routes_help": "Belege werden gefiltert und Routen im Hintergrund bewertet. Du kannst die App weiter nutzen.",
+  "mining.updating_routes": "ROUTEN WERDEN AKTUALISIERT · BISHERIGE TREFFER BLEIBEN SICHTBAR"
 }

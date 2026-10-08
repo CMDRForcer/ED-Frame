@@ -12,6 +12,7 @@ from contextlib import closing
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Iterable
+from ed_companion.compact_json import pack_json, unpack_json
 
 
 LOGGER = logging.getLogger(__name__)
@@ -138,6 +139,8 @@ class HistoryArchive:
 
     @staticmethod
     def _record_key(record, encoded, key_field):
+        if callable(key_field):
+            return str(key_field(record))
         explicit = str(record.get(key_field) or "") if key_field else ""
         return explicit or hashlib.sha256(encoded.encode("utf-8")).hexdigest()
 
@@ -164,7 +167,7 @@ class HistoryArchive:
             )
             rows.append((
                 str(category), record_key,
-                observed, now, encoded,
+                observed, now, pack_json(encoded),
             ))
         if not rows:
             return 0
@@ -185,8 +188,7 @@ class HistoryArchive:
         return len(rows)
 
     def checkpoint(self) -> None:
-        """Merge any pending WAL content back into the main file and shrink
-        it to its actual size.
+        """Merge pending WAL content and truncate the WAL, not the main DB.
 
         In WAL mode, SQLite normally reclaims this itself once the last
         open connection on the database closes - but ``archive()`` runs
@@ -195,8 +197,8 @@ class HistoryArchive:
         connections, so there is rarely a moment with truly zero
         connections open to trigger that. A non-graceful exit (a forced
         process kill, a crash, a power loss) skips it entirely. Call this
-        once after construction - cheap when there is nothing pending,
-        and it is what actually reclaims the file's size when there is.
+        once after construction. Existing main-file pages are retained; this
+        is not VACUUM and does not compact or erase historical records.
         """
         try:
             with self._lock, closing(self._connect()) as connection:
@@ -259,7 +261,7 @@ class HistoryArchive:
         result = []
         for (payload,) in rows:
             try:
-                record = json.loads(payload)
+                record = unpack_json(payload)
             except (TypeError, ValueError):
                 continue
             if isinstance(record, dict):
@@ -300,7 +302,7 @@ class HistoryArchive:
                     "category": category,
                     "observedAt": observed_at,
                     "archivedAt": archived_at,
-                    "data": json.loads(payload),
+                    "data": unpack_json(payload),
                 }
                 handle.write("    " + json.dumps(envelope, ensure_ascii=False))
             for category, records in (active or {}).items():

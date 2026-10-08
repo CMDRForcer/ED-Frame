@@ -215,12 +215,14 @@ class QmlInteractionContractTests(unittest.TestCase):
             encoding="utf-8-sig"
         )
         routes = next(
-            block for _offset, block in qml_blocks(source, r"\bListView\s*\{")
+            block for _offset, block in qml_blocks(source, r"\bStableMiningRouteList\s*\{")
             if "id: routesList" in block
         )
 
         self.assertIn("reuseItems: true", routes)
         self.assertRegex(routes, r"cacheBuffer:\s*[1-9]\d*")
+        self.assertIn("sourceRows: alternativeRows", routes)
+        self.assertIn("keyForRow: miningFinderPage.routeKey", routes)
 
     def test_journal_health_reads_last_complete_record_without_full_scan(self):
         with TemporaryDirectory() as directory:

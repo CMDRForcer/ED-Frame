@@ -218,6 +218,9 @@ LOGGER = logging.getLogger(__name__)
 
 INARA_ACTIVE_RECEIPT_LIMIT = 100
 from .controller_core import CoreControllerMixin
+from .dependency_cache import (
+    dependency_revision, invalidate_state_cache, profile_dependency,
+)
 EDDN_ACTIVE_RECEIPT_LIMIT = 100
 FRONTIER_REQUEST_WATCHDOG_MS = 120_000
 COMMANDER_CARD_IDS = (
@@ -237,11 +240,67 @@ class CommanderMixin:
     """
 
     commanderCardsChanged = Signal()
+    commanderProjectionReady = Signal(object)
     fleetChanged = Signal()
+
+    def _commander_projection_key(self):
+        return (profile_dependency(self), self._state_revision,
+                id(getattr(self, "_commander_credit_snapshots", None)),
+                bool(getattr(self, "_journal_state_ready", False)))
+
+    def _commander_ui_snapshot(self):
+        """Bindings return a complete snapshot, never parse/lock Journal history."""
+        key = self._commander_projection_key()
+        cached = getattr(self, "_commander_projection", {})
+        if (cached.get("key") != key
+                and getattr(self, "_commander_projection_failed_key", None) != key
+                and not getattr(self, "_active_commander_projection", None)):
+            overview = self._state.get("commanderOverview", {}) or {}
+            snapshots = getattr(self, "_commander_credit_snapshots", [])
+            journal_ready = key[-1]
+            self._active_commander_projection = key
+
+            def worker():
+                from .commander_projection import prepare_commander_projection
+                result = {"key": key}
+                try:
+                    result.update(prepare_commander_projection(
+                        overview, profiled_journal_events() if journal_ready else [], snapshots,
+                    ))
+                except Exception as exc:
+                    result["error"] = type(exc).__name__
+                    LOGGER.exception("CMDR projection failed")
+                self.commanderProjectionReady.emit(result)
+
+            if not self._start_network_worker(worker, "commander-projection"):
+                self._active_commander_projection = None
+                self._commander_projection_failed_key = key
+        # Never expose the other Commander's last complete snapshot.
+        return cached if cached.get("key", (None,))[0] == key[0] else {}
+
+    @Slot(object)
+    def _finish_commander_projection(self, result):
+        if result.get("key") != getattr(self, "_active_commander_projection", None):
+            return
+        self._active_commander_projection = None
+        if result["key"] != self._commander_projection_key():
+            self._commander_ui_snapshot()  # Coalesce changes while the worker ran.
+            return
+        if result.get("error"):
+            self._commander_projection_failed_key = result["key"]
+        else:
+            self._commander_projection = result
+            self._commander_projection_failed_key = None
+        self.commanderCardsChanged.emit()
 
 
     def _commander_cards(self):
         """Build display-only CMDR cards from local Journal/cache state."""
+        if hasattr(self, "_network_threads_lock"):
+            snapshot = self._commander_ui_snapshot()
+            return snapshot.get("cards") or build_commander_cards(
+                self._state.get("commanderOverview", {}) or {}, [],
+            )
         cache_key = self._state_revision
         cached = self._derived_cache.get("commander_cards")
         if cached and cached[0] == cache_key:
@@ -256,6 +315,10 @@ class CommanderMixin:
 
 
     def _commander_finance_history(self):
+        if hasattr(self, "_network_threads_lock"):
+            return self._commander_ui_snapshot().get("histories", {}).get(
+                self._commander_finance_period, [],
+            )
         cache_key = (self._state_revision, self._commander_finance_period)
         cached = self._derived_cache.get("commander_finance_history")
         if cached and cached[0] == cache_key:
@@ -277,6 +340,10 @@ class CommanderMixin:
 
 
     def _commander_finance_summary(self):
+        if hasattr(self, "_network_threads_lock"):
+            return self._commander_ui_snapshot().get("summaries", {}).get(
+                self._commander_finance_period, build_finance_summary([]),
+            )
         cache_key = (self._state_revision, self._commander_finance_period)
         cached = self._derived_cache.get("commander_finance_summary")
         if cached and cached[0] == cache_key:
@@ -286,14 +353,25 @@ class CommanderMixin:
         return summary
 
 
+    def _commander_fleet_key(self):
+        images = getattr(self, "_fleet_images", {})
+        directory = getattr(self, "fleet_images_dir", None)
+        image_files = []
+        for ship_id, filename in sorted(images.items()):
+            try:
+                stat = (directory / filename).stat() if directory is not None else None
+                stamp = (stat.st_mtime_ns, stat.st_size) if stat is not None else None
+            except OSError:
+                stamp = None
+            image_files.append((str(ship_id), str(filename), stamp))
+        return dependency_revision(self, "commander-fleet", (
+            profile_dependency(self), self._state.get("fleet", []) or [],
+            getattr(self, "_ship_catalog", []), str(directory or ""), image_files,
+        ))
+
+
     def _commander_fleet(self):
-        cache_key = (
-            self._state_revision,
-            tuple(sorted(
-                (str(ship_id), str(filename))
-                for ship_id, filename in self._fleet_images.items()
-            )),
-        )
+        cache_key = self._commander_fleet_key()
         cached = self._derived_cache.get("commander_fleet")
         if cached and cached[0] == cache_key:
             return cached[1]
@@ -518,7 +596,7 @@ class CommanderMixin:
             )
         self._state = {**self._state, "commanderOverview": overview}
         self._state_revision += 1
-        self._derived_cache.clear()
+        invalidate_state_cache(self)
         self.stateChanged.emit()
 
 

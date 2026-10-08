@@ -762,6 +762,12 @@ def _powerplay_index(
             if controller_key:
                 known_powers[controller_key] = controller
                 system_fact["powers"] = list(known_powers.values())
+        elif ("controllingPower" in source and source.get("powerState") == "Unoccupied"
+              and "edsm" not in str(source.get("source") or "").casefold()):
+            # An explicit newer unoccupied observation clears historic control.
+            # A daily presence row, which omits controller, cannot do this.
+            system_fact.update(controllingPower="", controlKnown=False,
+                               controlPowerState="Unoccupied")
 
         if power:
             fact = by_power.setdefault((system, power), {})
@@ -794,9 +800,9 @@ def _indexed_power_fact(
     # A selected-Power row owns its state.  Explicit control and the complete
     # participant list remain system-wide and therefore win after the join.
     controller = str(system_fact.get("controllingPower") or "").strip()
-    if controller:
+    if "controllingPower" in system_fact:
         fact["controllingPower"] = controller
-        fact["controlKnown"] = True
+        fact["controlKnown"] = bool(controller)
     combined_powers = {
         _power_key(item): str(item).strip()
         for item in [
@@ -818,17 +824,20 @@ def _candidate_power_fact(
     fact = _indexed_power_fact(candidate.get("system"), power, catalog)
     controlling = str(candidate.get("controllingPower") or "").strip()
     state = str(candidate.get("powerState") or "").strip()
-    if controlling:
+    indexed_at = _timestamp(fact.get("observedAt"))
+    candidate_at = _timestamp(candidate.get("powerplayObservedAt") or candidate.get("observedAt"))
+    use_metadata = indexed_at is None or (candidate_at is not None and candidate_at >= indexed_at)
+    if controlling and use_metadata:
         fact["controllingPower"] = controlling
         fact["controlKnown"] = True
-    if state:
+    if state and use_metadata:
         fact["powerState"] = state
         if controlling:
             fact["controlPowerState"] = state
     if candidate.get("coordinates"):
         fact["coordinates"] = candidate.get("coordinates")
     candidate_powers = candidate.get("powers")
-    if isinstance(candidate_powers, list) and candidate_powers:
+    if use_metadata and isinstance(candidate_powers, list) and candidate_powers:
         fact["powers"] = list(candidate_powers)
     fact.setdefault("system", str(candidate.get("system") or ""))
     return fact
@@ -841,17 +850,20 @@ def _market_power_fact(
     fact = _indexed_power_fact(market.get("system"), power, catalog)
     controlling = str(market.get("controllingPower") or "").strip()
     state = str(market.get("powerState") or "").strip()
-    if controlling:
+    indexed_at = _timestamp(fact.get("observedAt"))
+    market_at = _timestamp(market.get("powerplayObservedAt") or market.get("observedAt"))
+    use_metadata = indexed_at is None or (market_at is not None and market_at >= indexed_at)
+    if controlling and use_metadata:
         fact["controllingPower"] = controlling
         fact["controlKnown"] = True
-    if state:
+    if state and use_metadata:
         fact["powerState"] = state
         if controlling:
             fact["controlPowerState"] = state
     if market.get("coordinates"):
         fact["coordinates"] = market.get("coordinates")
     market_powers = market.get("powers")
-    if isinstance(market_powers, list) and market_powers:
+    if use_metadata and isinstance(market_powers, list) and market_powers:
         fact["powers"] = list(market_powers)
     fact.setdefault("system", str(market.get("system") or ""))
     return fact
@@ -1488,8 +1500,11 @@ def plan_mining_routes(
         )
         row.update({
             "optimization": optimization,
+            "selectedPower": power,
+            "powerplayGoal": power_goal,
             "station": str(market.get("station") or ""),
             "sellSystem": str(market.get("system") or ""),
+            "sellCoordinates": list(market.get("coordinates") or []),
             "sellPrice": int(market.get("sellPrice", 0) or 0),
             "demand": int(market.get("demand", 0) or 0),
             "demandInfinite": bool(market.get("demandInfinite")),
@@ -1703,10 +1718,8 @@ def plan_mining_routes(
             if powerplay_status == POWERPLAY_DATA_MISSING:
                 if row.get("marketStatus") == MARKET_VERIFIED:
                     age = _readable_age(row.get("marketAgeSeconds"))
-                    powerplay_reason = (
-                        f"Market fresh ({age}), but no Powerplay evidence for "
-                        f"{str(power or 'the selected power')} in "
-                        f"{str(row.get('system') or 'this system')}"
+                    powerplay_reason = f"Market fresh ({age}) · " + str(
+                        row.get("meritStatus") or "Powerplay evidence is missing"
                     )
                 else:
                     powerplay_reason = str(

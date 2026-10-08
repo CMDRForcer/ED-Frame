@@ -15,7 +15,10 @@ from ed_companion.navigation.mining_contract import (
 class MiningFinderContractTests(unittest.TestCase):
     def test_market_status_keeps_complete_conditional_binding(self):
         source = (Path(__file__).resolve().parents[1] / 'qml/pages/MiningFinderPage.qml').read_text(encoding='utf-8')
-        self.assertRegex(source, r'text: cockpit\.miningMarketSyncBusy\s+\? appWindow\.t\("mining\.market_checking"')
+        self.assertRegex(source, r'text: resultRows\.length > 0 && cockpit\.miningPlanBusy\s+'
+                         r'\? appWindow\.t\("mining\.updating_routes", [^\n]+\)\s+'
+                         r': cockpit\.miningMarketSyncBusy\s+'
+                         r'\? appWindow\.t\("mining\.market_checking"')
 
     def test_search_modes_keep_region_filters_without_quick_search_bar(self):
         source = (Path(__file__).resolve().parents[1] / 'qml/pages/MiningFinderPage.qml').read_text(encoding='utf-8')

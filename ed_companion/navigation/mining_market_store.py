@@ -8,8 +8,12 @@ import math
 import os
 import shutil
 import sqlite3
+import gzip
+import hashlib
+import zlib
+from ed_companion.compact_json import pack_json
 import threading
-from contextlib import closing
+from contextlib import closing, contextmanager
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Iterable
@@ -227,10 +231,16 @@ class MarketCatalogStore:
 
     def __init__(self, path: Any):
         self.path = Path(path)
-        self.backup_path = self.path.with_name(
+        self.legacy_backup_path = self.path.with_name(
             self.path.stem + ".backup" + self.path.suffix
         )
+        self.backup_path = self.legacy_backup_path.with_suffix(self.path.suffix + ".gz")
         self._lock = threading.RLock()
+        self._backup_lock = threading.Lock()
+        self._store_generation = 0
+        self._read_condition = threading.Condition()
+        self._active_readers = 0
+        self._read_maintenance_active = False
         try:
             self._ensure_schema()
             # A full quick_check touches the complete database.  That is a
@@ -451,23 +461,57 @@ class MarketCatalogStore:
             except OSError:
                 pass
 
+    @contextmanager
+    def _reader(self):
+        with self._read_condition:
+            while self._read_maintenance_active:
+                self._read_condition.wait()
+            self._active_readers += 1
+        try:
+            yield
+        finally:
+            with self._read_condition:
+                self._active_readers -= 1
+                self._read_condition.notify_all()
+
+    @contextmanager
+    def _read_maintenance(self):
+        with self._read_condition:
+            self._read_maintenance_active = True
+            while self._active_readers:
+                self._read_condition.wait()
+        try:
+            yield
+        finally:
+            with self._read_condition:
+                self._read_maintenance_active = False
+                self._read_condition.notify_all()
+
     def _recover(self) -> None:
-        with self._lock:
+        with self._lock, self._read_maintenance():
+            self._store_generation += 1
             LOGGER.error(
                 "Mining market database corrupt; attempting backup recovery: %s",
                 self.path,
             )
             self._quarantine(self.path)
             restored = False
-            if self.backup_path.is_file():
+            for backup in (self.backup_path, self.legacy_backup_path):
+                if not backup.is_file():
+                    continue
                 try:
-                    shutil.copy2(self.backup_path, self.path)
+                    if backup == self.backup_path:
+                        with gzip.open(backup, "rb") as source, self.path.open("wb") as target:
+                            shutil.copyfileobj(source, target, length=1024 * 1024)
+                    else:
+                        shutil.copy2(backup, self.path)
                     self._ensure_schema()
                     self.integrity_check()
                     restored = True
-                except (OSError, sqlite3.DatabaseError):
+                    break
+                except (OSError, EOFError, zlib.error, sqlite3.DatabaseError):
                     self._quarantine(self.path)
-                    self._quarantine(self.backup_path)
+                    self._quarantine(backup)
             if not restored:
                 self._ensure_schema()
 
@@ -481,7 +525,15 @@ class MarketCatalogStore:
     def _read_rows(self, statement: str, parameters: Any = ()):
         for attempt in range(2):
             try:
-                with self._lock, closing(self._connect()) as connection:
+                # WAL readers see the last committed snapshot independently
+                # of an ongoing importer. Taking the writer's Python lock here
+                # turns every QML count/search into a wait for that importer.
+                with self._reader(), closing(sqlite3.connect(
+                    self.path.resolve().as_uri() + "?mode=ro", uri=True,
+                    timeout=0.25,
+                )) as connection:
+                    connection.row_factory = sqlite3.Row
+                    connection.execute("PRAGMA query_only=ON")
                     return connection.execute(
                         statement, parameters
                     ).fetchall()
@@ -578,7 +630,7 @@ class MarketCatalogStore:
         )).timestamp()
         current_rows = [row[:-1] for row in prepared]
         history_rows = [
-            (row[0], row[18], row[21], row[20], row[-1]) for row in prepared
+            (row[0], row[18], row[21], row[20], pack_json(row[-1])) for row in prepared
         ]
         with self._lock, closing(self._connect()) as connection:
             connection.execute("BEGIN IMMEDIATE")
@@ -1274,16 +1326,22 @@ class MarketCatalogStore:
                 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(target_key) DO UPDATE SET
                     start_system=excluded.start_system,
-                    nearby_ly=excluded.nearby_ly,
-                    min_demand=excluded.min_demand,
-                    max_market_age_hours=excluded.max_market_age_hours,
-                    landing_pad=excluded.landing_pad,
+                    nearby_ly=CASE WHEN excluded.last_requested_epoch >= warm_targets.last_requested_epoch
+                        THEN excluded.nearby_ly ELSE warm_targets.nearby_ly END,
+                    min_demand=CASE WHEN excluded.last_requested_epoch >= warm_targets.last_requested_epoch
+                        THEN excluded.min_demand ELSE warm_targets.min_demand END,
+                    max_market_age_hours=CASE WHEN excluded.last_requested_epoch >= warm_targets.last_requested_epoch
+                        THEN excluded.max_market_age_hours ELSE warm_targets.max_market_age_hours END,
+                    landing_pad=CASE WHEN excluded.last_requested_epoch >= warm_targets.last_requested_epoch
+                        THEN excluded.landing_pad ELSE warm_targets.landing_pad END,
                     priority=MAX(warm_targets.priority, excluded.priority),
                     use_count=warm_targets.use_count + excluded.use_count,
                     last_requested_at=CASE WHEN excluded.use_count > 0
+                        AND excluded.last_requested_epoch >= warm_targets.last_requested_epoch
                         THEN excluded.last_requested_at
                         ELSE warm_targets.last_requested_at END,
                     last_requested_epoch=CASE WHEN excluded.use_count > 0
+                        AND excluded.last_requested_epoch >= warm_targets.last_requested_epoch
                         THEN excluded.last_requested_epoch
                         ELSE warm_targets.last_requested_epoch END,
                     enabled=1
@@ -1400,7 +1458,8 @@ class MarketCatalogStore:
 
     def reset(self) -> bool:
         """Create a genuinely empty catalog that cannot restore old rows."""
-        with self._lock:
+        with self._lock, self._read_maintenance():
+            self._store_generation += 1
             targets = [
                 self.path,
                 self.path.with_name(self.path.name + "-wal"),
@@ -1408,13 +1467,17 @@ class MarketCatalogStore:
                 self.backup_path,
                 self.backup_path.with_name(self.backup_path.name + "-wal"),
                 self.backup_path.with_name(self.backup_path.name + "-shm"),
-                self.backup_path.with_name(self.backup_path.name + ".tmp"),
+                self.legacy_backup_path,
+                self.legacy_backup_path.with_name(self.legacy_backup_path.name + "-wal"),
+                self.legacy_backup_path.with_name(self.legacy_backup_path.name + "-shm"),
             ]
             for target in targets:
                 target.unlink(missing_ok=True)
             self._ensure_schema()
             self.set_metadata("legacy_migrated", "1")
-            return self.backup()
+        # An older in-flight snapshot is generation-fenced and will clean its
+        # own temporary files. Never delete files it still has open on Windows.
+        return self.backup() or self._backup_lock.locked()
 
     def backup_due(self, interval_seconds: int = BACKUP_INTERVAL_SECONDS) -> bool:
         """Return whether the recovery snapshot is old enough to refresh."""
@@ -1427,6 +1490,9 @@ class MarketCatalogStore:
         except OSError:
             return True
         return age >= max(0, int(interval_seconds or 0))
+
+    def has_backup(self) -> bool:
+        return self.backup_path.is_file() or self.legacy_backup_path.is_file()
 
     def checkpoint(self) -> bool:
         """Durably merge WAL content without copying the complete catalog."""
@@ -1450,26 +1516,53 @@ class MarketCatalogStore:
             self._lock.release()
 
     def backup(self) -> bool:
-        temporary = self.backup_path.with_name(self.backup_path.name + ".tmp")
-        self.backup_path.parent.mkdir(parents=True, exist_ok=True)
+        if not self._backup_lock.acquire(blocking=False):
+            return False
+        temporary = self.backup_path.with_name(self.backup_path.name + ".sqlite-tmp")
+        packed = self.backup_path.with_name(self.backup_path.name + ".tmp")
         try:
+            self.backup_path.parent.mkdir(parents=True, exist_ok=True)
+            with self._lock:
+                generation = self._store_generation
             # A killed prior backup may leave a very large partial target.
             # Start with a clean snapshot and do not hold the store's Python
             # lock for the whole copy: SQLite's online backup API provides the
             # consistent snapshot while readers and writers remain usable.
             temporary.unlink(missing_ok=True)
-            with closing(self._connect()) as source, closing(
+            with self._reader(), closing(self._connect()) as source, closing(
                 sqlite3.connect(temporary, timeout=15)
             ) as target:
                 source.backup(target, pages=4096, sleep=0.01)
                 target.commit()
-            os.replace(temporary, self.backup_path)
+            # Keep a full lossless recovery image, but not another uncompressed
+            # 1.5 GB copy. Verify every byte before replacing the last backup.
+            digest = hashlib.sha256()
+            with temporary.open("rb") as raw, gzip.open(packed, "wb", compresslevel=1) as compressed:
+                while chunk := raw.read(1024 * 1024):
+                    digest.update(chunk)
+                    compressed.write(chunk)
+            verified = hashlib.sha256()
+            with gzip.open(packed, "rb") as compressed:
+                while chunk := compressed.read(1024 * 1024):
+                    verified.update(chunk)
+            if verified.digest() != digest.digest():
+                raise OSError("Compressed recovery snapshot verification failed")
+            with packed.open("r+b") as durable:
+                os.fsync(durable.fileno())
+            with self._lock:
+                if generation != self._store_generation:
+                    return False
+                os.replace(packed, self.backup_path)
+            # Keep pre-upgrade recovery files too. Removing an existing legacy
+            # image is a separate, explicit maintenance decision, not startup.
             return True
-        except (OSError, sqlite3.DatabaseError):
-            LOGGER.warning("Mining market database backup failed: %s", self.path)
+        except (OSError, EOFError, zlib.error, sqlite3.DatabaseError) as exc:
+            LOGGER.warning("Mining market database backup failed: %s (%s)", self.path, exc)
             return False
         finally:
             try:
                 temporary.unlink(missing_ok=True)
+                packed.unlink(missing_ok=True)
             except OSError:
                 pass
+            self._backup_lock.release()

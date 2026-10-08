@@ -16,6 +16,7 @@ import time
 import uuid
 import requests
 from copy import deepcopy
+from .dependency_cache import invalidate_state_cache
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable
@@ -302,10 +303,132 @@ class JournalHealthMixin:
     """
 
     journalHealthChanged = Signal()
+    journalHealthReady = Signal(object)
+    journalLocationReady = Signal(object)
 
+    def _live_location_key(self):
+        return (self._profile_generation, self.profile_context.key,
+                journal_change_signature())
+
+    def _live_profile_location(self):
+        """Qt polls metadata only; profile/location/history locks stay on a worker."""
+        key = self._live_location_key()
+        cached = getattr(self, "_journal_location_cache", {})
+        if (cached.get("key") != key
+                and not getattr(self, "_active_journal_location", None)
+                and getattr(self, "_journal_location_failed_key", None) != key):
+            self._active_journal_location = key
+
+            def worker():
+                result = {"key": key}
+                try:
+                    context = resolve_profile_context()
+                    result.update(context=context, location=latest_profile_location(),
+                                  paths=journal_paths_for_profile(context.identity))
+                except Exception as exc:
+                    result["error"] = type(exc).__name__
+                    LOGGER.exception("Live Journal location could not be prepared")
+                self.journalLocationReady.emit(result)
+
+            if not self._start_network_worker(worker, "journal-live-location"):
+                self._active_journal_location = None
+                self._journal_location_failed_key = key
+        # Do not use an unverified old system for an exobiology distance check.
+        return cached.get("location", {}) if cached.get("key") == key else {}
+
+    @Slot(object)
+    def _finish_journal_location(self, result):
+        if result.get("key") != getattr(self, "_active_journal_location", None):
+            return
+        self._active_journal_location = None
+        if result["key"] != self._live_location_key():
+            self._live_profile_location()
+            return
+        if result.get("error"):
+            self._journal_location_failed_key = result["key"]
+            return
+        if result["context"] != self.profile_context:
+            self._journal_location_failed_key = result["key"]
+            self.refresh()  # The full state worker owns coherent profile switching.
+            return
+        self._journal_location_cache = result
+        self._journal_location_failed_key = None
+        self._eddn_profile_paths_cache = result["paths"]
+        self._eddn_profile_paths_signature = (self.profile_context.identity, result["key"][-1])
+        live_state, changed = state_with_live_location(self._state, result["location"])
+        if changed:
+            self._state = live_state
+            self._state_revision += 1
+            invalidate_state_cache(self)
+            self.stateChanged.emit()
+            self.hgeChanged.emit()
+        self._poll_exobiology_distance_check()
+        self._scan_eddn_journal()
+
+
+    def _journal_health_runtime(self):
+        return {"watcherActive": bool(self._journal_auto and getattr(self, "timer", None)
+                                      and self.timer.isActive()),
+                "pollIntervalMs": 1200 if self._journal_auto else 0,
+                "renderer": self._renderer_active}
 
     def _journal_health(self):
+        if not hasattr(self, "_network_threads_lock"):
+            data = self._read_journal_health()
+            data.pop("_modifiedAt", None)
+            return data
         directory = journal_dir()
+        root = str(directory)
+        now = time.monotonic()
+        cached = getattr(self, "_journal_health_cache", {})
+        runtime = self._journal_health_runtime()
+        if (not getattr(self, "_active_journal_health", None)
+                and (cached.get("root") != root
+                     or now - getattr(self, "_journal_health_requested_at", 0) >= 1.2)):
+            request = (root, getattr(self, "_profile_generation", 0), now)
+            self._active_journal_health = request
+            self._journal_health_requested_at = now
+
+            def worker():
+                try:
+                    data = self._read_journal_health(directory, runtime)
+                except Exception as exc:
+                    LOGGER.exception("Journal health could not be prepared")
+                    data = {"status": "ERROR", "directoryExists": False,
+                            "fileCount": 0, "latestFile": "", "ageSeconds": -1,
+                            "sizeBytes": 0, "parserOk": False, "lastEvent": "",
+                            "error": type(exc).__name__, **runtime}
+                self.journalHealthReady.emit({"request": request, "data": data})
+
+            if not self._start_network_worker(worker, "journal-health"):
+                self._active_journal_health = None
+        if cached.get("root") != root:
+            return {"status": "CHECKING", "directoryExists": False, "fileCount": 0,
+                    "latestFile": "", "ageSeconds": -1, "sizeBytes": 0,
+                    "parserOk": False, "lastEvent": "", "error": "", **runtime}
+        data = dict(cached["data"])
+        modified = data.pop("_modifiedAt", None)
+        age = max(0, int(time.time() - modified)) if modified is not None else -1
+        data["ageSeconds"] = age
+        if data["parserOk"]:
+            data["status"] = "LIVE" if age <= 15 else "READY"
+        data.update(runtime)
+        return data
+
+    @Slot(object)
+    def _finish_journal_health(self, result):
+        if result["request"] != getattr(self, "_active_journal_health", None):
+            return
+        self._active_journal_health = None
+        if result["request"][:2] != (str(journal_dir()), getattr(self, "_profile_generation", 0)):
+            return
+        self._journal_health_cache = {"root": result["request"][0], "data": result["data"]}
+        self.journalHealthChanged.emit()
+        self.connectionChanged.emit()
+
+    def _read_journal_health(self, directory=None, runtime=None):
+        directory = directory if directory is not None else journal_dir()
+        runtime = runtime if runtime is not None else self._journal_health_runtime()
         try:
             files = sorted(
                 directory.glob("Journal.*.log"),
@@ -319,9 +442,11 @@ class JournalHealthMixin:
         parser_ok = False
         last_event = ""
         error = ""
+        modified_at = None
         if latest:
             try:
                 stat = latest.stat()
+                modified_at = stat.st_mtime
                 age = max(0, int(time.time() - stat.st_mtime))
                 size = int(stat.st_size)
                 record = _last_complete_json_record(latest)
@@ -344,15 +469,9 @@ class JournalHealthMixin:
             "sizeBytes": size,
             "parserOk": parser_ok,
             "lastEvent": last_event,
-            "watcherActive": bool(
-                self._journal_auto
-                and
-                getattr(self, "timer", None)
-                and self.timer.isActive()
-            ),
-            "pollIntervalMs": 1200 if self._journal_auto else 0,
+            **runtime,
             "error": error,
-            "renderer": self._renderer_active,
+            "_modifiedAt": modified_at,
         }
 
 
@@ -436,13 +555,13 @@ class JournalHealthMixin:
             self._queue_inara_journal_scan()
         elif stamp != self._last_journal_stamp:
             self._last_journal_stamp = stamp
-            live_state, location_changed = state_with_live_location(
-                self._state, latest_profile_location()
-            )
+            location = (self._live_profile_location() if hasattr(self, "_network_threads_lock")
+                        else latest_profile_location())
+            live_state, location_changed = state_with_live_location(self._state, location)
             if location_changed:
                 self._state = live_state
                 self._state_revision += 1
-                self._derived_cache.clear()
+                invalidate_state_cache(self)
                 self.stateChanged.emit()
                 self.hgeChanged.emit()
             self.refresh()

@@ -1,0 +1,116 @@
+"""Bounded parallel Mining Finder retrieval with per-task HTTP sessions."""
+
+from concurrent.futures import ThreadPoolExecutor
+import math
+import time
+
+import requests
+
+from .mining_finder import fetch_edframe_mining_candidates
+from .mining_snapshot import MiningSnapshotStore
+from .mining_market import (
+    fetch_edframe_system_coordinates, fetch_edsm_system_coordinates,
+    fetch_market_imports,
+)
+from .mining_powerplay import fetch_edframe_powerplay
+
+
+def fetch_mining_refresh(query, *, origin=None, include_edframe=True,
+                         session_factory=None, is_current=None, snapshot_path=None):
+    """Retrieve independent domains concurrently without sharing a Session.
+
+    Cursor-dependent ring pages remain sequential within their reusable
+    connection. Market provider order, fallback, limits and freshness are
+    deliberately unchanged. Every future is joined before returning.
+    """
+    session_factory = session_factory or requests.Session
+
+    def session_get(session):
+        def get(*args, **kwargs):
+            if is_current is not None and not is_current():
+                raise RuntimeError("Mining lookup superseded or shutting down")
+            return session.get(*args, **kwargs)
+        return get
+
+    result = {}
+    if not origin:
+        with session_factory() as session:
+            get = session_get(session)
+            if include_edframe:
+                try:
+                    origin = fetch_edframe_system_coordinates(
+                        query["startSystem"], get=get,
+                    )
+                except Exception:
+                    pass
+            if not origin:
+                try:
+                    origin = fetch_edsm_system_coordinates(
+                        query["startSystem"], get=get,
+                    )
+                except Exception as exc:
+                    result["originError"] = str(exc)
+    if origin:
+        result["origin"] = origin
+    coordinates = (origin or {}).get("coordinates")
+    radius = max(1, query["nearbyLy"])
+
+    def fetch_domain(kind):
+        started = time.monotonic()
+        data = {}
+        try:
+            with session_factory() as session:
+                get = session_get(session)
+                if kind == "sites":
+                    data["siteCoverage"] = {}
+                    snapshot_options = ({"snapshot_store": MiningSnapshotStore(snapshot_path)}
+                                        if snapshot_path else {})
+                    data["serverCandidates"] = fetch_edframe_mining_candidates(
+                        query["startSystem"], get,
+                        commodity=query["commodity"], origin=coordinates,
+                        max_distance=radius, timeout=10,
+                        diagnostics=data["siteCoverage"],
+                        **snapshot_options,
+                    )
+                    snapshot = data["siteCoverage"].pop("_snapshot", None)
+                    if snapshot_path and snapshot:
+                        data["siteSnapshot"] = snapshot
+                elif kind == "powerplay":
+                    data["powerplayCoverage"] = {}
+                    data["serverPowerplay"] = fetch_edframe_powerplay(
+                        origin=coordinates, max_distance=radius,
+                        get=get, diagnostics=data["powerplayCoverage"],
+                    )
+                else:
+                    data["providerStatus"] = {}
+                    hours = max(1, query["maxMarketAgeHours"])
+                    data["markets"] = fetch_market_imports(
+                        query["startSystem"], query["commodity"],
+                        max_distance=radius,
+                        max_days_ago=max(1, min(14, math.ceil(hours / 24))),
+                        get=get, landing_pad=query["landingPad"],
+                        include_edframe=include_edframe,
+                        provider_status=data["providerStatus"],
+                        origin=origin, max_age_hours=hours,
+                    )
+                    data["success"] = True
+        except Exception as exc:
+            error_key = {"sites": "siteError", "powerplay": "powerplayError"}.get(kind)
+            if error_key:
+                data[error_key] = str(exc)
+            else:
+                data.update(success=False, error=str(exc))
+        return data, time.monotonic() - started
+
+    domains = ["markets"]
+    if include_edframe and origin:
+        domains = ["sites", "powerplay", "markets"]
+    timings = {}
+    with ThreadPoolExecutor(max_workers=3, thread_name_prefix="mining-fetch") as pool:
+        futures = {kind: pool.submit(fetch_domain, kind) for kind in domains}
+        for kind, future in futures.items():
+            data, seconds = future.result()
+            result.update(data)
+            timings[kind] = round(seconds, 3)
+    result["fetchTimings"] = timings
+    return result

@@ -61,6 +61,43 @@ except for bounded, rate-limited yield and station-price observation endpoints.
 Both sharing options are disabled by default in ED-Frame and require explicit
 consent.
 
+## Conditional Mining snapshots (source-only until deployed)
+
+`GET /v1/sites/search` optionally accepts `snapshot_protocol=1` on bounded,
+paginated system/region queries. Initial requests may send `known_revision`
+only when holding a complete local snapshot. A matching content revision
+returns `notModified: true`, empty row arrays and `snapshotComplete: true`.
+This confirms identity, not a new observation or extended lifetime.
+
+Changed initial requests return rows, `revision` and `snapshotStatic`. Every
+continuation sends that `snapshot_revision` and `snapshot_static` along with
+the ordinary offset/cursor. Intermediate pages are explicitly provisional
+(`snapshotComplete: false`). The final page checks the whole domain again in
+the same repeatable-read transaction as its rows. Only a matching start/end
+revision proves completeness. Database tuple versions prevent an intervening
+change followed by a revert from hiding in an equal-content checksum;
+projection/reference versions are checked on every page. Conflict is HTTP 409.
+
+The digest covers regional membership/expiry, site fields/deletions, both
+yield tables, same-system fallback metadata, imported references and their
+public system positions. Bundled/code changes invalidate revisions. No
+schema migration, server snapshot cache, trigger or persistent epoch is
+required. Existing clients and non-protocol queries remain unchanged.
+
+App snapshots are bounded to eight compressed entries and 64 MiB of retained
+payload per Commander profile. They are persisted on tracked workers, with
+checksum validation, profile/reset fences and unchanged source timestamps.
+Regions above 500 LY keep legacy paging because broad-domain hashing costs
+are not yet optimized. Protocol failures also fall back to fresh paging;
+repeated paging conflicts produce explicitly provisional, non-cacheable rows.
+
+`ops/benchmark-mining-revision.py` is a read-only SQL probe; append it after
+`edframe_catalog/mining_revision.py`, set Python's package context to
+`edframe_catalog`, and stream it to the running API Python process. It does
+not install files, change data/schema or deploy the protocol. Deployment
+requires the matching app and server code; no client speedup is claimed for
+the currently published Windows release.
+
 ## Production deployment
 
 1. Copy `.env.example` to `.env`, set a long random database password and the
@@ -99,6 +136,11 @@ files per service. Mining evidence and system geography are retained.
 - `GET /v1/markets/search?commodity=platinum`
 - `GET /v1/sites/search?commodity=platinum`
 - `GET /v1/mining/powerplay?x=0&y=0&z=0&max_distance=100`
+- Powerplay responses include `hasMore`/`nextCursor`; continue with `cursor` to
+  read beyond the first 200 systems. Repeated `system=Cubeo&system=...` query
+  parameters select up to 200 exact systems using the identity index, independent
+  of radius (response `selection: systems`). The 24-hour default freshness and
+  explicit-control requirement are unchanged; no database migration is needed.
 - `GET /v1/sync/markets`
 - `GET /v1/sync/station-offers`
 - `GET /v1/sync/state-finds`

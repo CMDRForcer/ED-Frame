@@ -1,5 +1,6 @@
 import json
 import time
+import threading
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -579,7 +580,7 @@ class MiningFinderProjectionTests(unittest.TestCase):
 
         self.assertIs(controller._pending_bgs_snapshots, pending)
 
-    def test_leaving_mining_page_releases_large_derived_view(self):
+    def test_leaving_mining_page_retains_shared_source_view_for_return(self):
         controller = CockpitController.__new__(CockpitController)
         controller._last_page = 12
         controller._mining_rows_build_token = 4
@@ -593,10 +594,10 @@ class MiningFinderProjectionTests(unittest.TestCase):
 
         controller.setLastPage(0)
 
-        self.assertEqual(controller._mining_rows_build_token, 5)
-        self.assertEqual(controller._mining_rows_cache, [])
+        self.assertEqual(controller._mining_rows_build_token, 4)
+        self.assertEqual(controller._mining_rows_cache, [{"system": "Cached"}])
         self.assertEqual(controller._mining_find_cache, [])
-        self.assertIsNone(controller._mining_rows_cache_key)
+        self.assertEqual(controller._mining_rows_cache_key, ("large",))
 
     def test_mining_catalog_save_is_deferred_and_only_latest_snapshot_wins(self):
         with TemporaryDirectory() as directory:
@@ -1060,6 +1061,7 @@ class MiningFinderProjectionTests(unittest.TestCase):
         ), [])
         self.assertEqual(calls[0][1]["params"], {
             "system": "Cubeo", "limit": 200, "commodity": "platinum", "offset": 0,
+            "snapshot_protocol": 1,
             "max_age_days": 3650,
             "include_community_overlaps": True,
             "include_ring_candidates": True,
@@ -1275,6 +1277,10 @@ class MiningFinderProjectionTests(unittest.TestCase):
         }
         for expected_delay in (120, 300, 900, 1800, 1800):
             controller._active_mining_market_request = {"id": "request"}
+            result["failureCount"] = controller._mining_market_failure_count
+            controller._persist_mining_market_result(
+                result, controller._mining_market_store, threading.Lock(),
+            )
             controller._finish_mining_market_sync(result)
             controller._mining_market_retry_timer.start.assert_called_with(
                 expected_delay * 1000
@@ -1484,9 +1490,10 @@ class MiningFinderProjectionTests(unittest.TestCase):
             controller.miningChanged = Mock()
             controller.stateChanged = Mock()
 
-            controller._finish_mining_market_sync({
+            result = {
                 "id": "warm", "profileKey": "alpha", "generation": 3,
                 "path": "market-cache.json", "success": True,
+                "background": True, "warmKey": "cubeo\x1fpainite",
                 "query": warm_query, "origin": {},
                 "providerStatus": {
                     "ED-Frame": "OK (1 rows)",
@@ -1499,7 +1506,11 @@ class MiningFinderProjectionTests(unittest.TestCase):
                     "sellPrice": 200000, "demand": 5000,
                     "observedAt": datetime.now(timezone.utc).isoformat(),
                 }],
-            })
+            }
+            controller._persist_mining_market_result(
+                result, controller._mining_market_store, threading.Lock(),
+            )
+            controller._finish_mining_market_sync(result)
 
             self.assertIs(controller._mining_market_cache, visible_cache)
             self.assertEqual(controller._mining_market_store.count(), 1)

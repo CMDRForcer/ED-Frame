@@ -52,6 +52,7 @@ from ed_companion.navigation import (
 )
 from ed_companion.navigation.trader import is_material_tradeable
 from ed_companion.navigation.mining_finder import project_local_mining_evidence
+from .dependency_cache import mining_candidates_signature
 from ed_companion.navigation.trader_type_cache import normalize_timestamp
 from ed_companion.trader_config import HEURISTIC_TRADER_WARNING_KEY
 from ed_companion.material_integrity import (
@@ -1278,6 +1279,8 @@ def build_state(
         "exploration_ledger", _projection_key,
         lambda: exploration_ledger(profile_events),
     )
+    local_mining_evidence = project_local_mining_evidence(events)
+    local_mining_signature = mining_candidates_signature(local_mining_evidence["candidates"])
     return {
         "_profileContext": profile_context,
         "_craftBatch": craft_batch,
@@ -1358,7 +1361,8 @@ def build_state(
         "trackedItems": tracked_items,
         "localHgeSightings": extract_local_hge_sightings(events),
         "localStateFinds": extract_local_state_finds(events),
-        "localMiningEvidence": project_local_mining_evidence(events),
+        "localMiningEvidence": local_mining_evidence,
+        "_miningCandidatesSignature": local_mining_signature,
         "localHgeScan": local_hge_scan_status(events),
         "localStateFindScan": local_state_find_scan_status(events),
         "currentSession": sessions["current"],

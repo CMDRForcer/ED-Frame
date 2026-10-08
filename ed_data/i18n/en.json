@@ -1323,4 +1323,8 @@
   "commodities.prohibited": "Reported prohibited commodity"
 ,
   "commodities.rare": "RARE GOODS"
+,
+  "mining.calculating_routes": "CALCULATING ROUTES",
+  "mining.calculating_routes_help": "Filtering evidence and evaluating routes in the background. You can continue using the app.",
+  "mining.updating_routes": "UPDATING ROUTES · EXISTING RESULTS REMAIN VISIBLE"
 }

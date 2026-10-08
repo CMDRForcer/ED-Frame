@@ -89,6 +89,8 @@ output/
 screenshots/
 smoke-screens/
 .tmp-release-smoke-*/
+.test-tmp/
+.test-tmp-measured/
 *_preview.png
 *_smoke.png
 

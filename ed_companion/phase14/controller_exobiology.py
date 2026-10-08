@@ -378,7 +378,9 @@ class ExobiologyMixin:
         # stale here. latest_profile_location() derives it fresh from the
         # Journal every time, the same way build_state() does for
         # landing_targets() itself.
-        current_system_address = latest_profile_location().get("currentSystemAddress")
+        location = (self._live_profile_location() if hasattr(self, "_network_threads_lock")
+                    else latest_profile_location())
+        current_system_address = location.get("currentSystemAddress")
         value = exobiology_distance_check(
             self._state.get("exobiologyFindings"),
             self._exobiology_step_positions,
