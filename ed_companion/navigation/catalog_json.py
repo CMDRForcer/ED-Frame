@@ -5,6 +5,7 @@ and yield regularly. No process-global intern pool, dropped facts or truncation.
 """
 import json
 import time
+from ed_companion.worker_budget import WorkerBudget
 
 
 SHARED_FIELDS = frozenset({
@@ -15,15 +16,92 @@ SHARED_FIELDS = frozenset({
 })
 
 
+class CatalogDictFactory:
+    """Ordinary, independent dicts sharing repeated field-name layouts.
+
+    CPython shares keys between instance dictionaries. Keep only a bounded,
+    load/worker-local set of shapes; no process-global intern pool or custom
+    mapping escapes this factory. Other runtimes retain correct dict semantics
+    even when their implementation does not provide the memory optimization.
+    Values (including nested containers) are never interned by this factory.
+    """
+
+    MAX_SHAPES = 64
+    MAX_FIELDS = 29
+
+    def __init__(self):
+        self._shapes = {}
+
+    def new_dict(self, keys):
+        shape = tuple(keys)
+        if not shape or len(shape) > self.MAX_FIELDS:
+            return {}
+        record_type = self._shapes.get(shape)
+        if record_type is None:
+            if len(self._shapes) >= self.MAX_SHAPES:
+                return {}
+            record_type = type("_CatalogFields", (), {})
+            self._shapes[shape] = record_type
+        return record_type().__dict__
+
+    def copy_record(self, record, *, exclude=()):
+        keys = tuple(key for key in record if key not in exclude)
+        result = self.new_dict(keys)
+        # Inserting individually preserves key-sharing; dict.update/copy may
+        # instead allocate a combined table. All returned values stay exact.
+        for key in keys:
+            result[key] = record[key]
+        return result
+
+
+def catalog_record_snapshot(record, *, factory=None, exclude=()):
+    """Copy public facts, storing nested arrays as private immutable tuples.
+
+    Published catalog records are replacement-only. Unlike lists, acyclic
+    tuples/dicts can be untracked by CPython's normal garbage collector, so a
+    full collection need not revisit millions of long-lived fact containers.
+    Do not freeze/disable the process GC. Root record arrays remain lists and
+    JSON serialization still writes arrays; thaw at the view boundary.
+    """
+    factory = factory if factory is not None else CatalogDictFactory()
+
+    def snapshot(value):
+        if isinstance(value, dict):
+            result = factory.new_dict(value)
+            for key, field in value.items():
+                result[key] = snapshot(field)
+            return result
+        if isinstance(value, (list, tuple)):
+            return tuple(snapshot(field) for field in value)
+        return value
+
+    result = factory.new_dict(key for key in record if key not in exclude)
+    for key, field in record.items():
+        if key not in exclude:
+            result[key] = snapshot(field)
+    return result
+
+
+def catalog_view_value(value):
+    """Independent ordinary JSON containers for selected Python/QML views."""
+    if isinstance(value, dict):
+        return {key: catalog_view_value(field) for key, field in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [catalog_view_value(field) for field in value]
+    return value
+
+
 def iter_catalog_json(value):
     """Serialize record-sized chunks; never build a 225-MB temporary string."""
     options = {"ensure_ascii": False, "separators": (",", ":")}
+    budget = WorkerBudget()
     def array(rows):
         yield "["
         for index, row in enumerate(rows):
             if index:
                 yield ","
             yield json.dumps(row, **options)
+            budget.checkpoint()
             if index % 128 == 0:
                 time.sleep(0)
         yield "]"
@@ -44,20 +122,27 @@ def iter_catalog_json(value):
         yield json.dumps(value, **options)
 
 
-def load_catalog_json(path, default):
+def load_catalog_json(path, default, *, snapshot_arrays=False):
     """Read a JSON root object/list incrementally; retain normal JSON semantics."""
     shared = {}
     keys = {}
+    record_factory = CatalogDictFactory()
+
+    def array_snapshot(value):
+        # Child objects have already passed object_hook. Never copy them twice.
+        return tuple(array_snapshot(item) if isinstance(item, list) else item
+                     for item in value)
 
     def object_hook(pairs):
-        result = {}
+        result = record_factory.new_dict(key for key, _value in pairs)
         for key, value in pairs:
             key = keys.setdefault(key, key)
             if key in SHARED_FIELDS and isinstance(value, str):
                 value = shared.setdefault(value, value)
+            if snapshot_arrays and isinstance(value, list):
+                value = array_snapshot(value)
             result[key] = value
         return result
-
     decoder = json.JSONDecoder(object_pairs_hook=object_hook)
     with path.open("r", encoding="utf-8-sig") as handle:
         buffer = ""
@@ -144,3 +229,8 @@ def load_catalog_json(path, default):
         if char():
             raise ValueError("Trailing catalog JSON content")
         return result
+
+
+def load_catalog_snapshot(path, default):
+    """Internal, replacement-only mining facts; not a generic JSON loader."""
+    return load_catalog_json(path, default, snapshot_arrays=True)

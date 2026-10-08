@@ -2,6 +2,56 @@
 
 ## Unreleased
 
+## 1.5.41 — 2026-10-08
+
+### Improved
+
+- Keep Journal/Status metadata polls, health-path resolution and surface-navigation
+  projections off the UI thread. Coalesce snapshots and fence completion by
+  profile/path generation; never authorize location/sharing checks from a pending
+  or failed poll. Reuse the same Status snapshot for live balance updates. Scope
+  mining market/ring/verification notifications to the mining domain instead of
+  rebuilding unrelated pages. Reuse one inventory conversion per Materials page
+  revision and give long background merges/saves cooperative CPU slices. No
+  ranking, freshness, BGS rules, retained files or functionality are removed.
+
+- Reduce Mining Finder UI stalls by preparing regional and targeted Powerplay
+  merges/equality checks on tracked workers. Publish only against the exact
+  source snapshot; rebase concurrent updates before releasing the original
+  request's busy state or publishing related markets. Profile/reset fences and
+  the durable synchronous fallback remain intact. Store nested arrays in private
+  replacement-only mining snapshots as tuples, reducing long-lived GC traversal
+  and memory; selected views still receive ordinary independent JSON containers.
+  Process garbage collection, persisted JSON, original history, ranking,
+  freshness, network budgets and BGS predictions remain unchanged.
+  Reuse one coherent Journal metadata snapshot inside each EDDN profile/baseline
+  poll instead of repeating directory/stat passes from the UI timer.
+
+- Reduce public-catalog memory by sharing repeated field-name layouts while
+  retaining ordinary, independently mutable dictionaries and every JSON value.
+  Use bounded load/worker-local layout factories, with normal dictionaries for
+  uncommon or oversized shapes. Keep newly merged Mining Finder rows compact
+  without cloning unaffected catalog rows. No disk format, retention, freshness,
+  ranking or network behavior changes; original observations remain archived.
+
+- Coalesce follow-up Mining Finder plans while regional sync, ring merging or
+  row projection is running. Keep the fast initial local plan and retain
+  same-query results; verification waits for the collected inputs to settle.
+  Preserve per-route check progress and all existing ranking/filter rules.
+  Reuse one worker-built raw Powerplay index per profile/source revision across
+  market and filter changes, rebuilding for replacement source snapshots or
+  profile/path changes. Freshness and eligibility are still assessed by the
+  existing planner; no result/age cache or new persistent files are added.
+
+- Avoid repeated full regional Mining Finder downloads during nearby searches.
+  Reuse completely paged ring responses for at most five minutes and Powerplay
+  responses for at most one minute, scoped to coordinates, radius, commodity
+  where relevant, server and active profile. The bounded in-memory cache uses
+  small compressed blocks; partial, canceled or inconsistent responses are not
+  reused. Markets and targeted route checks retain their existing fresh paths,
+  original observation times remain unchanged, and explicit current-system
+  refresh, reset, profile changes or server toggling bypass regional reuse.
+
 ### Fixed
 
 - Restore Mining Finder's targeted route verification from QML. Register

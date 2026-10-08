@@ -15,6 +15,7 @@ from ed_companion.compact_json import pack_json, unpack_json
 from ed_companion.history_archive import HistoryArchive
 from ed_companion.navigation.catalog_json import load_catalog_json, iter_catalog_json
 from ed_companion.navigation.mining_batch import prepare_mining_batch
+from ed_companion.worker_budget import WorkerBudget
 from ed_companion.navigation.mining_market_store import MarketCatalogStore
 from ed_companion.persistence import atomic_write, atomic_write_chunks, load_json_file
 from ed_companion.phase14.controller import CockpitController
@@ -288,6 +289,39 @@ class AppResponsivenessTests(unittest.TestCase):
         self.assertIn(("test", 99), c._derived_cache)
 
 
+class WorkerBudgetTests(unittest.TestCase):
+    def test_budget_never_sleeps_on_main_thread(self):
+        with patch("ed_companion.worker_budget.time.monotonic", side_effect=range(10000)), patch(
+                "ed_companion.worker_budget.time.sleep") as sleep:
+            budget = WorkerBudget()
+            for _ in range(256):
+                budget.checkpoint()
+            sleep.assert_not_called()
+
+    def test_worker_yields_bounded_slices_without_dropping_records(self):
+        errors = []
+        calls = []
+        with patch("ed_companion.worker_budget.time.monotonic", side_effect=range(10000)), patch(
+                "ed_companion.worker_budget.time.sleep", side_effect=lambda n: calls.append(n)):
+            def worker():
+                try:
+                    budget = WorkerBudget()
+                    rows = list(range(256))
+                    processed = []
+                    for row in rows:
+                        budget.checkpoint()
+                        processed.append(row)
+                    self.assertEqual(processed, rows)
+                except BaseException as exc:
+                    errors.append(exc)
+            thread = threading.Thread(target=worker)
+            thread.start()
+            thread.join(3)
+        self.assertFalse(thread.is_alive())
+        self.assertEqual(errors, [])
+        self.assertEqual(calls, [0.001] * 4)
+
+
 class AsyncMiningPlanTests(unittest.TestCase):
     def controller(self, directory):
         c = CockpitController.__new__(CockpitController)
@@ -429,6 +463,132 @@ class AsyncMiningPlanTests(unittest.TestCase):
                 changed[index] = value
                 self.assertFalse(c.miningMarketDiagnostics(*changed)["cacheMatches"])
 
+    def test_initial_local_plan_is_fast_but_related_sync_merge_and_projection_coalesce(self):
+        with TemporaryDirectory() as directory:
+            c = self.controller(directory)
+            c._mining_market_busy = True
+            self.assertEqual(c.miningPlanRoutes(*self.args), [])
+            c._finish_mining_plan(self.run_worker(c))
+            previous = c._mining_plan_cache
+            self.assertTrue(previous)
+            for phase in ("sync", "merge", "projection"):
+                c._mining_market_busy = phase == "sync"
+                c._active_mining_observation_batch = {"id": "merge"} if phase == "merge" else None
+                c._mining_rows_build_in_flight = phase == "projection"
+                c._mining_market_revision += 1
+                for _ in range(20):
+                    self.assertIs(c.miningPlanRoutes(*self.args), previous)
+                    self.assertTrue(c._mining_plan_is_busy())
+            self.assertEqual(c._start_network_worker.call_count, 1)
+            c._mining_rows_build_in_flight = False
+            self.assertIs(c.miningPlanRoutes(*self.args), previous)
+            self.assertEqual(c._start_network_worker.call_count, 2)
+            c._finish_mining_plan(self.run_worker(c))
+            self.assertFalse(c._mining_plan_is_busy())
+            self.assertEqual(c.miningPlanRoutes(*self.args), previous)
+            self.assertEqual(c._start_network_worker.call_count, 2)
+
+    def test_initial_plan_waits_for_projection_instead_of_using_outdated_rows(self):
+        with TemporaryDirectory() as directory:
+            c = self.controller(directory)
+            c._mining_rows_build_in_flight = True
+            self.assertEqual(c.miningPlanRoutes(*self.args), [])
+            c._start_network_worker.assert_not_called()
+            self.assertTrue(c._mining_plan_is_busy())
+            c._mining_rows_build_in_flight = False
+            c.miningPlanRoutes(*self.args)
+            self.assertEqual(c._start_network_worker.call_count, 1)
+            c._finish_mining_plan(self.run_worker(c))
+            self.assertFalse(c._mining_plan_is_busy())
+
+    def test_deferred_busy_ends_without_an_open_qml_page_and_new_query_is_not_old_data(self):
+        with TemporaryDirectory() as directory:
+            c = self.controller(directory)
+            c.miningPlanRoutes(*self.args)
+            c._finish_mining_plan(self.run_worker(c))
+            c._mining_market_busy = True
+            c.miningPlanRoutes(*self.args)
+            self.assertTrue(c._mining_plan_is_busy())
+            c._mining_market_busy = False
+            self.assertFalse(c._mining_plan_is_busy())
+            c._mining_market_busy = True
+            c._profile_generation += 1
+            self.assertEqual(c.miningPlanRoutes(*self.args), [])
+            self.assertEqual(c._start_network_worker.call_count, 2)
+            c._finish_mining_plan(self.run_worker(c))
+            newer = ("Other", *self.args[1:])
+            self.assertEqual(c.miningPlanRoutes(*newer), [])
+            self.assertEqual(c._start_network_worker.call_count, 3)
+
+    def test_pending_retry_buffers_do_not_hold_planning_or_verification_busy(self):
+        with TemporaryDirectory() as directory:
+            c = self.controller(directory)
+            c.miningPlanRoutes(*self.args)
+            c._finish_mining_plan(self.run_worker(c))
+            c._pending_mining_candidates = [{"system": "retry"}]
+            c._pending_mining_powerplay_observations = [{"system": "retry"}]
+            c._mining_market_revision += 1
+            c.miningPlanRoutes(*self.args)
+            self.assertEqual(c._start_network_worker.call_count, 2)
+            c._finish_mining_plan(self.run_worker(c))
+            self.assertFalse(c._mining_plan_is_busy())
+
+    def test_verification_checking_state_still_replans_and_is_not_hidden_until_completion(self):
+        with TemporaryDirectory() as directory:
+            c = self.controller(directory)
+            c.miningPlanRoutes(*self.args)
+            c._finish_mining_plan(self.run_worker(c))
+            c._mining_verification_busy = True
+            c._mining_market_verification_states = {"test\x1fplatinum": {"state": "CHECKING"}}
+            c.miningPlanRoutes(*self.args)
+            self.assertEqual(c._start_network_worker.call_count, 2)
+            c._finish_mining_plan(self.run_worker(c))
+            self.assertFalse(c._mining_plan_is_busy())
+
+    def test_worker_index_reused_for_filters_and_markets_but_fenced_for_profile_and_path(self):
+        from ed_companion.navigation import mining_planner
+        with TemporaryDirectory() as directory, patch.object(
+            mining_planner, "_powerplay_index", wraps=mining_planner._powerplay_index,
+        ) as build:
+            c = self.controller(directory)
+            for args in (self.args, (*self.args[:8], 2, *self.args[9:])):
+                c.miningPlanRoutes(*args)
+                c._finish_mining_plan(self.run_worker(c))
+            self.assertEqual(build.call_count, 1)
+            c._mining_market_revision += 1
+            c.miningPlanRoutes(*args)
+            c._finish_mining_plan(self.run_worker(c))
+            self.assertEqual(build.call_count, 1)
+            old_cache = c._mining_powerplay_index_cache
+            c._profile_generation += 1
+            c.miningPlanRoutes(*args)
+            c._finish_mining_plan(self.run_worker(c))
+            self.assertEqual(build.call_count, 2)
+            self.assertIsNot(c._mining_powerplay_index_cache, old_cache)
+            c.mining_powerplay_catalog_file = Path(directory) / "new-profile.json"
+            c.miningPlanRoutes(*args)
+            c._finish_mining_plan(self.run_worker(c))
+            self.assertEqual(build.call_count, 3)
+
+    def test_worker_index_rebuilds_on_new_same_length_powerplay_snapshot(self):
+        from ed_companion.navigation import mining_planner
+        with TemporaryDirectory() as directory, patch.object(
+            mining_planner, "_powerplay_index", wraps=mining_planner._powerplay_index,
+        ) as build:
+            c = self.controller(directory)
+            c._mining_powerplay_catalog = {"systems": [{"system": "Test", "power": "Aisling Duval"}]}
+            c._mining_powerplay_observations = [{"system": "Test", "controllingPower": "Aisling Duval"}]
+            c.miningPlanRoutes(*self.args)
+            c._finish_mining_plan(self.run_worker(c))
+            c._mining_powerplay_observations = [{"system": "Test", "controllingPower": "Yuri Grom"}]
+            c.miningPlanRoutes(*self.args)
+            c._finish_mining_plan(self.run_worker(c))
+            self.assertEqual(build.call_count, 2)
+            c._mining_powerplay_catalog = {"systems": [{"system": "Other", "power": "Yuri Grom"}]}
+            c.miningPlanRoutes(*self.args)
+            c._finish_mining_plan(self.run_worker(c))
+            self.assertEqual(build.call_count, 3)
+
     def test_lean_view_and_worker_preserve_all_route_modes(self):
         with TemporaryDirectory() as directory:
             c = self.controller(directory)
@@ -448,7 +608,10 @@ class AsyncMiningPlanTests(unittest.TestCase):
                     del c._network_threads_lock
                     c._mining_find_cache_key = None
                     expected = c._compute_mining_plan_routes(*args)
-                    lean = c._build_mining_rows(c._state, c._mining_catalog, decorate=False)
+                    from ed_companion.navigation.catalog_json import catalog_record_snapshot
+                    frozen = {**c._mining_catalog, "candidates": [
+                        catalog_record_snapshot(row) for row in c._mining_catalog["candidates"]]}
+                    lean = c._build_mining_rows(c._state, frozen, decorate=False)
                     c._mining_rows = lambda: lean
                     c._network_threads_lock = threading.Lock()
                     self.assertEqual(c.miningPlanRoutes(*args), [])

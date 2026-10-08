@@ -13,6 +13,22 @@ def _line(event):
 
 
 class EddnJournalCursorTests(unittest.TestCase):
+    def test_production_profile_poll_reads_one_metadata_snapshot_without_weakening_fences(self):
+        controller = CockpitController.__new__(CockpitController)
+        controller._network_threads_lock = object()
+        controller.profile_context = mock.Mock(key="alpha")
+        key = (3, "alpha", "stamp")
+        controller._live_location_key = mock.Mock(return_value=key)
+        controller._live_profile_location = mock.Mock(return_value={})
+        controller._journal_location_cache = {"key": key, "context": controller.profile_context}
+        with mock.patch("ed_companion.phase14.controller_eddn.journal_change_signature",
+                        side_effect=AssertionError("duplicate metadata read")):
+            self.assertTrue(controller._sync_eddn_profile())
+            controller._live_location_key.assert_called_once_with()
+            controller._live_profile_location.assert_called_once_with(key=key)
+            controller._journal_location_cache["key"] = (2, "alpha", "old")
+            self.assertFalse(controller._sync_eddn_profile())
+
     def test_production_scan_budget_is_shared_across_files_and_resumes_without_loss(self):
         with TemporaryDirectory() as directory:
             first = Path(directory) / "Journal.01.log"

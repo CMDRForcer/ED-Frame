@@ -890,7 +890,9 @@ class EddnMixin:
         identity = str(self._eddn_profile_identity or "")
         if not identity:
             return []
-        signature = (identity, journal_change_signature())
+        stamp = (self._live_location_key()[-1] if hasattr(self, "_network_threads_lock")
+                 else journal_change_signature())
+        signature = (identity, stamp)
         if signature != self._eddn_profile_paths_signature:
             if hasattr(self, "_network_threads_lock"):
                 self._live_profile_location()
@@ -914,18 +916,23 @@ class EddnMixin:
 
 
     def _sync_eddn_profile(self) -> bool:
+        if hasattr(self, "_network_threads_lock"):
+            # One coherent metadata snapshot per poll, not three repeated
+            # directory/stat passes while a large catalog is being written.
+            key = self._live_location_key()
+            self._live_profile_location(key=key)
+            cached = getattr(self, "_journal_location_cache", {})
+            if (key[-1] is None or getattr(self, "_active_journal_inputs", None)
+                    or cached.get("key") != key or cached.get("context") != self.profile_context):
+                return False  # Wait for a coherent worker-verified profile.
+            self._profile_sync_signature = (
+                str(os.environ.get("ED_FRAME_PROFILE_FID") or "").strip(), key[-1],
+            )
+            return True
         signature = (
             str(os.environ.get("ED_FRAME_PROFILE_FID") or "").strip(),
             journal_change_signature(),
         )
-        if hasattr(self, "_network_threads_lock"):
-            self._live_profile_location()
-            cached = getattr(self, "_journal_location_cache", {})
-            key = self._live_location_key()
-            if cached.get("key") != key or cached.get("context") != self.profile_context:
-                return False  # Wait for a coherent worker-verified profile.
-            self._profile_sync_signature = signature
-            return True
         if getattr(self, "_profile_sync_signature", None) == signature:
             return True
         if not self._switch_profile_context(resolve_profile_context()):
@@ -946,9 +953,11 @@ class EddnMixin:
     def _baseline_eddn_journal_files(self):
         """Start opt-in after existing Journal bytes; rotations start at zero."""
         if hasattr(self, "_network_threads_lock"):
-            self._live_profile_location()
+            key = self._live_location_key()
+            self._live_profile_location(key=key)
             cached = getattr(self, "_journal_location_cache", {})
-            if (cached.get("key") != self._live_location_key()
+            if (key[-1] is None or getattr(self, "_active_journal_inputs", None)
+                    or cached.get("key") != key
                     or cached.get("context") != self.profile_context):
                 return False  # Enabling sharing must not baseline an unready path list.
         for path in self._eddn_profile_journal_paths():

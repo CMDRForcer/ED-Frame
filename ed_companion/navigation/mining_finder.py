@@ -129,7 +129,7 @@ def fetch_edframe_mining_candidates(
     complete local snapshot. Legacy servers still take the full paging path.
     """
     if diagnostics is not None:
-        for name in ("_snapshot", "revision", "notModified", "consistent", "snapshotStatus"):
+        for name in ("_snapshot", "revision", "notModified", "consistent", "snapshotStatus", "complete"):
             diagnostics.pop(name, None)
     for attempt in range(2):
         try:
@@ -229,7 +229,7 @@ def _fetch_edframe_mining_snapshot(
                 raise ValueError("ED-Frame mining catalog returned an invalid unchanged snapshot")
             candidates = cached["candidates"]
             if diagnostics is not None:
-                diagnostics.update(count=len(candidates), bounded=False, pages=1,
+                diagnostics.update(count=len(candidates), bounded=False, pages=1, complete=True,
                                    notModified=True, revision=cached["revision"])
             return candidates
         if page == 0 and versioned:
@@ -275,7 +275,8 @@ def _fetch_edframe_mining_snapshot(
         bounded = True
     candidates = merge_mining_candidates(candidates)
     if diagnostics is not None:
-        diagnostics.update({"count": len(candidates), "bounded": bounded, "pages": page + 1})
+        diagnostics.update({"count": len(candidates), "bounded": bounded, "pages": page + 1,
+                            "complete": not bounded and payload.get("hasMore") is False})
         if revision and not bounded:
             diagnostics["revision"] = revision
             diagnostics["_snapshot"] = {"key": key, "revision": revision,
@@ -504,6 +505,7 @@ def merge_mining_candidate_batch(
     additions: Iterable[dict[str, Any]],
     now: datetime | None = None,
     positions: dict[tuple[Any, ...], int] | None = None,
+    *, prepare_row=None, checkpoint=None,
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
     """Merge a relay batch without rebuilding every unaffected ring."""
     rows = [row for row in existing or [] if isinstance(row, dict)]
@@ -513,18 +515,20 @@ def merge_mining_candidate_batch(
         else mining_candidate_positions(rows)
     )
     displaced = []
-    for incoming in merge_mining_candidates(additions, now=now):
+    for incoming in merge_mining_candidates(additions, now=now, checkpoint=checkpoint):
+        if checkpoint:
+            checkpoint()
         key = _candidate_identity(incoming)
         index = positions.get(key)
         if index is None:
             positions[key] = len(rows)
-            rows.append(incoming)
+            rows.append(prepare_row(incoming) if prepare_row else incoming)
             continue
         previous = rows[index]
         merged = merge_mining_candidates([previous, incoming], now=now)
         if merged:
             displaced.append(previous)
-            rows[index] = merged[0]
+            rows[index] = prepare_row(merged[0]) if prepare_row else merged[0]
     return rows, displaced
 
 
@@ -562,10 +566,13 @@ def mining_candidate_freshness(
 def merge_mining_candidates(
     candidates: Iterable[dict[str, Any]], now: datetime | None = None,
     policy: dict[str, int] | None = None,
+    *, checkpoint=None,
 ) -> list[dict[str, Any]]:
     """Merge identical rings while retaining every source observation."""
     groups: dict[tuple[Any, ...], list[dict[str, Any]]] = {}
     for candidate in candidates or []:
+        if checkpoint:
+            checkpoint()
         if not isinstance(candidate, dict) or not _text(candidate.get("ring")):
             continue
         row = mining_candidate_freshness(candidate, now=now, policy=policy)
@@ -579,6 +586,8 @@ def merge_mining_candidates(
         "systemState",
     )
     for observations in groups.values():
+        if checkpoint:
+            checkpoint()
         observations.sort(key=lambda row: (
             not row.get("stale"),
             MINING_EVIDENCE_RANK.get(row["sourceEvidence"], 0),

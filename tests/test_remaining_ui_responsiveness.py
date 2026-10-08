@@ -40,10 +40,16 @@ def controller():
     c.timer = Mock()
     c.timer.isActive.return_value = True
     for name in ("commanderProjectionReady", "commanderCardsChanged", "journalLocationReady",
-                 "journalHealthReady", "journalHealthChanged", "connectionChanged",
+                 "journalHealthReady", "journalInputsReady", "surfaceNavReady", "journalHealthChanged", "connectionChanged",
                  "hgeObservationBatchFinished", "hgeChanged", "stateChanged"):
         setattr(c, name, Mock())
     return c
+
+
+def journal_inputs(c, stamp):
+    c._journal_inputs_cache = {"scope": c._journal_input_scope(), "stamp": stamp,
+                               "root": "journal", "status": {}, "statusStamp": None}
+    c._journal_inputs_at = time.monotonic()
 
 
 def run_worker(test, c, signal_name):
@@ -329,8 +335,119 @@ class LiveSignalResponsivenessTests(unittest.TestCase):
 
 
 class JournalWorkerResponsivenessTests(unittest.TestCase):
-    def test_location_getter_uses_only_metadata_and_worker_resolves_full_profile(self):
+    def test_periodic_poll_does_not_stat_resolve_or_read_from_ui(self):
         c = controller()
+        c._apply_journal_poll = Mock()
+        ids = []
+        main = threading.get_ident()
+        def signature():
+            ids.append(threading.get_ident())
+            return ("journal", ())
+        with patch(JOURNAL + "journal_dir", side_effect=lambda: ids.append(threading.get_ident()) or Path("journal")), patch(
+                JOURNAL + "journal_change_signature", side_effect=signature), patch(
+                JOURNAL + "read_json", side_effect=lambda *args: ids.append(threading.get_ident()) or {"BodyName": "Test"}):
+            c.pollJournal()
+            c.pollJournal()
+            self.assertEqual(c._live_profile_location(), {})
+            self.assertEqual(c._journal_path(), "")
+            self.assertEqual(ids, [])
+            self.assertEqual(c._start_network_worker.call_count, 1)
+            result, worker_id = run_worker(self, c, "journalInputsReady")
+            c._finish_journal_inputs(result)
+            self.assertTrue(ids)
+            self.assertTrue(all(value == worker_id and value != main for value in ids))
+            c._apply_journal_poll.assert_called_once_with(result)
+            self.assertEqual(c._live_location_key()[-1], ("journal", ()))
+            self.assertEqual(c._journal_path(), "journal")
+            self.assertEqual(c._start_network_worker.call_count, 1)
+
+    def test_input_completion_cannot_cross_profile_or_path_changes(self):
+        for change in ("profile", "path", "shutdown"):
+            c = controller()
+            c._apply_journal_poll = Mock()
+            c.pollJournal()
+            request = c._active_journal_inputs
+            if change == "profile":
+                c._profile_generation += 1
+            elif change == "path":
+                c._journal_input_epoch = 1
+            else:
+                c._shutdown_complete = True
+            c._finish_journal_inputs({"request": request, "scope": request[0]})
+            c._apply_journal_poll.assert_not_called()
+            self.assertFalse(getattr(c, "_journal_inputs_cache", {}))
+            self.assertIsNone(c._active_journal_inputs)
+
+    def test_failed_input_poll_has_bounded_retry_and_cannot_reuse_old_metadata(self):
+        c = controller()
+        c._apply_journal_poll = Mock()
+        journal_inputs(c, ("journal", ()))
+        with patch(JOURNAL + "journal_dir", side_effect=OSError("busy disk")), self.assertLogs(
+                "ed_companion.phase14.controller_journal_health", level="ERROR"):
+            c.pollJournal()
+            result, _ = run_worker(self, c, "journalInputsReady")
+            c._finish_journal_inputs(result)
+        self.assertIsNone(c._live_location_key()[-1])
+        self.assertEqual(c._journal_path(), "")
+        c._apply_journal_poll.assert_not_called()
+        self.assertEqual(c._start_network_worker.call_count, 1)
+        c._journal_inputs_at -= 2
+        c._live_location_key()
+        self.assertEqual(c._start_network_worker.call_count, 2)
+
+    def test_pending_disk_poll_cannot_authorize_old_location_or_upload(self):
+        c = controller()
+        journal_inputs(c, (1,))
+        key = c._live_location_key()
+        c._journal_location_cache = {"key": key, "context": c.profile_context,
+                                     "location": {"system": "Old"}}
+        c.pollJournal()
+        self.assertEqual(c._live_profile_location(), {})
+        self.assertFalse(c._sync_eddn_profile())
+
+    def test_surface_projection_is_worker_owned_coalesced_and_rebased(self):
+        c = controller()
+        journal_inputs(c, (1,))
+        c._state.update(system="Test", currentPosition=[0, 0, 0])
+        c._farm_catalog = {"materials": {}}
+        c._farm_edits = {}
+        c._surface_nav = {"targets": [], "activeId": "", "position": {}, "guidance": {},
+                          "farmSites": [], "farmDeletedSites": [], "originSystem": "", "originKnown": False}
+        c.surfaceNavChanged = Mock()
+        ids = []
+        original = c._build_surface_nav
+        c._build_surface_nav = lambda *args: ids.append(threading.get_ident()) or original(*args)
+        with patch("ed_companion.phase14.controller_surface_nav.read_json", side_effect=AssertionError("UI disk read")), patch(
+                "ed_companion.phase14.controller_surface_nav.journal_dir", side_effect=AssertionError("UI path read")):
+            c._poll_surface_nav()
+            c._poll_surface_nav()
+            self.assertIs(c._active_surface_nav[1], c._journal_inputs_cache["status"])
+            self.assertEqual(ids, [])
+            self.assertEqual(c._start_network_worker.call_count, 1)
+            result, worker_id = run_worker(self, c, "surfaceNavReady")
+            self.assertEqual(ids, [worker_id])
+            c._state = {**c._state, "system": "New"}
+            c._finish_surface_nav(result)
+            c.surfaceNavChanged.emit.assert_not_called()
+            self.assertEqual(c._start_network_worker.call_count, 2)
+            result, _ = run_worker(self, c, "surfaceNavReady")
+            c._finish_surface_nav(result)
+            self.assertEqual(c._surface_nav["originSystem"], "New")
+            c._poll_surface_nav()
+            self.assertEqual(c._start_network_worker.call_count, 2)
+
+    def test_status_credit_poll_consumes_worker_snapshot_without_disk_io(self):
+        c = controller()
+        c._record_commander_credit_snapshot = Mock()
+        with patch(CMDR + "journal_dir", side_effect=AssertionError("UI path read")), patch(
+                CMDR + "read_json", side_effect=AssertionError("UI disk read")):
+            c._poll_commander_status_credits(status={"Balance": 3000, "timestamp": "2026-10-08T10:00:00Z"}, stamp=(1, 2))
+        self.assertEqual(c._state["commanderOverview"]["credits"]["value"], 3000)
+        c._record_commander_credit_snapshot.assert_called_once()
+
+    def test_location_getter_uses_cached_metadata_and_worker_resolves_full_profile(self):
+        c = controller()
+        journal_inputs(c, ("journal", ()))
         c._poll_exobiology_distance_check = Mock()
         c._scan_eddn_journal = Mock()
         location = {"system": "New", "currentPosition": [1, 2, 3], "currentSystemAddress": 42}
@@ -354,6 +471,7 @@ class JournalWorkerResponsivenessTests(unittest.TestCase):
         c._poll_exobiology_distance_check = Mock()
         c._scan_eddn_journal = Mock()
         stamp = [1]
+        journal_inputs(c, tuple(stamp))
         with patch(JOURNAL + "journal_change_signature", side_effect=lambda: tuple(stamp)), patch(
                 JOURNAL + "resolve_profile_context", return_value=c.profile_context), patch(
                 JOURNAL + "latest_profile_location", return_value={"currentSystemAddress": 42}), patch(
@@ -361,6 +479,7 @@ class JournalWorkerResponsivenessTests(unittest.TestCase):
             c._live_profile_location()
             result, _ = run_worker(self, c, "journalLocationReady")
             stamp[0] = 2
+            journal_inputs(c, tuple(stamp))
             c._finish_journal_location(result)
             self.assertEqual(c._live_profile_location(), {})
             self.assertEqual(c._start_network_worker.call_count, 2)
@@ -372,6 +491,7 @@ class JournalWorkerResponsivenessTests(unittest.TestCase):
         c._poll_exobiology_distance_check = Mock()
         c._scan_eddn_journal = Mock()
         other = ProfileContext("other", "beta", Path("profile-beta"), "journal")
+        journal_inputs(c, (1,))
         with patch(JOURNAL + "journal_change_signature", return_value=(1,)), patch(
                 JOURNAL + "resolve_profile_context", return_value=other), patch(
                 JOURNAL + "latest_profile_location", return_value={"system": "Foreign"}), patch(
@@ -385,6 +505,7 @@ class JournalWorkerResponsivenessTests(unittest.TestCase):
 
     def test_error_clears_active_location_and_suppresses_identical_retry_loop(self):
         c = controller()
+        journal_inputs(c, (1,))
         with patch(JOURNAL + "journal_change_signature", return_value=(1,)), patch(
                 JOURNAL + "resolve_profile_context", side_effect=OSError("test")), self.assertLogs(
                 "ed_companion.phase14.controller_journal_health", level="ERROR"):
@@ -439,6 +560,7 @@ class JournalWorkerResponsivenessTests(unittest.TestCase):
                 result, _ = run_worker(self, c, "journalHealthReady")
                 if change == "root":
                     root[0] = Path("other")
+                    c._journal_input_epoch = 1  # The path setter invalidates pending reads.
                 else:
                     c._profile_generation += 1
                 c._finish_journal_health(result)

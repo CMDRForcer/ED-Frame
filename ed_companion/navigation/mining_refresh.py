@@ -16,12 +16,14 @@ from .mining_powerplay import fetch_edframe_powerplay
 
 
 def fetch_mining_refresh(query, *, origin=None, include_edframe=True,
-                         session_factory=None, is_current=None, snapshot_path=None):
+                         session_factory=None, is_current=None, snapshot_path=None,
+                         region_cache=None):
     """Retrieve independent domains concurrently without sharing a Session.
 
     Cursor-dependent ring pages remain sequential within their reusable
     connection. Market provider order, fallback, limits and freshness are
-    deliberately unchanged. Every future is joined before returning.
+    deliberately unchanged. Complete regional reads may be reused briefly;
+    markets always execute. Every future is joined before returning.
     """
     session_factory = session_factory or requests.Session
 
@@ -57,8 +59,20 @@ def fetch_mining_refresh(query, *, origin=None, include_edframe=True,
 
     def fetch_domain(kind):
         started = time.monotonic()
+        cache_started = region_cache.now() if region_cache is not None else None
         data = {}
         try:
+            cache_fields = {"sites": ("serverCandidates", "siteCoverage"),
+                            "powerplay": ("serverPowerplay", "powerplayCoverage")}
+            if region_cache is not None and kind in cache_fields:
+                if is_current is not None and not is_current():
+                    raise RuntimeError("Mining lookup superseded or shutting down")
+                reused = region_cache.get(kind, query, origin)
+                if reused is not None:
+                    if is_current is not None and not is_current():
+                        raise RuntimeError("Mining lookup superseded or shutting down")
+                    rows_key, coverage_key = cache_fields[kind]
+                    return {rows_key: reused[0], coverage_key: reused[1]}, time.monotonic() - started
             with session_factory() as session:
                 get = session_get(session)
                 if kind == "sites":
@@ -94,6 +108,10 @@ def fetch_mining_refresh(query, *, origin=None, include_edframe=True,
                         origin=origin, max_age_hours=hours,
                     )
                     data["success"] = True
+            if region_cache is not None and kind in cache_fields:
+                rows_key, coverage_key = cache_fields[kind]
+                region_cache.put(kind, query, origin, data[rows_key], data[coverage_key],
+                                 started_at=cache_started, is_current=is_current)
         except Exception as exc:
             error_key = {"sites": "siteError", "powerplay": "powerplayError"}.get(kind)
             if error_key:

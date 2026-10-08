@@ -553,20 +553,24 @@ class CommanderMixin:
         return True
 
 
-    def _poll_commander_status_credits(self):
+    def _poll_commander_status_credits(self, *, status=None, stamp=None):
         """Apply Balance changes without rebuilding the complete Journal state."""
-        path = journal_dir() / "Status.json"
-        try:
-            stat = path.stat()
-            stamp = (int(stat.st_size), int(stat.st_mtime_ns))
-        except OSError:
+        if status is None:
+            path = journal_dir() / "Status.json"
+            try:
+                stat = path.stat()
+                stamp = (int(stat.st_size), int(stat.st_mtime_ns))
+            except OSError:
+                return
+            status = read_json(path, {})
+        elif stamp is None:
             return
         if stamp == getattr(self, "_last_commander_status_stamp", None):
             return
         first_status_poll = getattr(
             self, "_last_commander_status_stamp", None
         ) is None
-        live = commander_status_credits(read_json(path, {}))
+        live = commander_status_credits(status)
         if not live.get("known"):
             return
         self._last_commander_status_stamp = stamp

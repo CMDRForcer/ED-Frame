@@ -1,5 +1,7 @@
-from datetime import datetime, timezone
+from copy import deepcopy
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
+import threading
 import unittest
 from unittest.mock import patch
 
@@ -9,6 +11,7 @@ from ed_companion.navigation.mining_planner import (
     OPTIMIZE_MERITS,
     OPTIMIZE_PROFIT,
     OPTIMIZE_YIELD,
+    PowerplayIndexCache,
     market_filter_diagnostics,
     plan_mining_routes,
 )
@@ -29,6 +32,91 @@ def candidate(system, distance, target="HOTSPOT", **extra):
         "observedAt": "2026-09-30T11:00:00Z",
         **extra,
     }
+
+
+class PowerplayIndexCacheTests(unittest.TestCase):
+    def test_reuses_one_raw_index_and_replaces_sources_not_an_unbounded_history(self):
+        cache = PowerplayIndexCache()
+        catalog = [{"system": "Test", "power": "Aisling Duval"}]
+        observations = []
+        with patch.object(planner_module, "_powerplay_index", wraps=planner_module._powerplay_index) as build:
+            first = cache.index_for((1, "profile"), catalog, observations)
+            self.assertIs(cache.index_for((1, "profile"), catalog, observations), first)
+            self.assertEqual(build.call_count, 1)
+            for generation in range(2, 6):
+                last = cache.index_for((generation, "profile"), catalog, observations)
+            self.assertIsNot(last, first)
+            self.assertEqual(build.call_count, 5)
+            self.assertEqual(cache._sources, (catalog, observations))
+            newer = [{"system": "Test", "controllingPower": "Yuri Grom"}]
+            cache.index_for((5, "profile"), catalog, newer)
+            self.assertIs(cache._sources[1], newer)
+            self.assertEqual(build.call_count, 6)
+
+    def test_concurrent_workers_build_same_source_only_once(self):
+        cache = PowerplayIndexCache()
+        catalog, observations = [], []
+        gate = threading.Barrier(5)
+        results = []
+        def run():
+            gate.wait(timeout=3)
+            results.append(cache.index_for("profile", catalog, observations))
+        with patch.object(planner_module, "_powerplay_index", wraps=planner_module._powerplay_index) as build:
+            workers = [threading.Thread(target=run) for _ in range(4)]
+            for worker in workers:
+                worker.start()
+            gate.wait(timeout=3)
+            for worker in workers:
+                worker.join(3)
+                self.assertFalse(worker.is_alive())
+            self.assertEqual(len(results), 4)
+            self.assertTrue(all(result is results[0] for result in results))
+            self.assertEqual(build.call_count, 1)
+
+    def test_cached_and_uncached_modes_goals_age_boundaries_and_unknowns_are_identical(self):
+        catalog = [{"system": "Test", "power": "Aisling Duval",
+                    "powerState": "Stronghold", "powerRelationship": "PRESENCE"}]
+        observations = [{"system": "Test", "controllingPower": "Aisling Duval",
+                         "powerState": "Stronghold", "observedAt": "2026-09-30T11:00:00Z"}]
+        row = candidate("Test", 10, coordinates=[0, 0, 0], markets=[{
+            "system": "Test", "station": "Port", "commodity": "platinum",
+            "observedAt": "2026-09-30T11:00:00Z", "demand": 10000, "sellPrice": 200000,
+        }])
+        cache = PowerplayIndexCache()
+        index = cache.index_for("profile", catalog, observations)
+        original = deepcopy(index)
+        for mode in planner_module.OPTIMIZATION_MODES:
+            for goal in ("ACQUIRE", "REINFORCE", "UNDERMINE"):
+                for now in (NOW, NOW + timedelta(seconds=1), NOW + timedelta(days=2)):
+                    with self.subTest(mode=mode, goal=goal, now=now):
+                        args = dict(power="Aisling Duval", power_goal=goal,
+                                    max_market_age_hours=1, now=now)
+                        expected = plan_mining_routes([row], "Platinum", mode,
+                            powerplay_systems=[*catalog, *observations], **args)
+                        actual = plan_mining_routes([row], "Platinum", mode,
+                            powerplay_index=index, **args)
+                        self.assertEqual(actual, expected)
+        self.assertEqual(index, original, "planning must not mutate the cached raw index")
+        expired = plan_mining_routes([row], "Platinum", OPTIMIZE_MERITS,
+            power="Aisling Duval", power_goal="REINFORCE", max_market_age_hours=1,
+            powerplay_index=index, now=NOW + timedelta(seconds=1))
+        self.assertEqual(expired[0]["marketStatus"], "MARKET_TOO_OLD")
+        empty = cache.index_for("profile", [], [])
+        unknown = plan_mining_routes([row], "Platinum", OPTIMIZE_MERITS,
+            power="Aisling Duval", power_goal="REINFORCE", powerplay_index=empty, now=NOW)
+        self.assertFalse(unknown[0]["meritKnown"])
+
+    def test_newer_unoccupied_snapshot_clears_control_without_mutating_older_index(self):
+        cache = PowerplayIndexCache()
+        catalog = [{"system": "Test", "controllingPower": "Aisling Duval",
+                    "powerState": "Stronghold", "observedAt": "2026-09-30T10:00:00Z"}]
+        old = cache.index_for("profile", catalog, [])
+        observations = [{"system": "Test", "controllingPower": "", "powerState": "Unoccupied",
+                         "observedAt": "2026-09-30T11:00:00Z", "source": "Journal"}]
+        new = cache.index_for("profile", catalog, observations)
+        self.assertEqual(old["bySystem"]["test"]["controllingPower"], "Aisling Duval")
+        self.assertFalse(new["bySystem"]["test"]["controlKnown"])
+        self.assertEqual(new, planner_module._powerplay_index([*catalog, *observations]))
 
 
 class MiningPlannerTests(unittest.TestCase):

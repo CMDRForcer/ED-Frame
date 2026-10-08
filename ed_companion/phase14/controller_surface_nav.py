@@ -1,5 +1,6 @@
 """Saved surface waypoints and live compass data for the Nav page."""
 
+import logging
 from pathlib import Path
 from uuid import uuid4
 
@@ -11,9 +12,12 @@ from ed_companion.navigation.material_farms import (
 from ed_companion.surface_nav import parse_coordinate, surface_guidance
 from .state import journal_dir, read_json
 
+LOGGER = logging.getLogger(__name__)
+
 
 class SurfaceNavMixin:
     surfaceNavChanged = Signal()
+    surfaceNavReady = Signal(object)
 
     surfaceNav = Property(
         "QVariantMap", lambda self: self._surface_nav, notify=surfaceNavChanged,
@@ -235,8 +239,71 @@ class SurfaceNavMixin:
             "", str(position["latitude"]), str(position["longitude"]),
         )
 
-    def _poll_surface_nav(self):
-        status = read_json(journal_dir() / "Status.json", {})
+    def _surface_nav_key(self, status):
+        # Retain the small input snapshots. Bare ids can be reused after a
+        # failed/coalesced projection releases an older object, hiding a change.
+        return (self._journal_input_scope(), status,
+                str(self._state.get("system") or ""),
+                tuple(self._state.get("currentPosition") or ()),
+                self._farm_catalog, self._farm_edits,
+                self._surface_nav["targets"], self._surface_nav["activeId"])
+
+    def _poll_surface_nav(self, *, status=None):
+        if not hasattr(self, "_network_threads_lock"):
+            status = read_json(journal_dir() / "Status.json", {}) if status is None else status
+            data = self._build_surface_nav(status, self._state, self._surface_nav,
+                                           self._farm_catalog, self._farm_edits)
+            if data:
+                self._surface_nav = {**self._surface_nav, **data}
+                self.surfaceNavChanged.emit()
+            return
+        if status is None:
+            inputs = getattr(self, "_journal_inputs_cache", {})
+            if inputs.get("scope") != self._journal_input_scope():
+                self._request_journal_inputs()
+                return
+            status = inputs["status"]
+        self._surface_status = status
+        key = self._surface_nav_key(status)
+        if (key == getattr(self, "_surface_nav_prepared_key", None)
+                or getattr(self, "_active_surface_nav", None)):
+            return
+        self._active_surface_nav = key
+        state, nav, catalog, edits = self._state, self._surface_nav, self._farm_catalog, self._farm_edits
+
+        def worker():
+            try:
+                data = self._build_surface_nav(status, state, nav, catalog, edits)
+                result = {"key": key, "data": data}
+            except Exception:
+                # Retain the displayed compass/farm data; retry next poll.
+                LOGGER.exception("Surface navigation projection could not be prepared")
+                result = {"key": key, "error": True}
+            self.surfaceNavReady.emit(result)
+
+        if not self._start_network_worker(worker, "surface-navigation"):
+            self._active_surface_nav = None
+
+    @Slot(object)
+    def _finish_surface_nav(self, result):
+        if result.get("key") != getattr(self, "_active_surface_nav", None):
+            return
+        self._active_surface_nav = None
+        if getattr(self, "_shutdown_complete", False):
+            return
+        status = getattr(self, "_surface_status", {})
+        if result["key"] != self._surface_nav_key(status):
+            self._poll_surface_nav()
+            return
+        if result.get("error"):
+            return
+        self._surface_nav_prepared_key = result["key"]
+        if result.get("data"):
+            self._surface_nav = {**self._surface_nav, **result["data"]}
+            self.surfaceNavChanged.emit()
+
+    @staticmethod
+    def _build_surface_nav(status, state, nav, catalog, edits):
         status = status if isinstance(status, dict) else {}
         position = {}
         try:
@@ -246,21 +313,21 @@ class SurfaceNavMixin:
             if body:
                 position = {
                     "latitude": latitude, "longitude": longitude, "body": body,
-                    "system": str(self._state.get("system") or ""),
+                    "system": str(state.get("system") or ""),
                 }
         except ValueError:
             pass
-        target = next((row for row in self._surface_nav["targets"]
-                       if row["id"] == self._surface_nav["activeId"]), None)
-        current_system = str(self._state.get("system") or "").strip()
-        current_position = self._state.get("currentPosition")
+        target = next((row for row in nav["targets"]
+                       if row["id"] == nav["activeId"]), None)
+        current_system = str(state.get("system") or "").strip()
+        current_position = state.get("currentPosition")
         all_farm_sites, farm_materials = material_farm_rows(
-            self._farm_catalog, current_position, current_system,
-            self._farm_edits, include_deleted=True,
+            catalog, current_position, current_system,
+            edits, include_deleted=True,
         )
         farm_sites = [row for row in all_farm_sites if not row["deleted"]]
         deleted_farm_sites = [row for row in all_farm_sites if row["deleted"]]
-        catalog_materials = self._farm_catalog.get("materials", {})
+        catalog_materials = catalog.get("materials", {})
         all_farm_materials = sorted(
             ({"key": key, "name": str(value.get("name") or key)}
              for key, value in catalog_materials.items()
@@ -275,17 +342,17 @@ class SurfaceNavMixin:
                 guidance = {"wrongBody": True}
             else:
                 guidance = surface_guidance(status, target)
-        if (position != self._surface_nav["position"]
-                or guidance != self._surface_nav["guidance"]
-                or farm_sites != self._surface_nav["farmSites"]
-                or deleted_farm_sites != self._surface_nav["farmDeletedSites"]
-                or current_system != self._surface_nav["originSystem"]
-                or origin_known != self._surface_nav["originKnown"]):
-            self._surface_nav = {
-                **self._surface_nav, "position": position, "guidance": guidance,
+        if (position != nav["position"]
+                or guidance != nav["guidance"]
+                or farm_sites != nav["farmSites"]
+                or deleted_farm_sites != nav["farmDeletedSites"]
+                or current_system != nav["originSystem"]
+                or origin_known != nav["originKnown"]):
+            return {
+                "position": position, "guidance": guidance,
                 "farmSites": farm_sites, "farmMaterials": farm_materials,
                 "farmAllMaterials": all_farm_materials,
                 "farmDeletedSites": deleted_farm_sites,
                 "originSystem": current_system, "originKnown": origin_known,
             }
-            self.surfaceNavChanged.emit()
+        return None

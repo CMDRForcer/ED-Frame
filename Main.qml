@@ -3170,6 +3170,9 @@ ApplicationWindow {
     ColumnLayout {
         id: materialsPage
         objectName: "qa-page-materials"
+        // Convert the Python/QVariant inventory once per revision, not anew
+        // for each category/filter binding during asynchronous page creation.
+        property var materialRows: cockpit.materials
         property bool neededOnly: window.materialsNeededOnlyState
         property bool farmMissing: window.materialsFarmMissingState
         property string statusFilter: window.materialsStatusFilterState
@@ -3183,7 +3186,7 @@ ApplicationWindow {
                 window.materialFarmMissingRequested = false
             }
         }
-        property var farmMissingRows: cockpit.materials.filter(function(row) {
+        property var farmMissingRows: materialRows.filter(function(row) {
             return row.category === "Raw" && row.missing > 0
                 && (materialSearch.text.length === 0
                     || row.name.toLowerCase().indexOf(
@@ -3211,7 +3214,7 @@ ApplicationWindow {
                 appWindow: window
                 eyebrow: window.t("engineering.title", "SHIP ENGINEERING")
                 title: window.t("materials.title", "MATERIAL INVENTORY")
-                subtitle: window.tf("materials.inventory_summary", "%1 ENGINEERING MATERIALS · LIVE JOURNAL STOCK", [cockpit.materials.length])
+                subtitle: window.tf("materials.inventory_summary", "%1 ENGINEERING MATERIALS · LIVE JOURNAL STOCK", [materialsPage.materialRows.length])
             }
             TextField {
                 id: materialSearch
@@ -3297,7 +3300,7 @@ ApplicationWindow {
             spacing: 12
             Repeater {
                 model: ["Raw", "Manufactured", "Encoded"].concat(
-                    cockpit.materials.some(function(row) {
+                    materialsPage.materialRows.some(function(row) {
                         return row.category === "unknown"
                     }) ? ["unknown"] : [])
                 delegate: MaterialColumn {
@@ -3306,7 +3309,7 @@ ApplicationWindow {
                     Layout.fillWidth: true
                     Layout.fillHeight: true
                     category: modelData
-                    rows: cockpit.materials
+                    rows: materialsPage.materialRows
                     query: materialSearch.text.toLowerCase()
                     neededOnly: materialsPage.neededOnly
                     statusFilter: materialsPage.statusFilter

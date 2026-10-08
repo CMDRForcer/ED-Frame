@@ -305,14 +305,86 @@ class JournalHealthMixin:
     journalHealthChanged = Signal()
     journalHealthReady = Signal(object)
     journalLocationReady = Signal(object)
+    journalInputsReady = Signal(object)
+
+    def _journal_input_scope(self):
+        return (getattr(self, "_profile_generation", 0), self.profile_context.key,
+                getattr(self, "_journal_input_epoch", 0))
+
+    def _request_journal_inputs(self, *, force=False):
+        """One periodic disk snapshot, never a stat/resolve/cache lock from Qt."""
+        scope = self._journal_input_scope()
+        active = getattr(self, "_active_journal_inputs", None)
+        now = time.monotonic()
+        cached = getattr(self, "_journal_inputs_cache", {})
+        if active or (not force and (cached.get("scope") == scope
+                                    or getattr(self, "_journal_input_attempt_scope", None) == scope)
+                      and now - getattr(self, "_journal_inputs_at", 0) < 1.2):
+            return
+        request = (scope, now)
+        self._journal_input_attempt_scope = scope
+        self._active_journal_inputs = request
+
+        def worker():
+            result = {"request": request, "scope": scope}
+            try:
+                directory = journal_dir()
+                result["root"] = str(directory)
+                result["stamp"] = journal_change_signature()
+                if result["stamp"][0] != result["root"]:
+                    raise RuntimeError("Journal directory changed during input snapshot")
+                path = directory / "Status.json"
+                try:
+                    stat = path.stat()
+                    result["statusStamp"] = (int(stat.st_size), int(stat.st_mtime_ns))
+                except OSError:
+                    result["statusStamp"] = None
+                status = read_json(path, {})
+                result["status"] = status if isinstance(status, dict) else {}
+            except Exception as exc:
+                result["error"] = type(exc).__name__
+                LOGGER.exception("Journal input snapshot could not be read")
+            self.journalInputsReady.emit(result)
+
+        if not self._start_network_worker(worker, "journal-inputs"):
+            self._active_journal_inputs = None
+
+    @Slot(object)
+    def _finish_journal_inputs(self, result):
+        if result.get("request") != getattr(self, "_active_journal_inputs", None):
+            return
+        self._active_journal_inputs = None
+        if (getattr(self, "_shutdown_complete", False)
+                or result.get("scope") != self._journal_input_scope()):
+            return
+        self._journal_inputs_at = time.monotonic()
+        if result.get("error"):
+            # Do not authorize sharing/location checks from a failed disk poll.
+            self._journal_inputs_cache = {}
+            return
+        old = getattr(self, "_journal_inputs_cache", {})
+        if old.get("scope") == result["scope"] and old.get("status") == result["status"]:
+            result["status"] = old["status"]
+        self._journal_inputs_cache = result
+        if old.get("root") != result["root"]:
+            self.journalHealthChanged.emit()
+        self._apply_journal_poll(result)
 
     def _live_location_key(self):
-        return (self._profile_generation, self.profile_context.key,
-                journal_change_signature())
+        if not hasattr(self, "_network_threads_lock"):
+            stamp = journal_change_signature()
+        else:
+            self._request_journal_inputs()
+            cached = getattr(self, "_journal_inputs_cache", {})
+            stamp = (cached.get("stamp") if cached.get("scope") == self._journal_input_scope()
+                     else None)
+        return (self._profile_generation, self.profile_context.key, stamp)
 
-    def _live_profile_location(self):
-        """Qt polls metadata only; profile/location/history locks stay on a worker."""
-        key = self._live_location_key()
+    def _live_profile_location(self, *, key=None):
+        """Both metadata and profile/location/history locks stay on workers."""
+        key = self._live_location_key() if key is None else key
+        if key[-1] is None or getattr(self, "_active_journal_inputs", None):
+            return {}
         cached = getattr(self, "_journal_location_cache", {})
         if (cached.get("key") != key
                 and not getattr(self, "_active_journal_location", None)
@@ -325,6 +397,7 @@ class JournalHealthMixin:
                     context = resolve_profile_context()
                     result.update(context=context, location=latest_profile_location(),
                                   paths=journal_paths_for_profile(context.identity))
+                    result["verifiedStamp"] = journal_change_signature()
                 except Exception as exc:
                     result["error"] = type(exc).__name__
                     LOGGER.exception("Live Journal location could not be prepared")
@@ -344,8 +417,13 @@ class JournalHealthMixin:
         if result["key"] != self._live_location_key():
             self._live_profile_location()
             return
+        if getattr(self, "_active_journal_inputs", None):
+            return  # Re-resolve after the newer metadata snapshot is available.
         if result.get("error"):
             self._journal_location_failed_key = result["key"]
+            return
+        if result.get("verifiedStamp") != result["key"][-1]:
+            self._request_journal_inputs(force=True)
             return
         if result["context"] != self.profile_context:
             self._journal_location_failed_key = result["key"]
@@ -377,20 +455,23 @@ class JournalHealthMixin:
             data = self._read_journal_health()
             data.pop("_modifiedAt", None)
             return data
-        directory = journal_dir()
-        root = str(directory)
+        inputs = getattr(self, "_journal_inputs_cache", {})
+        root = inputs.get("root", "") if inputs.get("scope") == self._journal_input_scope() else ""
         now = time.monotonic()
         cached = getattr(self, "_journal_health_cache", {})
         runtime = self._journal_health_runtime()
         if (not getattr(self, "_active_journal_health", None)
-                and (cached.get("root") != root
+                and (cached.get("scope") != self._journal_input_scope()
+                     or (root and cached.get("root") != root)
                      or now - getattr(self, "_journal_health_requested_at", 0) >= 1.2)):
-            request = (root, getattr(self, "_profile_generation", 0), now)
+            request = (self._journal_input_scope(), now)
             self._active_journal_health = request
             self._journal_health_requested_at = now
 
             def worker():
+                directory = None
                 try:
+                    directory = journal_dir()
                     data = self._read_journal_health(directory, runtime)
                 except Exception as exc:
                     LOGGER.exception("Journal health could not be prepared")
@@ -398,11 +479,11 @@ class JournalHealthMixin:
                             "fileCount": 0, "latestFile": "", "ageSeconds": -1,
                             "sizeBytes": 0, "parserOk": False, "lastEvent": "",
                             "error": type(exc).__name__, **runtime}
-                self.journalHealthReady.emit({"request": request, "data": data})
+                self.journalHealthReady.emit({"request": request, "root": str(directory or ""), "data": data})
 
             if not self._start_network_worker(worker, "journal-health"):
                 self._active_journal_health = None
-        if cached.get("root") != root:
+        if cached.get("scope") != self._journal_input_scope() or (root and cached.get("root") != root):
             return {"status": "CHECKING", "directoryExists": False, "fileCount": 0,
                     "latestFile": "", "ageSeconds": -1, "sizeBytes": 0,
                     "parserOk": False, "lastEvent": "", "error": "", **runtime}
@@ -420,9 +501,13 @@ class JournalHealthMixin:
         if result["request"] != getattr(self, "_active_journal_health", None):
             return
         self._active_journal_health = None
-        if result["request"][:2] != (str(journal_dir()), getattr(self, "_profile_generation", 0)):
+        if result["request"][0] != self._journal_input_scope():
             return
-        self._journal_health_cache = {"root": result["request"][0], "data": result["data"]}
+        inputs = getattr(self, "_journal_inputs_cache", {})
+        if (inputs.get("scope") == self._journal_input_scope()
+                and inputs.get("root") != result["root"]):
+            return
+        self._journal_health_cache = {"root": result["root"], "scope": result["request"][0], "data": result["data"]}
         self.journalHealthChanged.emit()
         self.connectionChanged.emit()
 
@@ -486,7 +571,14 @@ class JournalHealthMixin:
     )
 
 
-    journalPath = Property(str, lambda self: str(journal_dir()), notify=CoreControllerMixin.stateChanged)
+    def _journal_path(self):
+        if not hasattr(self, "_network_threads_lock"):
+            return str(journal_dir())
+        self._request_journal_inputs()
+        cached = getattr(self, "_journal_inputs_cache", {})
+        return str(cached.get("root", "")) if cached.get("scope") == self._journal_input_scope() else ""
+
+    journalPath = Property(str, lambda self: self._journal_path(), notify=journalHealthChanged)
 
 
     @Slot(bool)
@@ -516,10 +608,16 @@ class JournalHealthMixin:
     @Slot(str)
     def setJournalPath(self, path):
         if set_journal_dir(path):
+            self._journal_input_epoch = getattr(self, "_journal_input_epoch", 0) + 1
+            self._journal_inputs_cache = {}
+            self._journal_health_cache = {}
+            self._journal_location_cache = {}
             self._last_journal_stamp = None
             self._last_commander_status_stamp = None
             self._selected_ship = ""
             self.refresh()
+            if hasattr(self, "_network_threads_lock"):
+                self._request_journal_inputs(force=True)
             self._activity = "Journal directory updated."
         else:
             value = Path(str(path or "").strip()).expanduser()
@@ -535,7 +633,16 @@ class JournalHealthMixin:
     def pollJournal(self):
         if self._shutdown_complete:
             return
-        self._poll_surface_nav()
+        if hasattr(self, "_network_threads_lock"):
+            self._request_journal_inputs(force=True)
+            return
+        self._apply_journal_poll()
+
+    def _apply_journal_poll(self, inputs=None):
+        if inputs is None:
+            self._poll_surface_nav()
+        else:
+            self._poll_surface_nav(status=inputs["status"])
         if not self._journal_auto:
             self._maybe_start_inara_auto()
             self._process_eddn_queue()
@@ -547,9 +654,12 @@ class JournalHealthMixin:
             self._maybe_start_inara_auto()
             self._process_eddn_queue()
             return
-        self._poll_commander_status_credits()
+        if inputs is None:
+            self._poll_commander_status_credits()
+        else:
+            self._poll_commander_status_credits(status=inputs["status"], stamp=inputs["statusStamp"])
         self._poll_exobiology_distance_check()
-        stamp = journal_change_signature()
+        stamp = inputs["stamp"] if inputs is not None else journal_change_signature()
         if self._last_journal_stamp is None:
             self._last_journal_stamp = stamp
             self._queue_inara_journal_scan()

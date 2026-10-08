@@ -618,9 +618,12 @@ class CockpitController(
         self.connectionChanged.connect(self._invalidate_connection_cache)
         self.connectionChanged.connect(self.commanderCardsChanged.emit)
         self.stateChanged.connect(self.commanderCardsChanged.emit)
+        self.stateChanged.connect(self.miningChanged.emit)
         self.commanderProjectionReady.connect(self._finish_commander_projection)
         self.journalLocationReady.connect(self._finish_journal_location)
         self.journalHealthReady.connect(self._finish_journal_health)
+        self.journalInputsReady.connect(self._finish_journal_inputs)
+        self.surfaceNavReady.connect(self._finish_surface_nav)
         self.stateChanged.connect(self.stationServicesChanged.emit)
         self.stationServicesFinished.connect(self._finish_station_services)
         self.stateChanged.connect(self.commoditiesChanged.emit)
@@ -2710,6 +2713,7 @@ class CockpitController(
         self._last_bgs_batch_monotonic = time.monotonic()
         self._last_mining_batch_monotonic = time.monotonic()
         self._profile_generation += 1
+        self._mining_region_cache = None
         self._profile_sync_signature = None
         self._inara_scan_token = getattr(self, "_inara_scan_token", 0) + 1
         self._inara_scan_in_flight = False

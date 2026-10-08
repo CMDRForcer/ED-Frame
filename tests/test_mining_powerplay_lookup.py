@@ -2,6 +2,7 @@
 
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+import threading
 import unittest
 from unittest.mock import Mock, patch
 
@@ -46,7 +47,7 @@ class PowerplayLookupTests(unittest.TestCase):
         self.assertEqual({row["system"] for row in rows}, {"One", "Two"})
         self.assertNotIn("cursor", get.call_args_list[0].kwargs["params"])
         self.assertEqual(get.call_args_list[1].kwargs["params"]["cursor"], "next")
-        self.assertEqual(coverage, {"bounded": False, "pages": 2})
+        self.assertEqual(coverage, {"bounded": False, "pages": 2, "complete": True})
 
     def test_legacy_or_repeating_cursor_is_explicitly_incomplete_not_a_loop(self):
         for cursor in (None, "same"):
@@ -269,6 +270,95 @@ class PowerplayLookupTests(unittest.TestCase):
         self.assertTrue(c.miningMarketSyncBusy)
         self.assertEqual(c._mining_market_cache["markets"][0]["station"], "Market")
         self.assertEqual(getattr(c, "_pending_mining_powerplay_observations", []), [])
+        c.miningChanged.emit.assert_called_once()
+        c.stateChanged.emit.assert_not_called()  # No unrelated page rebuild for market facts.
+
+    def test_worker_prepared_powerplay_is_fenced_and_rebased_before_publication(self):
+        from ed_companion.navigation.catalog_json import catalog_view_value
+        c = self.controller()
+        c._network_threads_lock = threading.Lock()
+        c._mining_powerplay_observations = [fact("Old")]
+        incoming = [fact("Mine")]
+        result = {}
+        signal = Mock()
+        self.assertTrue(c._defer_mining_powerplay_publication(result, incoming, signal))
+        worker = c._start_network_worker.call_args.args[0]
+        worker()
+        self.assertFalse(c._save_mining_json.called)
+        self.assertEqual([row["system"] for row in c._mining_powerplay_observations], ["Old"])
+        # A relay published another fact while the first worker was running.
+        c._mining_powerplay_observations = [fact("Old"), fact("Relay")]
+        self.assertTrue(c._defer_mining_powerplay_publication(result, incoming, signal))
+        c._start_network_worker.call_args.args[0]()
+        self.assertFalse(c._defer_mining_powerplay_publication(result, incoming, signal))
+        with patch("ed_companion.phase14.controller_navigation.merge_powerplay_observations",
+                   side_effect=AssertionError("merge on UI")):
+            self.assertTrue(c._publish_mining_powerplay(incoming, result["preparedPowerplay"]))
+        self.assertEqual({row["system"] for row in c._mining_powerplay_observations},
+                         {"Old", "Relay", "Mine"})
+        self.assertEqual(catalog_view_value(c._mining_powerplay_observations[2])["coordinates"], [1, 2, 3])
+        repeated = {}
+        c._prepare_mining_powerplay_publication(repeated, incoming)
+        self.assertFalse(c._publish_mining_powerplay(incoming, repeated["preparedPowerplay"]))
+
+    def test_stale_market_completion_never_dispatches_powerplay_preparation(self):
+        c = self.controller()
+        c._network_threads_lock = threading.Lock()
+        c.mining_market_cache_file = Path("market.json")
+        c._active_mining_market_request = {"id": "old"}
+        c._mining_market_busy = True
+        c._finish_mining_market_sync({"id": "old", "profileKey": "old-profile",
+            "generation": 1, "path": "market.json", "serverPowerplay": [fact("Mine")]})
+        c._start_network_worker.assert_not_called()
+        c._save_mining_json.assert_not_called()
+        self.assertFalse(c._mining_market_busy)
+
+    def test_market_completion_stays_busy_until_worker_facts_publish_before_markets(self):
+        c = self.controller()
+        c._network_threads_lock = threading.Lock()
+        c._mining_powerplay_observations = []
+        c.mining_market_cache_file = Path("market.json")
+        c.miningMarketFinished = Mock()
+        c._mining_market_busy = True
+        c._active_mining_market_request = {"id": "region"}
+        c._launch_pending_mining_market_refresh = Mock(return_value=False)
+        c._mining_market_cache = {"markets": [{"station": "Old"}]}
+        result = {"id": "region", "profileKey": "alpha", "generation": 2,
+                  "path": "market.json", "success": True, "serverPowerplay": [fact("Mine")],
+                  "markets": [{"system": "Sale", "station": "New"}]}
+        c._finish_mining_market_sync(result)
+        self.assertTrue(c._mining_market_busy)
+        self.assertEqual(c._mining_market_cache["markets"][0]["station"], "Old")
+        c.miningChanged.emit.assert_not_called()
+        c._start_network_worker.call_args.args[0]()
+        c.miningMarketFinished.emit.assert_called_once_with(result)
+        def notified():
+            self.assertEqual(c._mining_powerplay_observations[0]["system"], "Mine")
+        c.miningChanged.emit.side_effect = notified
+        with patch("ed_companion.phase14.controller_navigation.merge_powerplay_observations",
+                   side_effect=AssertionError("merge on UI")):
+            c._finish_mining_market_sync(result)
+        self.assertFalse(c._mining_market_busy)
+        self.assertEqual(c._mining_market_cache["markets"][0]["station"], "New")
+        c.stateChanged.emit.assert_not_called()
+
+    def test_profile_switch_during_verification_merge_discards_worker_result(self):
+        c = self.controller()
+        c._network_threads_lock = threading.Lock()
+        c._mining_powerplay_observations = []
+        c._active_mining_verification_request = {"id": "verify"}
+        c._mining_verification_busy = True
+        result = {"id": "verify", "profileKey": "alpha", "generation": 2,
+                  "path": "catalog.json", "powerplayLookup": {"rows": [fact("Mine")]}}
+        c._finish_mining_verification(result)
+        self.assertTrue(c._mining_verification_busy)
+        self.assertIsNotNone(c._active_mining_verification_request)
+        c._start_network_worker.call_args.args[0]()
+        c._profile_generation += 1
+        c._finish_mining_verification(result)
+        self.assertFalse(c._mining_verification_busy)
+        self.assertEqual(c._mining_powerplay_observations, [])
+        c._save_mining_json.assert_not_called()
 
 
 if __name__ == "__main__":

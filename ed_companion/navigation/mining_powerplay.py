@@ -40,6 +40,8 @@ def fetch_edframe_powerplay(*, origin: list, max_distance: float, get: Any,
     radius). Older servers are detected explicitly, never mistaken for a
     successful exact lookup just because they ignored the new query parameter.
     """
+    if diagnostics is not None:
+        diagnostics.clear()
     if systems and not origin:
         # Named batches do not use a spatial origin on the server. This is a
         # query placeholder only, never stored as system coordinates.
@@ -82,7 +84,8 @@ def fetch_edframe_powerplay(*, origin: list, max_distance: float, get: Any,
         rows.extend(_public_powerplay_rows(payload["results"]))
         has_more = bool(payload.get("hasMore"))
         if diagnostics is not None:
-            diagnostics.update(bounded=has_more, pages=page + 1)
+            diagnostics.update(bounded=has_more, pages=page + 1,
+                               complete=payload.get("hasMore") is False)
         if not has_more:
             break
         cursor = payload.get("nextCursor")

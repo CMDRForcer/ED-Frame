@@ -8,7 +8,9 @@ from __future__ import annotations
 
 from collections import defaultdict
 from datetime import datetime, timezone
+from itertools import chain
 from math import sqrt
+from threading import Lock
 from typing import Any, Iterable
 
 from .mining_commodities import mining_commodity_id, mining_commodity_name
@@ -520,7 +522,7 @@ def _candidate_commodity_ids(
 ) -> list[str]:
     """Return concrete mineable commodities in evidence-preference order."""
     cached = row.get("_candidateCommodityIds")
-    if isinstance(cached, list):
+    if isinstance(cached, (list, tuple)):
         return cached
     requested_id = mining_commodity_id(requested)
     if requested_id not in {"", "allcommodities"}:
@@ -734,7 +736,7 @@ def _powerplay_index(
             "systemAddress", "coordinates", "systemState", "observedAt",
             "source",
         ):
-            if source.get(field) not in (None, "", []):
+            if source.get(field) not in (None, "", [], ()):
                 system_fact[field] = source.get(field)
 
         known_powers = {
@@ -772,12 +774,39 @@ def _powerplay_index(
         if power:
             fact = by_power.setdefault((system, power), {})
             for field, value in source.items():
-                if value not in (None, "", []):
+                if value not in (None, "", [], ()):
                     fact[field] = value
             fact.setdefault(
                 "system", str(source.get("system") or source.get("name") or "")
             )
     return {"byPower": by_power, "bySystem": by_system}
+
+
+class PowerplayIndexCache:
+    """One worker-owned index of replacement-published, immutable source rows.
+
+    This caches no age assessment, eligibility, route or ranking. The planner
+    still evaluates those against its current `now` on every invocation.
+    Keep source references, not just ids, to prevent identity reuse after GC.
+    Never use this for arbitrary in-place edited/headless inputs.
+    """
+
+    def __init__(self):
+        self._lock = Lock()
+        self._key = None
+        self._sources = None
+        self._index = None
+
+    def index_for(self, scope, catalog_rows, observations):
+        key = (scope, id(catalog_rows), len(catalog_rows),
+               id(observations), len(observations))
+        with self._lock:
+            if self._key != key:
+                index = _powerplay_index(chain(catalog_rows, observations))
+                self._sources = (catalog_rows, observations)
+                self._index = index
+                self._key = key
+            return self._index
 
 
 def _indexed_power_fact(
@@ -837,7 +866,7 @@ def _candidate_power_fact(
     if candidate.get("coordinates"):
         fact["coordinates"] = candidate.get("coordinates")
     candidate_powers = candidate.get("powers")
-    if use_metadata and isinstance(candidate_powers, list) and candidate_powers:
+    if use_metadata and isinstance(candidate_powers, (list, tuple)) and candidate_powers:
         fact["powers"] = list(candidate_powers)
     fact.setdefault("system", str(candidate.get("system") or ""))
     return fact
@@ -863,7 +892,7 @@ def _market_power_fact(
     if market.get("coordinates"):
         fact["coordinates"] = market.get("coordinates")
     market_powers = market.get("powers")
-    if use_metadata and isinstance(market_powers, list) and market_powers:
+    if use_metadata and isinstance(market_powers, (list, tuple)) and market_powers:
         fact["powers"] = list(market_powers)
     fact.setdefault("system", str(market.get("system") or ""))
     return fact
@@ -1005,6 +1034,7 @@ def plan_mining_routes(
     system_state: str = "ANY",
     markets: Iterable[dict[str, Any]] = (),
     powerplay_systems: Iterable[dict[str, Any]] = (),
+    powerplay_index: dict[str, dict[Any, dict[str, Any]]] | None = None,
     now: datetime | None = None,
 ) -> list[dict[str, Any]]:
     """Annotate and rank already-filtered mining candidates.
@@ -1028,7 +1058,10 @@ def plan_mining_routes(
     requested_commodity_name = (
         "" if all_commodities else mining_commodity_name(commodity_id)
     )
-    powerplay_catalog = _powerplay_index(powerplay_systems)
+    powerplay_catalog = (
+        _powerplay_index(powerplay_systems)
+        if powerplay_index is None else powerplay_index
+    )
     projected_shared_markets = _market_rows({}, commodity_id, markets)
 
     def assessed_market(source_market: dict[str, Any]) -> dict[str, Any]:

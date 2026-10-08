@@ -23,7 +23,7 @@ class MiningPaginationAndMethodsTests(unittest.TestCase):
         rows = fetch_edframe_mining_candidates('Shanteneri', get, diagnostics=diagnostics)
         self.assertEqual({r['system'] for r in rows}, {'Early', 'Reference', 'BZ Ceti'})
         self.assertEqual(get.call_args_list[1].kwargs['params']['offset'], 200)
-        self.assertEqual(diagnostics, {'count': 3, 'bounded': False, 'pages': 2})
+        self.assertEqual(diagnostics, {'count': 3, 'bounded': False, 'pages': 2, 'complete': True})
 
     def test_invalid_cursor_does_not_loop(self):
         get = Mock(return_value=Response({'results': [], 'hasMore': True, 'nextOffset': 0}))
