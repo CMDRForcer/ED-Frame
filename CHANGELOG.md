@@ -1,5 +1,30 @@
 # Changelog
 
+## 1.0.7 — 2026-10-09
+
+- Prepare ALL COMMODITIES method/ring compatibility and commodity names once
+  per search, preserving individual evidence, timestamps, result fields and
+  ranking. Read the exact market query once per disposable planning worker for
+  both routes and diagnostics; later searches and verifications read again.
+- Carry the captured ring view into background planners so known free-text
+  start systems retain their coordinates. Broad searches now include regional
+  markets even when their background warm target belongs to another system.
+
+- Supplement missing Mining Powerplay control through a separate, bounded server
+  lookup of public Spansh system snapshots. Retained rings no longer determine
+  whether this additional source is queried. The existing EDDN lookup runs first;
+  current explicit control avoids an unnecessary upstream request.
+- Accept only identity-matched, explicit control/state with the original system
+  timestamp and coordinates. Missing fields remain unknown; older observations
+  and generic ring/market dates cannot confirm current eligibility. Preserve
+  source provenance and retain newer or equally dated EDDN snapshots atomically.
+- Bound each supplementation to six systems with two outbound lanes per API
+  worker, rate limits and cached results/errors. Deferred or failed source checks
+  receive a shorter retry interval; successful facts and source availability are
+  shown separately. Disabling the community connection also disables this lookup.
+- Paired with catalog server 0.9.2. Broad 500-LY searches still have significant
+  CPU/RAM cost and UI pauses; this release does not claim to resolve those limits.
+
 ## 1.0.6 — 2026-10-09
 
 - Keep Powerplay metadata as one source snapshot with its own timestamp when

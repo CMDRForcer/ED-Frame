@@ -717,6 +717,7 @@ class CockpitController(
         self._mining_verification_failures = 0
         self._mining_verification_cache = {}
         self._mining_powerplay_lookup_cache = {}
+        self._mining_powerplay_source_pending = []
         self._mining_powerplay_market_verification_cache = {}
         self._active_mining_verification_request = None
         self._pending_mining_verification = None
@@ -2668,6 +2669,7 @@ class CockpitController(
         self._mining_verification_failures = 0
         self._mining_verification_cache = {}
         self._mining_powerplay_lookup_cache = {}
+        self._mining_powerplay_source_pending = []
         self._mining_powerplay_market_verification_cache = {}
         self._active_edframe_catalog_sync_request = None
         self._edframe_catalog_sync_busy = False

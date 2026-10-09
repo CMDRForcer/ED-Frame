@@ -1,5 +1,9 @@
 # ED-Frame central catalog service
 
+Version **0.9.2**, paired with app **1.0.7**. The targeted Spansh Powerplay
+extension supplements missing explicit control from identity-checked public
+snapshots, preserving original source times and newer/equal-time EDDN facts.
+
 This service continuously consumes the public EDDN relay and stores the
 anonymous public catalog facts ED-Frame can reuse:
 
@@ -56,15 +60,17 @@ idempotent and do not clear existing tables or rows.
 
 It does not accept or store Commander names, FIDs, private groups, cargo,
 Journal files or paths, builds, wishlists, credentials or tokens. PostgreSQL is
-reachable only by the private Compose network. The public surface is read-only
-except for bounded, rate-limited yield and station-price observation endpoints.
+reachable only by the private Compose network. Clients can submit catalog facts
+only through bounded, rate-limited yield and station-price observation endpoints.
+Targeted Powerplay reads may supplement the catalog from server-validated public
+Spansh snapshots; they do not accept client-supplied facts.
 In the current desktop app, the ED-Frame community connection is enabled by
 default for new profiles. Its Connections switch controls catalog access and
 supported anonymous contributions together; an explicit disabled setting is
 preserved. Commander identities, raw Journal files and private builds remain
 outside this public service contract.
 
-## Conditional Mining snapshots (source-only until deployed)
+## Conditional Mining snapshots
 
 The protocol is disabled by default (`EDFRAME_MINING_SNAPSHOT_PROTOCOL=0`),
 including after an unrelated API deployment. Disabled mode treats protocol
@@ -239,6 +245,35 @@ files per service. Mining evidence and system geography are retained.
   and includes the original last observation time where known. It does not
   transfer old facts into `results` or extend freshness. Regional queries never
   perform a historical galaxy-wide lookup for this option.
+- `GET /v1/mining/powerplay/lookup?system=Cubeo&system=...` supplements at most
+  six exact systems from public Spansh dumps (local implementation, not deployed).
+  Fresh explicit retained control skips HTTP; otherwise the server resolves a
+  known public system address, retrieves only the fixed Spansh URL, validates
+  identity/control/state/coordinates and preserves the original system `date`.
+  Valid facts use source `Spansh system dump Powerplay` and the existing
+  `mining_powerplay` table; no migration is required. Updates must be strictly
+  newer, so simultaneous newer or equally dated EDDN observations win.
+  The response re-reads canonical storage before publishing facts.
+- Supplementation never infers `Unoccupied` from missing fields. Only explicit
+  observations within 24 hours (five-minute future tolerance) can enter `results`.
+  `lookup` diagnostics distinguish `CURRENT`, `FETCHED`, `MISSING`, `STALE`,
+  `ERROR`, `BUSY` and `NO_ADDRESS`; validated stale source times remain diagnostic
+  only. Missing/ambiguous system addresses do not trigger an upstream request.
+- Supplementation allows six requests per minute per client per API worker,
+  two outbound lanes per worker and one in-flight fetch per system/address.
+  Fixed HTTPS URLs, no redirects, 3/5-second connection/read timeouts, an
+  eight-second elapsed budget checked on streamed chunks, and a 2 MiB response
+  limit bound upstream work. The read timeout can extend the elapsed budget
+  before the next chunk. No database transaction stays open during HTTP.
+  A worker retains at most 1,024 projected cache entries: one hour for positive
+  results, ten minutes for missing/stale results and two minutes for errors.
+  Positive cache reuse still checks the original observation age. With the
+  current two-worker deployment these lane/rate limits apply independently.
+  The desktop sends at most six missing systems per verification, preserves
+  normal server results on failure and waits two minutes before deferred retries.
+  Deferred names take priority over previously attempted systems on later checks,
+  so expiring negative caches cannot starve lower-ranked routes. This queue is
+  local to the active Commander profile and cleared on profile/reset changes.
 - Explicit `Unoccupied` snapshots are retained even when `Powers` is empty or
   absent. Such rows use an empty `power` and `UNOCCUPIED` relationship; no Power
   or controller is invented. Consumers must accept these system-wide facts.

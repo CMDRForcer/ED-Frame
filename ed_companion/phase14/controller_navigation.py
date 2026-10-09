@@ -1622,6 +1622,10 @@ class NavigationMixin:
 
     def _mining_market_rows_for_query(self, query):
         """Reuse accumulated observations while a fresh query is loading."""
+        plan_rows = getattr(self, "_mining_plan_market_rows", None)
+        query_key = tuple(sorted(query.items()))
+        if plan_rows is not None and query_key in plan_rows:
+            return plan_rows[query_key]
         market_cache = getattr(self, "_mining_market_cache", {})
         cached_query = (
             market_cache.get("query", {})
@@ -1649,7 +1653,10 @@ class NavigationMixin:
                 origin_coordinates=(origin or {}).get("coordinates"),
                 max_distance=query.get("nearbyLy", 0),
             )
-        return latest_market_rows(retained_rows, current_rows)
+        result = latest_market_rows(retained_rows, current_rows)
+        if plan_rows is not None:
+            plan_rows[query_key] = result
+        return result
 
 
     def _maybe_auto_refresh_mining_markets(self):
@@ -1818,6 +1825,11 @@ class NavigationMixin:
             getattr(self, "_mining_market_verification_states", {}).items()
         }
         snapshot._network_threads_lock = True  # Raw shared rows need distances.
+        # Free-text origins can be known only through the retained ring view.
+        # ALL COMMODITIES may warm another system in the background, so its
+        # market cache cannot supply this query's coordinates. Capture the
+        # same ring snapshot used for candidates, without accessing Qt later.
+        snapshot._mining_catalog = {"candidates": rows}
         snapshot._mining_rows_cache_key = getattr(self, "_mining_rows_cache_key", None)
         snapshot._mining_rows = lambda: rows
         snapshot._valid_star_position = type(self)._valid_star_position
@@ -1843,6 +1855,10 @@ class NavigationMixin:
         self._active_mining_plan = request_id
 
         def worker():
+            # The route plan and its diagnostics describe the same market read.
+            # This belongs only to this disposable worker facade, never the
+            # live controller or a subsequent search/verification pass.
+            snapshot._mining_plan_market_rows = {}
             try:
                 routes = snapshot._compute_mining_plan_routes(*args)
                 diagnostic_args = (args[0], args[1], args[2], args[8], args[9], args[10], args[16])
@@ -1851,6 +1867,8 @@ class NavigationMixin:
             except Exception as exc:
                 LOGGER.exception("Background mining route plan failed")
                 result = (request_id, key, args, [], (), {}, str(exc))
+            finally:
+                del snapshot._mining_plan_market_rows
             self.miningPlanReady.emit(result)
 
         if not self._start_network_worker(worker, "mining-route-plan"):
@@ -2078,6 +2096,31 @@ class NavigationMixin:
         all_commodity_catalog = (
             self._mining_commodity_catalog() if all_commodities else []
         )
+        # These rules and display names depend on the query, not on each ring.
+        # Keep this cache request-local: new observed commodities and a changed
+        # mining method must take effect on the very next search.
+        commodity_ring_types = {}
+        commodity_names = {}
+        catalog_compatibility = []
+        catalog_ids_by_ring = {}
+        def compatible_ring_types(identifier):
+            if identifier not in commodity_ring_types:
+                commodity_ring_types[identifier] = {
+                    mining_ring_type_key(value)
+                    for value in mining_ring_types_for_method(identifier, method)
+                }
+            return commodity_ring_types[identifier]
+        def commodity_name(identifier):
+            if identifier not in commodity_names:
+                commodity_names[identifier] = mining_commodity_name(identifier)
+            return commodity_names[identifier]
+        for catalog_row in all_commodity_catalog:
+            methods = {str(value).upper() for value in catalog_row.get("methods", ())}
+            if method and method not in methods:
+                continue
+            identifier = mining_commodity_id(catalog_row.get("id"))
+            if identifier:
+                catalog_compatibility.append((identifier, compatible_ring_types(identifier)))
         # Method/ring compatibility is query-wide, not a per-ring calculation.
         allowed_rings = {
             mining_ring_type_key(value)
@@ -2225,41 +2268,29 @@ class NavigationMixin:
                         commodity_evidence[identifier] = min(
                             commodity_evidence.get(identifier, 9), 1,
                         )
-                ring_type = normalize(row.get("ringTypeName"))
-                for catalog_row in all_commodity_catalog:
-                    methods = {
-                        str(value).upper()
-                        for value in catalog_row.get("methods", ())
-                    }
-                    ring_types = {
-                        mining_ring_type_key(value)
-                        for value in mining_ring_types_for_method(catalog_row.get("id"), method)
-                    }
-                    if method and method not in methods:
-                        continue
-                    if ring_types and mining_ring_type_key(row.get("ringType") or row.get("ringTypeName")) not in ring_types:
-                        continue
-                    identifier = mining_commodity_id(catalog_row.get("id"))
-                    if identifier:
-                        commodity_evidence[identifier] = min(
-                            commodity_evidence.get(identifier, 9), 2,
-                        )
                 known_ring = mining_ring_type_key(row.get("ringType") or row.get("ringTypeName"))
+                if known_ring not in catalog_ids_by_ring:
+                    catalog_ids_by_ring[known_ring] = tuple(
+                        identifier for identifier, ring_types in catalog_compatibility
+                        if not ring_types or known_ring in ring_types
+                    )
+                for identifier in catalog_ids_by_ring[known_ring]:
+                    commodity_evidence[identifier] = min(commodity_evidence.get(identifier, 9), 2)
                 if known_ring and known_ring != "unknown" and method != RHINO_SURFACE:
                     commodity_evidence = {
                         identifier: rank for identifier, rank in commodity_evidence.items()
-                        if not mining_ring_types_for_method(identifier, method)
-                        or known_ring in {mining_ring_type_key(value) for value in mining_ring_types_for_method(identifier, method)}
+                        if not compatible_ring_types(identifier)
+                        or known_ring in compatible_ring_types(identifier)
                     }
                 candidates = sorted(
                     commodity_evidence.items(),
                     key=lambda item: (
-                        item[1], mining_commodity_name(item[0]).casefold(),
+                        item[1], commodity_name(item[0]).casefold(),
                     ),
                 )
                 row["candidateCommodities"] = [{
                     "id": identifier,
-                    "name": mining_commodity_name(identifier),
+                    "name": commodity_name(identifier),
                     "evidence": (
                         "LOCAL_YIELD" if rank == 0
                         else "HOTSPOT" if rank == 1 else "RING_TYPE"
@@ -5283,6 +5314,10 @@ class NavigationMixin:
             route_rows, getattr(self, "_mining_powerplay_observations", []),
             retry_after=lookup_cache, now=now,
         ) if getattr(self, "_edframe_catalog_enabled", True) else []
+        pending_rank = {name.casefold(): index for index, name in enumerate(
+            getattr(self, "_mining_powerplay_source_pending", []))}
+        lookup_targets.sort(key=lambda target: pending_rank.get(
+            target["system"].casefold(), len(pending_rank)))
         powerplay_targets = []
         seen = set()
         cached = 0
@@ -5556,6 +5591,7 @@ class NavigationMixin:
             if kind == "powerplay":
                 return fetch_powerplay_targets(
                     target, origin=request["origin"], get=get,
+                    enrich=True,
                 )
             if kind == "ring":
                 return fetch_target(target, get)
@@ -5860,6 +5896,12 @@ class NavigationMixin:
             lookup_cache[key] = now_epoch + (3600 if key in found else 600)
         for name in lookup.get("failed", []):
             lookup_cache[str(name).casefold()] = now_epoch + 120
+        for item in lookup.get("enrichment", []):
+            if item.get("state") in {"ERROR", "BUSY"}:
+                lookup_cache[str(item.get("system") or "").casefold()] = now_epoch + 120
+        for name in lookup.get("enrichmentDeferred", []):
+            lookup_cache[str(name).casefold()] = now_epoch + 120
+        self._mining_powerplay_source_pending = list(lookup.get("enrichmentDeferred", []))
         self._mining_powerplay_lookup_cache = {
             key: expiry for key, expiry in lookup_cache.items() if expiry > now_epoch
         }
@@ -5957,6 +5999,17 @@ class NavigationMixin:
                 self._mining_verification_status += (
                     f" · {stale} last observations too old · {unseen} not yet observed"
                 )
+            enriched = lookup.get("enrichment") or []
+            if enriched:
+                added = sum(item.get("state") == "FETCHED" for item in enriched)
+                unavailable = sum(item.get("state") in {"ERROR", "BUSY"} for item in enriched)
+                checked = len(enriched) - unavailable
+                self._mining_verification_status += f" · Spansh {checked} checked, {added} supplemented"
+                if unavailable:
+                    self._mining_verification_status += f" · {unavailable} source checks temporarily unavailable"
+            deferred = len(lookup.get("enrichmentDeferred") or [])
+            if deferred:
+                self._mining_verification_status += f" · {deferred} further source checks deferred"
         else:
             self._mining_verification_status = (
                 f"Top routes current · {total}/{total} systems verified"
@@ -6107,6 +6160,7 @@ class NavigationMixin:
         self._mining_verification_failures = 0
         self._mining_verification_cache = {}
         self._mining_powerplay_lookup_cache = {}
+        self._mining_powerplay_source_pending = []
         self._mining_powerplay_market_verification_cache = {}
         self._mining_market_verification_states = {}
         self._active_edframe_catalog_sync_request = None

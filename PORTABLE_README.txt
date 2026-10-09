@@ -1,4 +1,4 @@
-ED-Frame 1.0.6 - Portable Windows Edition
+ED-Frame 1.0.7 - Portable Windows Edition
 ===================================================================
 
 1. Extract the complete ZIP archive.
@@ -6,6 +6,11 @@ ED-Frame 1.0.6 - Portable Windows Edition
 3. Keep the _internal folder next to ED-Frame.exe.
 
 Python and the INSTALL_REQUIREMENTS step are not required for this portable build.
+
+This release accompanies catalog server 0.9.2. Targeted Spansh checks can
+supplement missing explicit Powerplay control while preserving original source
+times. Missing observations remain unknown. Broad 500-LY mining searches still
+have substantial latency/RAM cost; further optimization follows separately.
 
 User settings, service credentials, caches and Journal cursors are stored under
 %LOCALAPPDATA%\ED-Frame and are not written into this folder.

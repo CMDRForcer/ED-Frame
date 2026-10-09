@@ -16,7 +16,9 @@ ED-Frame is a free, open-source Windows companion for [Elite Dangerous](https://
 
 **1.0.6 Powerplay update:** preserve explicit unoccupied systems for Acquire, distinguish missing and outdated evidence, and keep Powerplay observation times separate from ring and market updates. Coverage still depends on actual public observations. Historical 1.0.1–1.0.4 tags were already occupied; 1.0.5 started the maintenance updates after the new 1.0 release.
 
-**Release numbering:** 1.0 starts the new public ED-Frame release line and succeeds the earlier EDEC/ED-Frame versions, including 1.5.43. Those older tags and downloads remain available as outdated historical releases. Use the current release link rather than choosing the largest historical version number.
+**1.0.7 mining and Powerplay update / catalog server 0.9.2.** Broad mining searches reuse query-wide commodity rules and one market read per planning worker. Known free-text origins retain their coordinates in background searches. The matching server adds bounded Spansh supplementation for missing explicit Powerplay control, retaining original source dates and newer EDDN evidence. Broad 500-LY searches still need further latency/RAM optimization; see the [release notes](docs/releases/1.0.7.md).
+
+**Release numbering:** 1.0 starts the new public ED-Frame release line and succeeds the earlier EDEC/ED-Frame versions, including 1.5.43. Historical Git tags preserve the version history; releases marked outdated and their downloads are removed from GitHub. Use the current release link rather than choosing the largest historical version number.
 
 ![ED-Frame Commander Operations in the Orbital Dawn theme](docs/images/edec-operations.png)
 

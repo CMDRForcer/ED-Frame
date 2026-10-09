@@ -134,6 +134,10 @@ def run(args):
     import requests
     import faulthandler
     faulthandler.dump_traceback_later(90, repeat=True)
+    if args.baseline_navigation:
+        import ed_companion.phase14.controller_navigation as old_navigation
+        exec(compile(args.baseline_navigation.read_text(encoding="utf-8"),
+                     str(args.baseline_navigation), "exec"), old_navigation.__dict__)
     import phase14_main as app_main
     from PySide6.QtCore import QTimer, Qt
     from PySide6.QtQml import QQmlEngine, QQmlExpression
@@ -143,7 +147,42 @@ def run(args):
     from ed_companion.phase14 import controller_navigation as navigation
     from ed_companion.navigation import mining_planner
 
+    clock_context = None
+    if args.fixture:
+        from tools.benchmark_mining_complete import install_clock
+        manifest = json.loads((destination / "fixture.json").read_text(encoding="utf-8"))
+        clock_context = install_clock(manifest["clock"])
+        # Local replay exercises real worker scheduling, SQLite reads/writes,
+        # verification and QML publication. Providers return only retained
+        # original observations; this is not an upstream availability test.
+        from ed_companion.navigation.mining_market_store import MarketCatalogStore
+        from ed_companion.navigation.mining_ring_store import RingCatalogStore
+        from ed_companion.navigation.catalog_json import catalog_view_value
+        profile = destination / "local" / "ED-Frame" / PROFILE
+        retained_markets = MarketCatalogStore(profile / "mining_market_catalog.sqlite3")
+        retained_rings = RingCatalogStore(profile / "mining_ring_catalog.sqlite3",
+                                         PROFILE.removeprefix("profile-")).view()
+        def local_refresh(query, *, origin=None, **kwargs):
+            return {"origin": origin, "markets": [], "serverCandidates": [],
+                    "serverPowerplay": [], "success": True,
+                    "fetchTimings": {"fixture": 0}}
+        def local_markets(system, commodity, *, origin=None, max_distance=1, **kwargs):
+            return retained_markets.nearby(commodity, origin_system=system,
+                origin_coordinates=(origin or {}).get("coordinates"), max_distance=max_distance)
+        def local_rings(system, *_a, **_k):
+            coordinates = retained_rings.coordinates_for(system)
+            return [catalog_view_value(row) for row in retained_rings.nearby(system, coordinates, 1)
+                    if str(row.get("system", "")).casefold() == system.casefold()]
+        navigation.fetch_mining_refresh = local_refresh
+        navigation.fetch_market_imports = local_markets
+        navigation.fetch_edframe_mining_candidates = local_rings
+        navigation.fetch_powerplay_targets = lambda targets, **kwargs: {
+            "rows": [], "checked": [row["system"] for row in targets], "failed": []}
+        for name in ("_maybe_refresh_regional_state_finds", "syncEdFrameStateFinds"):
+            setattr(CockpitController, name, lambda self, *a, **k: None)
+
     source = {"head": subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=ROOT, text=True).strip(),
+              "baselineNavigationSha256": hashlib.sha256(args.baseline_navigation.read_bytes()).hexdigest() if args.baseline_navigation else None,
               "changes": subprocess.check_output(["git", "status", "--short"], cwd=ROOT, text=True),
               "hashes": {name: hashlib.sha256((ROOT / name).read_bytes()).hexdigest() for name in (
                   "ed_companion/phase14/controller_navigation.py", "ed_companion/phase14/controller.py",
@@ -173,6 +212,8 @@ def run(args):
     request = requests.Session.request
 
     def guarded_request(session, method, url, *pos, **kw):
+        if args.fixture:
+            raise RuntimeError("Frozen replay forbids all HTTP")
         host = urlparse(url).hostname
         if method.upper() != "GET" or host not in allowed:
             raise RuntimeError("Baseline blocks uploads and unrelated hosts")
@@ -246,7 +287,9 @@ def run(args):
             return original_plan(self, *a, **k)
         finally:
             planner_timings.append({"phase": phase[0],
-                                   "seconds": round(time.perf_counter() - stamp, 4)})
+                                   "seconds": round(time.perf_counter() - stamp, 4),
+                                   "marketReads": [{"query": dict(key), "rows": len(rows)}
+                                       for key, rows in getattr(self, "_mining_plan_market_rows", {}).items()]})
     navigation.NavigationMixin._compute_mining_plan_routes = timed_plan
     original_index = mining_planner._powerplay_index
     def timed_index(*a, **k):
@@ -473,6 +516,7 @@ def run(args):
                     return
                 self.page.setProperty("startSystem", "Shanteneri")
                 self.page.setProperty("powerOverride", "Aisling Duval")
+                self.page.setProperty("commodityFilter", args.commodity)
                 self.page.setProperty("nearbyLy", args.radius)
                 self.page.setProperty("resultLimit", args.results)
                 self.page.setProperty("optimization", "POWERPLAY MERITS")
@@ -587,7 +631,9 @@ def run(args):
                       "label": args.label, "source": source,
                       "journalAuto": args.journal_auto,
                       "python": sys.version, "pyside": pyside_version,
-                      "radiusLy": args.radius, "mode": "source/offscreen/software/GET-only",
+                      "radiusLy": args.radius, "commodity": args.commodity,
+                      "mode": "source/offscreen/software/frozen-local-providers" if args.fixture else "source/offscreen/software/GET-only",
+                      "fixtureClock": manifest["clock"] if args.fixture else None,
                       "readySeconds": getattr(self, "ready_at", None),
                       "dataset": getattr(self, "dataset", None), "searches": searches,
                       "tabs": tabs, "heartbeat": summary, "domains": domains,
@@ -604,7 +650,11 @@ def run(args):
                                               "memory": report["memoryAtFinish"]}), flush=True)
             self.app.exit(1 if error else 0)
     app_main.SmokeTestRunner = Runner
-    return app_main.run()
+    try:
+        return app_main.run()
+    finally:
+        if clock_context is not None:
+            clock_context.close()
 
 
 def main():
@@ -613,6 +663,9 @@ def main():
     parser.add_argument("--prepare", type=Path, metavar="SOURCE_PUBLIC_PROFILE")
     parser.add_argument("--results", type=int, choices=(30, 100), default=30)
     parser.add_argument("--radius", type=int, default=250)
+    parser.add_argument("--commodity", choices=("Platinum", "ALL COMMODITIES"), default="Platinum")
+    parser.add_argument("--fixture", type=Path, help="Clone a frozen public fixture; block HTTP and replay retained facts")
+    parser.add_argument("--baseline-navigation", type=Path, help="Replay a saved pre-optimization navigation module")
     parser.add_argument("--deadline", type=int, default=300)
     parser.add_argument("--tabs", action="store_true")
     parser.add_argument("--tabs-only", action="store_true")
@@ -626,6 +679,11 @@ def main():
     if args.prepare:
         prepare(args.output, args.prepare.resolve())
         return 0
+    if args.fixture:
+        args.fixture = args.fixture.resolve()
+        if not args.fixture.is_relative_to(ROOT / ".test-tmp") or args.output.exists():
+            parser.error("Frozen replay requires a .test-tmp fixture and a new output")
+        shutil.copytree(args.fixture, args.output)
     return run(args)
 
 

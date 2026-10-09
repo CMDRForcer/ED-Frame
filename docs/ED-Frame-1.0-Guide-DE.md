@@ -1,6 +1,6 @@
 # ED-Frame 1.0 — Einstieg und Funktionen
 
-Aktualisiert für das Powerplay-Wartungsupdate 1.0.6.
+Aktualisiert für das Mining-/Powerplay-Wartungsupdate 1.0.7.
 
 ED-Frame ist eine kostenlose Windows-Begleitapp für Elite Dangerous mit offenem Quellcode. Dein lokales Journal liefert die Commander-Daten. Unser eigener Community-Server ergänzt sie um gemeinsam gesammelte öffentliche Beobachtungen der Galaxie.
 
@@ -44,6 +44,8 @@ Der Server verarbeitet laufend unterstützte öffentliche EDDN-Beobachtungen. Er
 **Aktualität richtet sich nach dem Zeitpunkt der Beobachtung.** Ein frisch heruntergeladener alter Preis bleibt alt. MiningFinder prüft Marktbelege und Powerplay-Eignung getrennt. Fehlende Kontrolle, Preise, Nachfrage oder Landeplatzdaten bleiben erkennbar. Eine bestätigte Markt-/Powerplayroute beweist keinen gemessenen Ertrag und garantiert keine im Spiel erhaltenen Merits.
 
 Powerplay-Bestätigungen benötigen höchstens 24 Stunden alte Beobachtungen, unabhängig vom Marktalter-Filter. Ältere Kontroll- und Statusangaben bleiben gespeichert und werden als veraltet angezeigt. Ausdrücklich unbesetzte Systeme können als Acquire-Ziel dienen, auch ohne Präsenzzeile der gewählten Macht. Gezielte Serverprüfungen unterscheiden noch nie beobachtete Systeme von zu alten Beobachtungen; erneutes Laden kann eine nicht gemeldete Beobachtung nicht erzeugen.
+
+Version **1.0.7** mit dem passenden Server **0.9.2** ergänzt fehlende Powerplay-Kontrolle über höchstens sechs öffentliche Spansh-Systemabfragen je Prüfpass. Vorhandene frische Kontrolle wird zuerst wiederverwendet. Systemidentität, Quelle und ursprüngliche Beobachtungszeit werden geprüft; fehlende Angaben bleiben unbekannt. Der Community-Schalter steuert auch diese Zusatzabfrage. Breite 500-LY-Suchen benötigen weiterhin viel Rechenzeit und RAM; weitere Optimierung folgt separat.
 
 Bereits gespeicherte Beobachtungen bleiben bei Ausfall oder Abschaltung eines Dienstes lokal nutzbar. Der SQLite-Ringspeicher liest die relevante Region und erhält ursprüngliche Beobachtungen sowie deren Historie. Offline kommen keine bislang unbekannten Live-Meldungen hinzu.
 

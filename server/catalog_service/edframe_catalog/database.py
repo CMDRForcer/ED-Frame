@@ -543,10 +543,11 @@ def upsert_yield_observations(
     return projected
 
 
-def upsert_powerplay_snapshot(conn: psycopg.Connection, row: dict | None) -> int:
+def upsert_powerplay_snapshot(conn: psycopg.Connection, row: dict | None, *, allow_equal=True) -> int:
     if not row:
         return 0
-    conn.execute("""
+    comparison = ">=" if allow_equal else ">"
+    conn.execute(f"""
         INSERT INTO mining_powerplay
             (identity, system_name, system_address, x, y, z,
              observed_at, received_at, facts)
@@ -562,7 +563,7 @@ def upsert_powerplay_snapshot(conn: psycopg.Connection, row: dict | None) -> int
             observed_at = EXCLUDED.observed_at,
             received_at = EXCLUDED.received_at,
             facts = EXCLUDED.facts
-        WHERE EXCLUDED.observed_at >= mining_powerplay.observed_at
+        WHERE EXCLUDED.observed_at {comparison} mining_powerplay.observed_at
     """, row)
     return 1
 

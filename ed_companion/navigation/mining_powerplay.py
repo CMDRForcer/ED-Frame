@@ -20,6 +20,8 @@ from ed_companion import APP_VERSION
 
 POWERPLAY_DUMP_URL = "https://www.edsm.net/dump/powerPlay.json.gz"
 EDFRAME_POWERPLAY_URL = "https://vps-20b25c36.vps.ovh.net/v1/mining/powerplay"
+EDFRAME_POWERPLAY_LOOKUP_URL = EDFRAME_POWERPLAY_URL + "/lookup"
+SPANSH_POWERPLAY_SOURCE = "Spansh system dump Powerplay"
 POWERPLAY_CATALOG_SOURCE = "EDSM daily PowerPlay catalog"
 POWERPLAY_CATALOG_SCHEMA_VERSION = 3
 POWERPLAY_STATES = frozenset({
@@ -153,7 +155,10 @@ def _public_powerplay_rows(sources: list) -> list[dict[str, Any]]:
         ) if key in source}
         controller = str(row.get("controllingPower") or "").strip()
         row.update({
-            "source": "ED-Frame live catalog · EDDN journal/1",
+            "source": "ED-Frame live catalog · " + (
+                SPANSH_POWERPLAY_SOURCE if source.get("source") == SPANSH_POWERPLAY_SOURCE
+                else "EDDN journal/1"
+            ),
             "controlKnown": bool(controller),
             "powerRelationship": "UNOCCUPIED" if unoccupied and not row.get("power")
                 else "CONTROL" if controller and controller.casefold()
@@ -208,7 +213,7 @@ def missing_powerplay_targets(routes, observations=(), *, retry_after=None,
     return list(targets.values())
 
 
-def fetch_powerplay_targets(targets, *, origin, get, diagnostics=None):
+def fetch_powerplay_targets(targets, *, origin, get, diagnostics=None, enrich=False):
     """Batch precise missing systems; old servers use small spatial lookups.
 
     The compatibility path uses only known coordinates, never a galaxy dump or
@@ -260,7 +265,98 @@ def fetch_powerplay_targets(targets, *, origin, get, diagnostics=None):
     result = {"rows": rows, "checked": checked, "failed": failed}
     if coverage:
         result["coverage"] = coverage
+    if enrich:
+        known = {str(row.get("system") or "").casefold() for row in rows
+                 if row.get("controllingPower") or row.get("powerState") == "Unoccupied"}
+        missing = list({target["system"].casefold(): target["system"] for target in targets
+            if target["system"].casefold() not in known}.values())
+        selected = missing[:6]
+        result["enrichmentDeferred"] = missing[6:]
+        if selected:
+            try:
+                response = get(EDFRAME_POWERPLAY_LOOKUP_URL,
+                    params={"system": selected}, timeout=60)
+                response.raise_for_status()
+                payload = response.json()
+                if (not isinstance(payload, dict) or payload.get("selection") != "systems"
+                        or not isinstance(payload.get("results"), list)
+                        or not isinstance(payload.get("lookup"), list)):
+                    raise MiningPowerplayError("Invalid targeted Powerplay enrichment")
+                wanted = {name.casefold() for name in selected}
+                additions = [row for row in _public_powerplay_rows(payload["results"])
+                             if row["system"].casefold() in wanted]
+                result["rows"] = merge_powerplay_observations(rows, additions,
+                    limit=max(20_000, len(rows) + len(additions)))
+                result["enrichment"] = [{key: item[key] for key in
+                    ("system", "state", "source", "observedAt") if key in item}
+                    for item in payload["lookup"] if isinstance(item, dict)
+                    and str(item.get("system") or "").casefold() in wanted
+                    and item.get("state") in {
+                        "CURRENT", "FETCHED", "MISSING", "STALE", "ERROR", "BUSY", "NO_ADDRESS"
+                    }]
+                refreshed = {row["system"].casefold(): row for row in additions}
+                for item in result.get("coverage", []):
+                    if item["system"].casefold() in refreshed:
+                        item.update(state="CURRENT", observedAt=refreshed[item["system"].casefold()]["observedAt"])
+            except Exception as exc:
+                # Existing servers remain usable while the additive endpoint
+                # rolls out; a failed fallback never discards the first lookup.
+                result["enrichment"] = [{"system": name, "state": "ERROR"} for name in selected]
+                result["enrichmentError"] = type(exc).__name__
     return result
+
+
+def project_spansh_powerplay(payload, system, system_address, *, now=None):
+    """Keep only explicit, recent, identity-matched Spansh system snapshots."""
+    data = payload.get("system") if isinstance(payload, dict) else None
+    if (not isinstance(data, dict) or not isinstance(data.get("name"), str)
+            or data["name"].strip().casefold() != system.strip().casefold()):
+        return []
+    try:
+        address = int(data.get("id64"))
+        if type(data.get("id64")) is not int or address != int(system_address) or not 0 < address < 2**64:
+            return []
+        if not isinstance(data.get("date"), str):
+            return []
+        stamp = datetime.fromisoformat(data["date"].replace("Z", "+00:00"))
+        if stamp.tzinfo is None:
+            return []
+        age = ((now or datetime.now(timezone.utc)) - stamp).total_seconds()
+    except (ValueError, TypeError, OverflowError):
+        return []
+    if not -300 <= age <= 86400:
+        return []
+    state = data.get("powerState")
+    controller = data.get("controllingPower", "")
+    participants = data.get("powers")
+    if (not isinstance(state, str) or state not in POWERPLAY_STATES or not isinstance(controller, str)
+            or len(controller) > 100
+            or (participants is not None and (not isinstance(participants, list)
+                or len(participants) > 32
+                or any(not isinstance(power, str) or not power.strip() or len(power) > 100
+                       for power in participants)))):
+        return []
+    controller = controller.strip()
+    if (not controller and state != "Unoccupied") or (controller and state == "Unoccupied"):
+        return []
+    coords = data.get("coords")
+    if not isinstance(coords, dict) or any(isinstance(coords.get(axis), bool) for axis in ("x", "y", "z")):
+        return []
+    coordinates = _coordinates(coords)
+    if len(coordinates) != 3 or not all(isfinite(value) for value in coordinates):
+        return []
+    powers = list(dict.fromkeys(power.strip() for power in participants or []))
+    if controller and controller.casefold() not in {power.casefold() for power in powers}:
+        powers.append(controller)
+    return [{
+        "system": data["name"].strip(), "systemAddress": address, "coordinates": coordinates,
+        "power": power, "powerState": state, "controllingPower": controller,
+        "powers": list(powers), "powersKnown": isinstance(participants, list),
+        "powerRelationship": "UNOCCUPIED" if not power else
+            "CONTROL" if power.casefold() == controller.casefold() else "PRESENCE",
+        "controlKnown": bool(controller), "observedAt": data["date"],
+        "source": SPANSH_POWERPLAY_SOURCE,
+    } for power in powers or [""]]
 
 
 def _coordinates(value: Any) -> list[float]:

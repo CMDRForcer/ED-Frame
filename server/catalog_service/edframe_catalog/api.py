@@ -81,6 +81,8 @@ _signal_rate_lock = threading.Lock()
 _signal_rate_buckets: dict[str, list[float]] = {}
 _station_offer_rate_lock = threading.Lock()
 _station_offer_rate_buckets: dict[str, list[float]] = {}
+_powerplay_rate_lock = threading.Lock()
+_powerplay_rate_buckets: dict[str, list[float]] = {}
 
 
 def _percent(part: int, whole: int) -> float:
@@ -1333,6 +1335,26 @@ def nearby_station_services(
         "generatedAt": _now(), "results": rows[:limit], "hasMore": len(rows) > limit,
         "region": {"origin": [x, y, z], "radiusLy": max_distance},
     }
+
+
+@app.get("/v1/mining/powerplay/lookup")
+def lookup_mining_powerplay(request: Request, system: Annotated[list[str], Query()]) -> dict:
+    """Supplement at most six exact systems from the fixed public Spansh source."""
+    from .powerplay_lookup import lookup_powerplay_systems
+    names = list(dict.fromkeys(name.strip().casefold() for name in system))
+    if not names or len(system) > 6 or any(not name or len(name) > 100 for name in names):
+        raise HTTPException(status_code=400, detail="Expected 1 to 6 system names")
+    forwarded = request.headers.get("x-forwarded-for", "").split(",", 1)[0]
+    remote = forwarded.strip() or (request.client.host if request.client else "unknown")
+    now = time.monotonic()
+    with _powerplay_rate_lock:
+        if len(_powerplay_rate_buckets) > 4096:
+            _powerplay_rate_buckets.clear()
+        recent = [stamp for stamp in _powerplay_rate_buckets.get(remote, []) if now - stamp < 60]
+        if len(recent) >= 6:
+            raise HTTPException(status_code=429, detail="Powerplay lookup request budget exceeded")
+        _powerplay_rate_buckets[remote] = [*recent, now]
+    return lookup_powerplay_systems(names)
 
 
 @app.get("/v1/mining/powerplay")
