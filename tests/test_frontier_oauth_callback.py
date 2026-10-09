@@ -1,5 +1,8 @@
 import unittest
 from pathlib import Path
+from unittest.mock import patch
+
+import phase14_main
 
 from phase14_main import (
     FrontierOAuthCallbackRuntime,
@@ -40,6 +43,19 @@ class FakeWinreg:
 
 
 class FrontierOAuthCallbackTests(unittest.TestCase):
+    def test_isolated_smoke_preserves_installed_oauth_handler(self):
+        for smoke, expected_calls in (("1", 0), ("0", 1)):
+            with self.subTest(smoke=smoke), \
+                    patch.dict("os.environ", {"PHASE14_SMOKE_TEST": smoke}), \
+                    patch.object(phase14_main, "cleanup_startup_persistence_temps"), \
+                    patch.object(phase14_main, "install_diagnostics"), \
+                    patch.object(phase14_main, "QApplication"), \
+                    patch.object(phase14_main, "frontier_oauth_callback_argument", return_value=""), \
+                    patch.object(phase14_main.SingleInstanceRuntime, "notify_existing", return_value=True), \
+                    patch.object(phase14_main, "register_windows_url_protocol") as register:
+                self.assertEqual(phase14_main.run(), 0)
+                self.assertEqual(register.call_count, expected_calls)
+
     def test_callback_argument_accepts_only_the_registered_route(self):
         valid = "edec://oauth/callback?code=secret&state=expected"
 

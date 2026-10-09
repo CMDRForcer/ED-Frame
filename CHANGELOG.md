@@ -24,6 +24,11 @@
   The first response can wait longer for materialization; later pages avoid
   repeated PostgreSQL scans. Enabling requires the explicit backed-up migration.
 
+- Keep isolated smoke builds from replacing the installed Windows OAuth URL
+  handler. Verified the backed-up API 0.9.0 migration and enabled stable ring
+  paging in production; see `reports/release_1.5.43_rollout_2026-10-09.md` for
+  live timings, coverage bounds and remaining large-catalog trade-offs.
+
 ## 1.5.42 — 2026-10-09
 
 ### Improved

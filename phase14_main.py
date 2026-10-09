@@ -872,7 +872,10 @@ def run():
     app.setApplicationName("ED-Frame")
     app.setApplicationDisplayName("ED-Frame")
     app.setApplicationVersion(APP_VERSION)
-    register_windows_url_protocol()
+    # Isolated QA builds must not replace the installed app's OAuth handler
+    # with a temporary executable that disappears after the smoke run.
+    if not smoke_test:
+        register_windows_url_protocol()
 
     initial_oauth_callback = frontier_oauth_callback_argument()
     if SingleInstanceRuntime.notify_existing(initial_oauth_callback):
