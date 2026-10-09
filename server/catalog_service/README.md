@@ -58,8 +58,11 @@ It does not accept or store Commander names, FIDs, private groups, cargo,
 Journal files or paths, builds, wishlists, credentials or tokens. PostgreSQL is
 reachable only by the private Compose network. The public surface is read-only
 except for bounded, rate-limited yield and station-price observation endpoints.
-Both sharing options are disabled by default in ED-Frame and require explicit
-consent.
+In the current desktop app, the ED-Frame community connection is enabled by
+default for new profiles. Its Connections switch controls catalog access and
+supported anonymous contributions together; an explicit disabled setting is
+preserved. Commander identities, raw Journal files and private builds remain
+outside this public service contract.
 
 ## Conditional Mining snapshots (source-only until deployed)
 

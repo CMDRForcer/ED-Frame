@@ -110,8 +110,8 @@ jobs:
         run: |
           Copy-Item -LiteralPath "PORTABLE_README.txt" -Destination "dist/ED-Frame/README.txt"
           Copy-Item -LiteralPath "LICENSE" -Destination "dist/ED-Frame/LICENSE"
-          Copy-Item -LiteralPath "docs/ED-Frame_User_Manual_Privacy_EN_1.5.5.pdf" -Destination "dist/ED-Frame/ED-Frame_User_Manual_Privacy_EN_${env:EDEC_VERSION}.pdf"
-          Copy-Item -LiteralPath "docs/ED-Frame_User_Manual_Privacy_DE_1.5.5.pdf" -Destination "dist/ED-Frame/ED-Frame_User_Manual_Privacy_DE_${env:EDEC_VERSION}.pdf"
+          Copy-Item -LiteralPath "docs/ED-Frame-1.0-Guide-EN.md", "docs/ED-Frame-1.0-Guide-DE.md" -Destination "dist/ED-Frame/"
+          Copy-Item -LiteralPath "docs/ED-Frame_User_Manual_Privacy_EN_1.5.5.pdf", "docs/ED-Frame_User_Manual_Privacy_DE_1.5.5.pdf" -Destination "dist/ED-Frame/"
 
       - name: Run honest packaged smoke test
         shell: pwsh
@@ -230,11 +230,14 @@ jobs:
             (Join-Path $release "ED-Frame-$env:EDEC_VERSION-Full-Project.zip"),
             (Join-Path $release "SHA256SUMS.txt")
           )
+          $notes = Join-Path "docs/releases" "$tag.md"
+          $noteArgs = if (Test-Path -LiteralPath $notes) { @("--notes-file", $notes) } else { @("--generate-notes") }
           gh release view $tag --repo "${{ github.repository }}" *> $null
           if ($LASTEXITCODE -eq 0) {
             gh release upload $tag @assets --clobber --repo "${{ github.repository }}"
           } else {
             gh release create $tag @assets `
               --repo "${{ github.repository }}" `
-              --title "ED-Frame v$tag" --generate-notes --latest
+              --title "ED-Frame $tag" @noteArgs --latest
           }
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }

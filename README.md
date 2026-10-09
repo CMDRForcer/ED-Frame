@@ -2,9 +2,9 @@
 
 *(formerly ED Engineering Companion / EDEC)*
 
-**Turn the Elite Dangerous Journal into a live operations, engineering and Commander workspace.**
+**ED-Frame 1.0 — your Elite Dangerous Commander workspace, backed by our own community catalog server.**
 
-[![Latest release](https://img.shields.io/github/v/release/CMDRForcer/ED-Frame?sort=semver&label=release)](https://github.com/CMDRForcer/ED-Frame/releases/latest)
+[![Latest release](https://img.shields.io/github/v/release/CMDRForcer/ED-Frame?sort=date&label=release)](https://github.com/CMDRForcer/ED-Frame/releases/latest)
 [![Downloads](https://img.shields.io/github/downloads/CMDRForcer/ED-Frame/total?label=downloads)](https://github.com/CMDRForcer/ED-Frame/releases)
 [![License: GPL-3.0](https://img.shields.io/badge/license-GPL--3.0-blue)](LICENSE)
 ![Platform: Windows](https://img.shields.io/badge/platform-Windows%2010%2F11-informational)
@@ -12,7 +12,9 @@
 
 ED-Frame is a free, open-source Windows companion for [Elite Dangerous](https://www.elitedangerous.com/) — Fleet, Routes, Analytics, Materials and Engineering in one place. It reads your local Journal and turns it into one coherent cockpit for engineering, unlocks, materials, mining, state hunting, Powerplay, Commander finances, fleet management, exploration and exobiology.
 
-[**Download the latest release**](https://github.com/CMDRForcer/ED-Frame/releases/latest) · [Changelog](CHANGELOG.md) · [Report a bug](https://github.com/CMDRForcer/ED-Frame/issues) · [Support ED-Frame on Ko-fi](https://ko-fi.com/cmdrforcer)
+[**Download ED-Frame 1.0**](https://github.com/CMDRForcer/ED-Frame/releases/tag/1.0) · [Website](https://cmdrforcer.github.io/) · [English guide](docs/ED-Frame-1.0-Guide-EN.md) · [Deutsche Anleitung](docs/ED-Frame-1.0-Guide-DE.md) · [Changelog](CHANGELOG.md) · [Report a bug](https://github.com/CMDRForcer/ED-Frame/issues)
+
+**Release numbering:** 1.0 starts the new public ED-Frame release line and succeeds the earlier EDEC/ED-Frame versions, including 1.5.43. Those older tags and downloads remain available as outdated historical releases. Use the current release link rather than choosing the largest historical version number.
 
 ![ED-Frame Commander Operations in the Orbital Dawn theme](docs/images/edec-operations.png)
 
@@ -22,9 +24,47 @@ ED-Frame is a free, open-source Windows companion for [Elite Dangerous](https://
 - **Your ships, your slots** — engineer the exact physical Core Internal, Optional Internal, Hardpoint and Utility slots of every known hull.
 - **Journal-confirmed progress** — installed modules, grades, experimental effects, credits, fleet movements, scans and unlock evidence update automatically.
 - **Engineer and Tech Broker guides** — searchable capabilities, prerequisite chains and one-time Human and Guardian unlock tracking.
-- **Field tools** — Material routes, Mining Finder, State Finds, live HGE assistance, a Biological Survey workspace and surface waypoint navigation.
+- **Server-backed finders** — Mining and merit routes, commodity markets, station services, modules and ships share ED-Frame's own public catalog service.
+- **Field tools** — Material routes, State Finds, live HGE assistance, exploration, a Biological Survey workspace and surface waypoint navigation.
 - **Commander intelligence** — live credit ticker, assets, average CR/h, ranks, reputation, fleet and a searchable flight record.
-- **Offline-first and private** — the core works from local files; Frontier CAPI, INARA, EDDN and Spansh remain explicit, controlled additions.
+- **Local Commander data** — ships, builds, wishlists, credentials and Journal files stay on your computer. Community connections have visible controls; Frontier CAPI and INARA require separate setup.
+
+## Features, individually
+
+| Feature | What it helps you do |
+| --- | --- |
+| **Operations** | Follow the next material, unlock, travel or crafting action for your selected build. |
+| **Engineering** | Plan grades and experimental effects on your real ship's physical module slots; compare installed and planned equipment. |
+| **Wishlist** | Track multiple fleet builds, missing materials and Journal-confirmed crafting progress. |
+| **Engineers** | Find capabilities, follow unlock prerequisites and navigate to suitable Engineers. |
+| **Technology Brokers** | Track one-time Human and Guardian unlock requirements. |
+| **Materials** | Review inventory and farming guidance; protect materials reserved for tracked builds when planning trades. |
+| **Mining Finder** | Compare mining sites, prices, demand, market age, pad size and evidence; plan Acquire, Reinforce or Undermine routes. |
+| **Measured mining yield** | Use observed Prospector/refining evidence and supported community measurements; distinguish measured yields from hotspot or ring-type estimates. |
+| **Module & Ship Finder** | Find observed station inventories and prices; inspect module fit for the current ship and slot. |
+| **Commodity Finder** | Find buying stock or selling demand with distance, quantity, landing-pad and quote-age filters. |
+| **Station services** | Find nearby stations providing the selected service using observed station metadata. |
+| **State Finds & HGE** | Compare live sightings, remaining signal lifetime and separately labelled BGS predictions. |
+| **Powerplay** | Track pledge, rank and merits from the Journal; distinguish explicit system control from power presence. |
+| **CMDR & Fleet** | Review ranks, reputation, credits, assets, CR/h and known ships, including parked hulls. |
+| **Missions** | Track active missions, deadlines, massacre stacks and recorded Community Goals. |
+| **Exploration** | Review unsold Journal scans, noteworthy bodies and transparently estimated cartography values. |
+| **Exobiology** | Track survey targets, sampling distances, completed species and observed earnings. |
+| **Surface navigation** | Save planetary waypoints and follow a compass in the app or a separate overlay. |
+| **Logbook** | Search flight events, session activity and your local notes. |
+| **Appearance & connections** | Choose six themes and four languages; manage services, profiles, diagnostics and overlays. |
+
+## Our own server — shared galaxy facts, local Commander state
+
+ED-Frame now has its own **community catalog server**. It collects supported public EDDN observations and serves shared system, station, market, ring/hotspot, Powerplay and State Finds data to the app. It also supplies module and ship availability and observed purchase prices. Supported anonymous mining-yield, signal and station-price contributions help the shared catalog grow.
+
+- **Mining:** combine site evidence with prices, demand and explicit Powerplay facts. Market confirmation and merit suitability have separate checks; missing evidence remains visible.
+- **Shopping and trading:** search station services, commodity offers, module inventories and ship availability without manually maintaining station lists.
+- **Freshness:** use the original observation time and age filters. A recent download does not make an old price current; an observation is not an availability, yield or merit guarantee.
+- **Offline use:** keep already retained observations locally. Regional SQLite ring queries avoid loading the complete ring catalog into memory and preserve the original observations and their history.
+- **Controls and privacy:** ED-Frame and EDDN community connections are enabled by default for a new profile and can be disabled in Connections. The ED-Frame connection controls catalog access and supported anonymous contributions together. The server does not accept Commander names/FIDs, raw Journal files, private builds, wishlists, credentials or tokens. Frontier CAPI and INARA remain separately configured integrations.
+
+The server complements local Journal evidence; it does not replace it. Coverage depends on observed public activity, and gaps stay visible. [Server documentation](server/catalog_service/README.md) explains the public data contract.
 
 ## Why ED-Frame
 
@@ -37,11 +77,11 @@ That precision is the whole point:
 - The Operations page joins the individual tools into a route: collect, trade, travel, unlock, install and craft.
 - You can plan for a ship parked across the bubble **without switching to it in-game**.
 
-Everything is derived from local files. Nothing is invented to fill a gap.
+Commander state comes from your local files; shared galaxy facts come from the enabled catalog sources. Missing evidence stays unknown.
 
 ## Every workspace, from top to bottom
 
-The default sidebar follows the same journey described below. Its entries can also be rearranged to match the way you play.
+The workspaces below share your Commander state. Sidebar entries can be rearranged to match the way you play.
 
 ### 1. Operations — the answer to “what now?”
 
@@ -91,9 +131,9 @@ Missing-material guidance lists acquisition routes, source systems and coordinat
 
 ### 6. Mining Finder — choose a target with evidence
 
-Find rings and planetary deposits by commodity, mining method, distance, reserve quality and evidence level. ED-Frame checks the active ship for the required mining equipment, ranks results by evidence and distance, and separates confirmed hotspot or surface signals from older observations that should be rechecked.
+Find rings and planetary deposits by commodity, mining method, distance, reserve quality and evidence level. Choose yield, profit, distance or Powerplay merit planning; filter market age, demand and landing-pad size. Acquire, Reinforce and Undermine routes distinguish verified markets, verified Powerplay facts and missing evidence. ED-Frame checks the active ship for the required mining equipment and separates measured yield, hotspot evidence and ring-type estimates.
 
-Each result shows the body, ring type, hotspot or signal evidence, last confirmation, arrival distance and a copyable system. Live Journal observations combine with optional Spansh catalog data and bundled offline fallbacks.
+Each result shows the body, ring type, hotspot or signal evidence, last confirmation, arrival distance and a copyable system. Journal observations combine with ED-Frame server data, other enabled catalog sources and retained offline knowledge. The regional SQLite ring store preserves full observations and history while reading the relevant search region.
 
 ![Mining Finder results with method, distance and evidence filters](docs/images/edec-mining-finder.png)
 
@@ -157,6 +197,22 @@ The compass arrow points toward the active waypoint relative to your current shi
 
 **Show Nav Overlay** opens a separate, movable always-on-top compass with the active waypoint, relative turn, surface distance and status. Its visibility, position, opacity and scale persist independently of the Engineering overlay. Lock and click-through can be toggled from the Nav tab or the Windows tray menu. As with other desktop overlays, use Elite's borderless-windowed mode; exclusive fullscreen can cover the overlay.
 
+### Module & Ship Finder — find equipment for your ship
+
+Search observed module and ship inventories by origin, range and landing pad. Module selection exposes class, rating, family and known compatibility with the current hull and physical slot. Prices distinguish direct observations from inferred values; access restrictions and missing availability remain visible.
+
+### Commodity Finder and station services
+
+In Nav, choose BUY to compare station stock or SELL to compare demand. Filter quantity and quote age, and compare prices with distance and pad information. The station-service search finds nearby observed services. These are observations, not guaranteed stock, legality or docking access.
+
+### Missions — deadlines and shared targets
+
+Review active Journal missions, destination, reward and expiry. Group recorded massacre missions into stacks and review observed Community Goals in the same workspace.
+
+### Exploration — unsold cartography
+
+Review Journal-derived scans, valuable or noteworthy bodies and unsold exploration data. Value ranges and possible discovery bonuses are clearly presented as estimates.
+
 ### 13. Settings — appearance, data sources and diagnostics
 
 Six themes, four interface languages, UI scaling, reduced motion and enhanced GPU visuals let the cockpit fit the display. Tray mode, Windows start-up behavior, renderer selection and Journal-folder controls are available without editing configuration files.
@@ -165,7 +221,7 @@ Six themes, four interface languages, UI scaling, reduced motion and enhanced GP
 
 #### Connections and diagnostics
 
-Every network service is opt-in. Frontier CAPI can supplement credits and the active ship; INARA can synchronize supported Commander events and import a fleet snapshot; EDDN can share schema-approved public galaxy data and receive live State Finds intelligence; Spansh can refresh the navigation catalogs. Queues, receipts, retries and service status remain visible, while operational detail belongs in the local log and exportable diagnostic archive.
+Connections exposes controls and status for the ED-Frame catalog, EDDN, Frontier CAPI, INARA, Spansh and EDSM. ED-Frame and EDDN community services are enabled for new profiles; disabling them preserves local retained data. Frontier CAPI can supplement credits and the active ship after consent and login; INARA can synchronize supported Commander events after setup. Queues, receipts, retries and service status remain visible.
 
 ![Connection status, consent controls and delivery receipts](docs/images/edec-connections.png)
 
@@ -194,12 +250,14 @@ Personal settings, Journal cursors, caches, plans and service credentials live o
 
 ## Data and privacy
 
-The complete 1.5.5 manuals are available in [English](docs/ED-Frame_User_Manual_Privacy_EN_1.5.5.pdf) and [German](docs/ED-Frame_User_Manual_Privacy_DE_1.5.5.pdf).
+Start with the current **1.0 guides** in [English](docs/ED-Frame-1.0-Guide-EN.md) or [German](docs/ED-Frame-1.0-Guide-DE.md). The older [English](docs/ED-Frame_User_Manual_Privacy_EN_1.5.5.pdf) and [German](docs/ED-Frame_User_Manual_Privacy_DE_1.5.5.pdf) PDF manuals remain historical references; they predate the current features and community defaults.
 
-ED-Frame works locally from Elite Dangerous Journal files. Every network integration is optional and opt-in:
+ED-Frame keeps Commander state in local files. Community services can be disabled; Frontier CAPI and INARA require separate setup:
+
+- **ED-Frame server** — shared public catalogs and supported anonymous mining, signal and station-price observations. Enabled by default for new profiles; the Connections switch controls both catalog access and contributions. Commander identities, raw Journal files, private builds, wishlists and credentials are not accepted by this service.
 
 - **INARA** — supported Commander events are batched, deduplicated, rate-limited, and written to local receipts before any upload. The API key is encrypted for the current Windows account with DPAPI, is never exposed back to QML, and is redacted from logs and crash reports.
-- **EDDN** — supported public market, station, exploration and exobiology messages are validated and stripped of private or unsupported fields before transmission.
+- **EDDN** — supported public market, station, exploration and exobiology messages are validated and stripped of private or unsupported fields before transmission. Community upload/listener functionality is enabled by default for new profiles and has its own Connections switch.
 - **Frontier Companion API** — an explicit in-app consent tick is required before the first login. Authorisation uses Frontier's PKCE OAuth flow with no client secret; only credits and the active ship are imported, and newer Journal values always stay authoritative. OAuth tokens are encrypted for the current Windows account (DPAPI) and are never written to logs.
 - **Spansh** — optional read-only catalog data assists navigation and material guidance, with bundled offline fallbacks.
 

@@ -31,8 +31,10 @@ if exist "dist\ED-Frame\_internal\icudt78.dll" goto :contaminated
 
 copy /y "PORTABLE_README.txt" "dist\ED-Frame\README.txt" >nul
 copy /y "LICENSE" "dist\ED-Frame\LICENSE" >nul
-copy /y "docs\ED-Frame_User_Manual_Privacy_EN_1.5.5.pdf" "dist\ED-Frame\ED-Frame_User_Manual_Privacy_EN_%EDEC_VERSION%.pdf" >nul
-copy /y "docs\ED-Frame_User_Manual_Privacy_DE_1.5.5.pdf" "dist\ED-Frame\ED-Frame_User_Manual_Privacy_DE_%EDEC_VERSION%.pdf" >nul
+copy /y "docs\ED-Frame-1.0-Guide-EN.md" "dist\ED-Frame\ED-Frame-1.0-Guide-EN.md" >nul
+copy /y "docs\ED-Frame-1.0-Guide-DE.md" "dist\ED-Frame\ED-Frame-1.0-Guide-DE.md" >nul
+copy /y "docs\ED-Frame_User_Manual_Privacy_EN_1.5.5.pdf" "dist\ED-Frame\ED-Frame_User_Manual_Privacy_EN_1.5.5.pdf" >nul
+copy /y "docs\ED-Frame_User_Manual_Privacy_DE_1.5.5.pdf" "dist\ED-Frame\ED-Frame_User_Manual_Privacy_DE_1.5.5.pdf" >nul
 
 if not exist "output" mkdir "output"
 powershell -NoProfile -Command "Compress-Archive -Path 'dist\ED-Frame\*' -DestinationPath 'output\ED-Frame-%EDEC_VERSION%-Windows.zip' -CompressionLevel Optimal -Force"

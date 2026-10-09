@@ -1,6 +1,21 @@
 # Changelog
 
-## Unreleased
+## 1.0 — 2026-10-09
+
+### Public release
+
+- Start the new public ED-Frame 1.0 release line from the current application,
+  including the previously unreleased regional ring store. This succeeds the
+  earlier EDEC/ED-Frame numbering through 1.5.43; old tags and assets remain
+  historical downloads and are not overwritten or renumbered.
+- Present each workspace and finder separately, highlight the live ED-Frame
+  community catalog server, and document market/Powerplay verification,
+  observation age, measured yields, retained offline data and connection controls.
+- Add current English and German 1.0 guides and feature-focused release notes.
+  Keep the older PDF manuals under their original versioned names as historical
+  references rather than renaming their contents to a newer version.
+- Select the current release by GitHub's latest-release designation and
+  publication date, avoiding the higher numbers in the historical release line.
 
 ### Improved
 

@@ -22,10 +22,15 @@ jobs:
 
       - name: Compare main against the latest release tag
         shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
-          latest_tag=$(git tag --list | grep -E '^[0-9]+\.[0-9]+(\.[0-9]+)?$' | sort -t. -k1,1n -k2,2n -k3,3n | tail -n1)
+          latest_tag=$(gh api "repos/$GITHUB_REPOSITORY/releases/latest" --jq '.tag_name') || {
+            echo "::notice::Could not read the current GitHub release - skipping the informational drift check."
+            exit 0
+          }
           if [ -z "$latest_tag" ]; then
-            echo "No numeric release tag found yet - nothing to compare."
+            echo "No current release tag found yet - nothing to compare."
             exit 0
           fi
           ahead=$(git rev-list --count "$latest_tag"..HEAD)
