@@ -65,8 +65,12 @@ def fetch_edframe_powerplay(*, origin: list, max_distance: float, get: Any,
         if len(wanted) > 200 or any(len(name) > 100 for name in wanted):
             raise MiningPowerplayError("Powerplay lookup exceeds the system batch limit")
         params["system"] = wanted
+    else:
+        # Backward compatible: older servers ignore the larger-page opt-in.
+        params["regional_page_size"] = 1000
     rows = []
     cursors = set()
+    system_count = 0
     for page in range(100):
         try:
             response = get(EDFRAME_POWERPLAY_URL, params=dict(params), timeout=timeout)
@@ -76,18 +80,32 @@ def fetch_edframe_powerplay(*, origin: list, max_distance: float, get: Any,
                 raise MiningPowerplayError("Invalid server Powerplay response")
             if wanted and payload.get("selection") != "systems":
                 raise MiningPowerplayError("Server does not support exact Powerplay batches yet")
+            count = payload.get("systemCount", params["limit"])
+            if (type(count) is not int
+                    or not 0 <= count <= params.get("regional_page_size", params["limit"])
+                    or (payload.get("hasMore") and count == 0)):
+                raise MiningPowerplayError("Invalid server Powerplay page size")
         except Exception as exc:
             if not rows or diagnostics is None:
                 raise
             diagnostics.update(bounded=True, partialError=type(exc).__name__)
             break
         rows.extend(_public_powerplay_rows(payload["results"]))
+        system_count += count
         has_more = bool(payload.get("hasMore"))
         if diagnostics is not None:
             diagnostics.update(bounded=has_more, pages=page + 1,
                                complete=payload.get("hasMore") is False)
         if not has_more:
             break
+        if not wanted and system_count >= 20_000:
+            if diagnostics is not None:
+                diagnostics.update(bounded=True, complete=False)
+            break
+        if not wanted:
+            remaining = 20_000 - system_count
+            params["regional_page_size"] = min(1000, remaining)
+            params["limit"] = min(200, remaining)
         cursor = payload.get("nextCursor")
         if not isinstance(cursor, str) or not cursor or cursor in cursors:
             break  # Legacy/truncated response: preserve facts, report incomplete.

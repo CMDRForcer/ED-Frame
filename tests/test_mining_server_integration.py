@@ -82,6 +82,7 @@ class MiningServerIntegrationTests(unittest.TestCase):
             "max_age_days": 3650, "commodity": "platinum", "limit": 1000, "offset": 0,
             "include_community_overlaps": True,
             "include_ring_candidates": True,
+            "regional_page_size": 5000,
         })
 
     def test_regional_ring_query_rejects_missing_position(self):

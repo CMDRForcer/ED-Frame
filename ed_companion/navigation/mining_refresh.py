@@ -17,7 +17,7 @@ from .mining_powerplay import fetch_edframe_powerplay
 
 def fetch_mining_refresh(query, *, origin=None, include_edframe=True,
                          session_factory=None, is_current=None, snapshot_path=None,
-                         region_cache=None):
+                         region_cache=None, prepare_sites=None):
     """Retrieve independent domains concurrently without sharing a Session.
 
     Cursor-dependent ring pages remain sequential within their reusable
@@ -57,6 +57,24 @@ def fetch_mining_refresh(query, *, origin=None, include_edframe=True,
     coordinates = (origin or {}).get("coordinates")
     radius = max(1, query["nearbyLy"])
 
+    def prepare_site_result(data):
+        # Prepare a complete site domain as soon as it is available, overlapping
+        # slow Powerplay/market I/O. No partial publication or shared Session.
+        rows = data.get("serverCandidates")
+        if prepare_sites is not None and rows:
+            started = time.monotonic()
+            try:
+                if is_current is None or is_current():
+                    prepared = prepare_sites(rows)
+                    if is_current is None or is_current():
+                        data["preparedRings"] = prepared
+            except Exception as exc:
+                # The original complete raw domain remains available for the
+                # normal merge/retry path; a preparation failure loses no data.
+                data["ringPreparationError"] = type(exc).__name__
+            data["ringPreparationSeconds"] = round(time.monotonic() - started, 3)
+        return data
+
     def fetch_domain(kind):
         started = time.monotonic()
         cache_started = region_cache.now() if region_cache is not None else None
@@ -72,7 +90,9 @@ def fetch_mining_refresh(query, *, origin=None, include_edframe=True,
                     if is_current is not None and not is_current():
                         raise RuntimeError("Mining lookup superseded or shutting down")
                     rows_key, coverage_key = cache_fields[kind]
-                    return {rows_key: reused[0], coverage_key: reused[1]}, time.monotonic() - started
+                    data = {rows_key: reused[0], coverage_key: reused[1]}
+                    seconds = time.monotonic() - started
+                    return prepare_site_result(data), seconds
             with session_factory() as session:
                 get = session_get(session)
                 if kind == "sites":
@@ -118,7 +138,8 @@ def fetch_mining_refresh(query, *, origin=None, include_edframe=True,
                 data[error_key] = str(exc)
             else:
                 data.update(success=False, error=str(exc))
-        return data, time.monotonic() - started
+        seconds = time.monotonic() - started
+        return prepare_site_result(data), seconds
 
     domains = ["markets"]
     if include_edframe and origin:

@@ -187,6 +187,9 @@ def _fetch_edframe_mining_snapshot(
             raise ValueError("Regional mining search requires coordinates and radius")
         params.pop("system")
         params["limit"] = 1000
+        # Old servers ignore this opt-in and still return 1,000-row pages.
+        # New servers amortize the regional query over bounded larger pages.
+        params["regional_page_size"] = 5000
         params.update(dict(zip(("x", "y", "z"), coordinates)))
         params["max_distance"] = float(max_distance)
     commodity_id = mining_commodity_id(commodity)
@@ -266,6 +269,14 @@ def _fetch_edframe_mining_snapshot(
         if not isinstance(next_offset, int) or isinstance(next_offset, bool) or next_offset <= params["offset"]:
             raise ValueError("ED-Frame mining catalog returned an invalid page cursor")
         params["offset"] = next_offset
+        # Preserve the original 50 x 1,000 regional-row budget, even when a
+        # server supports the larger page opt-in. Never silently claim full
+        # coverage after reaching that budget.
+        if max_distance is not None and next_offset >= 50_000:
+            bounded = True
+            break
+        if max_distance is not None:
+            params["regional_page_size"] = min(5000, 50_000 - next_offset)
         next_cursor = payload.get("nextCursor")
         if next_cursor is not None:
             if not isinstance(next_cursor, str) or not next_cursor or next_cursor in seen_cursors:
@@ -525,10 +536,19 @@ def merge_mining_candidate_batch(
             rows.append(prepare_row(incoming) if prepare_row else incoming)
             continue
         previous = rows[index]
-        merged = merge_mining_candidates([previous, incoming], now=now)
-        if merged:
-            displaced.append(previous)
-            rows[index] = prepare_row(merged[0]) if prepare_row else merged[0]
+        if _candidate_identity(previous) == key:
+            # Both rows describe this ring. Do not build a grouping index and
+            # sort a one-row result catalog again for every regional ring.
+            merged = _merge_mining_group([
+                mining_candidate_freshness(previous, now=now),
+                mining_candidate_freshness(incoming, now=now),
+            ])
+        else:
+            # Keep the public helper's historical behavior for a caller-supplied
+            # mismatched position map. Production indexes are snapshot-bound.
+            merged = merge_mining_candidates([previous, incoming], now=now)[0]
+        displaced.append(previous)
+        rows[index] = prepare_row(merged) if prepare_row else merged
     return rows, displaced
 
 
@@ -579,220 +599,10 @@ def merge_mining_candidates(
         groups.setdefault(_candidate_identity(row), []).append(row)
 
     merged = []
-    fill_fields = (
-        "system", "systemAddress", "coordinates", "distanceLy", "body",
-        "bodyId", "ring", "ringType", "reserveLevel", "distanceToArrivalLs",
-        "miningSiteType", "controllingPower", "powerState", "powers",
-        "systemState",
-    )
     for observations in groups.values():
         if checkpoint:
             checkpoint()
-        observations.sort(key=lambda row: (
-            not row.get("stale"),
-            MINING_EVIDENCE_RANK.get(row["sourceEvidence"], 0),
-            _timestamp(row.get("observedAt")) or datetime.min.replace(
-                tzinfo=timezone.utc
-            ),
-        ), reverse=True)
-        strongest = dict(observations[0])
-        for field in fill_fields:
-            if not _missing(strongest.get(field)):
-                continue
-            for source in observations[1:]:
-                value = source.get(field)
-                if not _missing(value):
-                    strongest[field] = value
-                    break
-
-        hotspots: dict[str, dict[str, Any]] = {}
-        for source in observations:
-            for hotspot in source.get("hotspots") or []:
-                if not isinstance(hotspot, dict):
-                    continue
-                commodity = _text(hotspot.get("commodity")).casefold()
-                if commodity and commodity not in hotspots:
-                    hotspots[commodity] = dict(hotspot)
-        strongest["hotspots"] = [hotspots[key] for key in sorted(hotspots)]
-        overlap_reports = {}
-        for source in observations:
-            for report in source.get("communityOverlapReports") or []:
-                if not isinstance(report, dict):
-                    continue
-                key = (report.get("sourceUrl"), report.get("sourceRevision"),
-                       report.get("sourceRow"))
-                overlap_reports[key] = dict(report)
-        strongest["communityOverlapReports"] = list(overlap_reports.values())
-        strongest["planetaryMiningLocationCount"] = max(
-            int(source.get("planetaryMiningLocationCount", 0) or 0)
-            for source in observations
-        )
-        community_observations = [
-            source for source in observations
-            if source.get("yieldAggregationScope") == "COMMUNITY"
-        ]
-        local_observations = [
-            source for source in observations
-            if source.get("yieldAggregationScope") != "COMMUNITY"
-        ]
-        community_samples = max((
-            int(source.get("prospectorSampleCount", 0) or 0)
-            for source in community_observations
-        ), default=0)
-        local_samples = sum(
-            int(source.get("prospectorSampleCount", 0) or 0)
-            for source in local_observations
-        )
-        strongest["prospectorSampleCount"] = (
-            max(community_samples, local_samples)
-            if community_observations and local_observations
-            else community_samples + local_samples
-        )
-        yield_stats: dict[str, dict[str, Any]] = {}
-        stat_sources: dict[str, list[tuple[dict[str, Any], dict[str, Any]]]] = {}
-        for source in observations:
-            for stat in source.get("yieldStats") or []:
-                if not isinstance(stat, dict):
-                    continue
-                commodity = _commodity_id(stat.get("commodity"))
-                if not commodity:
-                    continue
-                stat_sources.setdefault(commodity, []).append((source, stat))
-        selected_scopes = set()
-        for commodity, entries in stat_sources.items():
-            community_entries = [
-                entry for entry in entries
-                if entry[1].get("yieldAggregationScope", entry[0].get(
-                    "yieldAggregationScope"
-                )) == "COMMUNITY"
-            ]
-            local_entries = [
-                entry for entry in entries
-                if entry not in community_entries
-            ]
-            # Server aggregates overlap: snapshots are not independent samples.
-            # Use the newest community snapshot, not their sum (nor a historic
-            # larger snapshot after corrections). Local/community overlap is
-            # handled conservatively below because uploaded samples may recur.
-            community_entries = ([max(community_entries, key=lambda entry: (
-                _text(entry[0].get("learnedAt")),
-                _text(entry[1].get("lastObservedAt")),
-            ))] if community_entries else [])
-            measurement_entries = community_entries or local_entries
-            selected_scope = "COMMUNITY" if community_entries else "LOCAL"
-            if community_entries and local_entries:
-                community_best = max(community_entries, key=lambda entry: int(
-                    entry[1].get("proportionSamples",
-                                 entry[1].get("prospectorHits", 0)) or 0
-                ))
-                community_count = int(
-                    community_best[1].get(
-                        "proportionSamples",
-                        community_best[1].get("prospectorHits", 0),
-                    ) or 0
-                )
-                local_count = sum(int(
-                    stat.get("proportionSamples", stat.get(
-                        "prospectorHits", 0
-                    )) or 0
-                ) for _source, stat in local_entries)
-                measurement_entries = (
-                    [community_best]
-                    if community_count >= local_count else local_entries
-                )
-                selected_scope = (
-                    "COMMUNITY" if community_count >= local_count else "LOCAL"
-                )
-            for source, stat in measurement_entries:
-                combined = yield_stats.setdefault(commodity, {
-                    "commodity": commodity,
-                    "prospectorHits": 0,
-                    "proportionTotal": 0.0,
-                    "proportionSamples": 0,
-                    "maxProportion": None,
-                    "refinedCount": 0,
-                    "lastObservedAt": "",
-                })
-                hits = int(stat.get("prospectorHits", 0) or 0)
-                proportion_samples = int(
-                    stat.get("proportionSamples", hits) or 0
-                )
-                proportion_total = stat.get("proportionTotal")
-                if proportion_total is None:
-                    proportion_total = (
-                        float(stat.get("averageProportion", 0) or 0)
-                        * proportion_samples
-                    )
-                combined["prospectorHits"] += hits
-                combined["proportionSamples"] += proportion_samples
-                combined["proportionTotal"] += float(proportion_total or 0)
-                maximum = stat.get("maxProportion")
-                if maximum is not None:
-                    maximum = float(maximum)
-                    current_maximum = combined["maxProportion"]
-                    combined["maxProportion"] = (
-                        maximum if current_maximum is None
-                        else max(current_maximum, maximum)
-                    )
-                combined["lastObservedAt"] = max(
-                    combined["lastObservedAt"],
-                    _text(stat.get("lastObservedAt")),
-                )
-            combined = yield_stats[commodity]
-            combined["yieldAggregationScope"] = selected_scope
-            selected_scopes.add(selected_scope)
-            combined["refinedCount"] = sum(
-                int(stat.get("refinedCount", 0) or 0)
-                for source, stat in entries
-                if source.get("yieldAggregationScope") != "COMMUNITY"
-            )
-        strongest["yieldStats"] = []
-        for commodity in sorted(yield_stats):
-            stat = yield_stats[commodity]
-            sample_count = stat["proportionSamples"]
-            stat["averageProportion"] = (
-                round(stat["proportionTotal"] / sample_count, 3)
-                if sample_count else None
-            )
-            stat["proportionTotal"] = round(stat["proportionTotal"], 3)
-            strongest["yieldStats"].append(stat)
-        if selected_scopes:
-            strongest["yieldAggregationScope"] = (
-                next(iter(selected_scopes)) if len(selected_scopes) == 1 else "MIXED"
-            )
-        strongest["learnedAt"] = max(
-            (_text(source.get("learnedAt")) for source in observations),
-            default="",
-        )
-        evidence_rows = []
-        evidence_keys = set()
-        for source in observations:
-            summaries = [{
-                "evidence": source.get("evidence"),
-                "sourceEvidence": source.get("sourceEvidence"),
-                "observedAt": source.get("observedAt"),
-                "source": source.get("source"),
-                "stale": source.get("stale"),
-            }]
-            summaries.extend(
-                row for row in (source.get("observations") or [])
-                if isinstance(row, dict)
-            )
-            for summary in summaries:
-                stable_summary = {
-                    key: value for key, value in summary.items()
-                    if key != "stale"
-                }
-                key = json.dumps(
-                    stable_summary, ensure_ascii=False, sort_keys=True,
-                    separators=(",", ":"),
-                )
-                if key not in evidence_keys:
-                    evidence_keys.add(key)
-                    evidence_rows.append(dict(summary))
-        strongest["observations"] = evidence_rows
-        strongest["sourceCount"] = len(evidence_rows)
-        merged.append(strongest)
+        merged.append(_merge_mining_group(observations))
 
     return sorted(merged, key=lambda row: (
         row.get("distanceLy") is None,
@@ -800,6 +610,228 @@ def merge_mining_candidates(
         _text(row.get("system")).casefold(),
         _text(row.get("ring")).casefold(),
     ))
+
+
+
+def _merge_mining_group(observations):
+    """Combine one already-identified, freshness-assessed ring group."""
+    fill_fields = (
+        "system", "systemAddress", "coordinates", "distanceLy", "body",
+        "bodyId", "ring", "ringType", "reserveLevel", "distanceToArrivalLs",
+        "miningSiteType", "controllingPower", "powerState", "powers",
+        "systemState",
+    )
+    observations.sort(key=lambda row: (
+        not row.get("stale"),
+        MINING_EVIDENCE_RANK.get(row["sourceEvidence"], 0),
+        _timestamp(row.get("observedAt")) or datetime.min.replace(
+            tzinfo=timezone.utc
+        ),
+    ), reverse=True)
+    strongest = dict(observations[0])
+    for field in fill_fields:
+        if not _missing(strongest.get(field)):
+            continue
+        for source in observations[1:]:
+            value = source.get(field)
+            if not _missing(value):
+                strongest[field] = value
+                break
+
+    hotspots: dict[str, dict[str, Any]] = {}
+    for source in observations:
+        for hotspot in source.get("hotspots") or []:
+            if not isinstance(hotspot, dict):
+                continue
+            commodity = _text(hotspot.get("commodity")).casefold()
+            if commodity and commodity not in hotspots:
+                hotspots[commodity] = dict(hotspot)
+    strongest["hotspots"] = [hotspots[key] for key in sorted(hotspots)]
+    overlap_reports = {}
+    for source in observations:
+        for report in source.get("communityOverlapReports") or []:
+            if not isinstance(report, dict):
+                continue
+            key = (report.get("sourceUrl"), report.get("sourceRevision"),
+                   report.get("sourceRow"))
+            overlap_reports[key] = dict(report)
+    strongest["communityOverlapReports"] = list(overlap_reports.values())
+    strongest["planetaryMiningLocationCount"] = max(
+        int(source.get("planetaryMiningLocationCount", 0) or 0)
+        for source in observations
+    )
+    community_observations = [
+        source for source in observations
+        if source.get("yieldAggregationScope") == "COMMUNITY"
+    ]
+    local_observations = [
+        source for source in observations
+        if source.get("yieldAggregationScope") != "COMMUNITY"
+    ]
+    community_samples = max((
+        int(source.get("prospectorSampleCount", 0) or 0)
+        for source in community_observations
+    ), default=0)
+    local_samples = sum(
+        int(source.get("prospectorSampleCount", 0) or 0)
+        for source in local_observations
+    )
+    strongest["prospectorSampleCount"] = (
+        max(community_samples, local_samples)
+        if community_observations and local_observations
+        else community_samples + local_samples
+    )
+    yield_stats: dict[str, dict[str, Any]] = {}
+    stat_sources: dict[str, list[tuple[dict[str, Any], dict[str, Any]]]] = {}
+    for source in observations:
+        for stat in source.get("yieldStats") or []:
+            if not isinstance(stat, dict):
+                continue
+            commodity = _commodity_id(stat.get("commodity"))
+            if not commodity:
+                continue
+            stat_sources.setdefault(commodity, []).append((source, stat))
+    selected_scopes = set()
+    for commodity, entries in stat_sources.items():
+        community_entries = [
+            entry for entry in entries
+            if entry[1].get("yieldAggregationScope", entry[0].get(
+                "yieldAggregationScope"
+            )) == "COMMUNITY"
+        ]
+        local_entries = [
+            entry for entry in entries
+            if entry not in community_entries
+        ]
+        # Server aggregates overlap: snapshots are not independent samples.
+        # Use the newest community snapshot, not their sum (nor a historic
+        # larger snapshot after corrections). Local/community overlap is
+        # handled conservatively below because uploaded samples may recur.
+        community_entries = ([max(community_entries, key=lambda entry: (
+            _text(entry[0].get("learnedAt")),
+            _text(entry[1].get("lastObservedAt")),
+        ))] if community_entries else [])
+        measurement_entries = community_entries or local_entries
+        selected_scope = "COMMUNITY" if community_entries else "LOCAL"
+        if community_entries and local_entries:
+            community_best = max(community_entries, key=lambda entry: int(
+                entry[1].get("proportionSamples",
+                             entry[1].get("prospectorHits", 0)) or 0
+            ))
+            community_count = int(
+                community_best[1].get(
+                    "proportionSamples",
+                    community_best[1].get("prospectorHits", 0),
+                ) or 0
+            )
+            local_count = sum(int(
+                stat.get("proportionSamples", stat.get(
+                    "prospectorHits", 0
+                )) or 0
+            ) for _source, stat in local_entries)
+            measurement_entries = (
+                [community_best]
+                if community_count >= local_count else local_entries
+            )
+            selected_scope = (
+                "COMMUNITY" if community_count >= local_count else "LOCAL"
+            )
+        for source, stat in measurement_entries:
+            combined = yield_stats.setdefault(commodity, {
+                "commodity": commodity,
+                "prospectorHits": 0,
+                "proportionTotal": 0.0,
+                "proportionSamples": 0,
+                "maxProportion": None,
+                "refinedCount": 0,
+                "lastObservedAt": "",
+            })
+            hits = int(stat.get("prospectorHits", 0) or 0)
+            proportion_samples = int(
+                stat.get("proportionSamples", hits) or 0
+            )
+            proportion_total = stat.get("proportionTotal")
+            if proportion_total is None:
+                proportion_total = (
+                    float(stat.get("averageProportion", 0) or 0)
+                    * proportion_samples
+                )
+            combined["prospectorHits"] += hits
+            combined["proportionSamples"] += proportion_samples
+            combined["proportionTotal"] += float(proportion_total or 0)
+            maximum = stat.get("maxProportion")
+            if maximum is not None:
+                maximum = float(maximum)
+                current_maximum = combined["maxProportion"]
+                combined["maxProportion"] = (
+                    maximum if current_maximum is None
+                    else max(current_maximum, maximum)
+                )
+            combined["lastObservedAt"] = max(
+                combined["lastObservedAt"],
+                _text(stat.get("lastObservedAt")),
+            )
+        combined = yield_stats[commodity]
+        combined["yieldAggregationScope"] = selected_scope
+        selected_scopes.add(selected_scope)
+        combined["refinedCount"] = sum(
+            int(stat.get("refinedCount", 0) or 0)
+            for source, stat in entries
+            if source.get("yieldAggregationScope") != "COMMUNITY"
+        )
+    strongest["yieldStats"] = []
+    for commodity in sorted(yield_stats):
+        stat = yield_stats[commodity]
+        sample_count = stat["proportionSamples"]
+        stat["averageProportion"] = (
+            round(stat["proportionTotal"] / sample_count, 3)
+            if sample_count else None
+        )
+        stat["proportionTotal"] = round(stat["proportionTotal"], 3)
+        strongest["yieldStats"].append(stat)
+    if selected_scopes:
+        strongest["yieldAggregationScope"] = (
+            next(iter(selected_scopes)) if len(selected_scopes) == 1 else "MIXED"
+        )
+    strongest["learnedAt"] = max(
+        (_text(source.get("learnedAt")) for source in observations),
+        default="",
+    )
+    evidence_rows = []
+    evidence_keys = set()
+    for source in observations:
+        summaries = [{
+            "evidence": source.get("evidence"),
+            "sourceEvidence": source.get("sourceEvidence"),
+            "observedAt": source.get("observedAt"),
+            "source": source.get("source"),
+            "stale": source.get("stale"),
+        }]
+        summaries.extend(
+            row for row in (source.get("observations") or [])
+            if isinstance(row, dict)
+        )
+        for summary in summaries:
+            key = _mining_evidence_key(summary)
+            if key not in evidence_keys:
+                evidence_keys.add(key)
+                evidence_rows.append(dict(summary))
+    strongest["observations"] = evidence_rows
+    strongest["sourceCount"] = len(evidence_rows)
+    return strongest
+
+
+def _mining_evidence_key(summary):
+    stable = {key: value for key, value in summary.items() if key != "stale"}
+    # Ordinary evidence summaries contain only string keys and string/null/
+    # boolean values. Tuples preserve exactly the JSON equality of that shape,
+    # avoiding repeated JSON encodes. Unusual/nested evidence stays on the
+    # original canonical JSON path (including numeric JSON distinctions).
+    if all(key in {"evidence", "sourceEvidence", "observedAt", "source"}
+           and (value is None or type(value) in (str, bool))
+           for key, value in stable.items()):
+        return tuple(sorted(stable.items()))
+    return json.dumps(stable, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
 
 
 def _signal_rows(signals: Any) -> list[dict[str, Any]]:

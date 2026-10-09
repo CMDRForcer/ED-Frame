@@ -16,6 +16,7 @@ from ed_companion.navigation.mining_commodities import MINING_COMMODITIES, minin
 from . import __version__
 from .mining_metadata import enrich_ring_metadata
 from .mining_revision import mining_revision, static_revision
+from .mining_region import regional_page_limit, regional_box_clause
 from .mining_overlaps import (
     attach_overlap_reports, catalog as overlap_catalog, overlap_site_identities,
     community_reference_candidates,
@@ -1322,7 +1323,10 @@ def search_mining_powerplay(
     limit: Annotated[int, Query(ge=1, le=200)] = 200,
     cursor: Annotated[str | None, Query(max_length=1024)] = None,
     system: Annotated[list[str] | None, Query()] = None,
+    regional_page_size: Annotated[int | None, Query(ge=1, le=1000)] = None,
 ) -> dict:
+    limit = regional_page_limit(limit, regional_page_size,
+                                regional=system is None, maximum=1000)
     clauses = ["observed_at >= NOW() - (%s * INTERVAL '1 hour')"]
     values: list[object] = [max_age_hours]
     names = list(dict.fromkeys(name.strip().casefold() for name in system or []))
@@ -1354,6 +1358,7 @@ def search_mining_powerplay(
         "generatedAt": _now(), "hasMore": more,
         "nextCursor": _encode_state_cursor(last["observed_at"], "mining-powerplay", last["identity"]) if last else None,
         "selection": "systems" if system is not None else "region",
+        "systemCount": len(rows[:limit]),
         "results": [fact for row in rows[:limit] for fact in row["facts"]],
     }
 
@@ -1376,7 +1381,11 @@ def search_sites(
     known_revision: Annotated[str | None, Query(max_length=80)] = None,
     snapshot_revision: Annotated[str | None, Query(max_length=80)] = None,
     snapshot_static: Annotated[str | None, Query(max_length=64)] = None,
+    regional_page_size: Annotated[int | None, Query(ge=1, le=5000)] = None,
 ) -> dict:
+    reference_page_limit = limit
+    limit = regional_page_limit(limit, regional_page_size, regional=(not system and all(
+        value is not None for value in (x, y, z, max_distance))), maximum=5000)
     revision = None
     revision_query = {
         "commodity": (commodity or "").strip().casefold(),
@@ -1429,6 +1438,9 @@ def search_sites(
             "POWER(ms.z - %s, 2) <= POWER(%s, 2)"
         )
         values.extend((x, y, z, max_distance))
+        box_clause, box_values = regional_box_clause(x, y, z, max_distance, alias="ms")
+        clauses.append(box_clause)
+        values.extend(box_values)
     if cursor:
         cursor_at, cursor_kind, cursor_identity = _decode_state_cursor(cursor)
         if cursor_kind != "mining-sites" or not cursor_identity:
@@ -1530,9 +1542,9 @@ def search_sites(
         references = []
         if include_community_overlaps and not offset and not cursor:
             references = community_reference_candidates(
-                conn, rows, commodity=commodity, system=system,
+                conn, rows[:reference_page_limit], commodity=commodity, system=system,
                 origin=(x, y, z) if all(v is not None for v in (x, y, z)) else None,
-                radius=max_distance, limit=limit,
+                radius=max_distance, limit=reference_page_limit,
             )
             # The explicit community opt-in must not starve missing references
             # behind a full page of ordinary observations. Keep the total bounded.

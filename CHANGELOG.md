@@ -2,6 +2,26 @@
 
 ## Unreleased
 
+## 1.5.42 — 2026-10-09
+
+### Improved
+
+- Prepare regional Mining Finder ring merges while independent Powerplay and
+  market requests are still running. Publish only against the captured catalog,
+  profile, generation and reset; otherwise retain the normal rebase/retry path.
+  Avoid per-ring catalog regrouping while preserving yields and source evidence.
+  Negotiate larger bounded regional pages with compatible servers, retaining
+  the original row budgets, completeness reporting and legacy-server support.
+  Use the deployed server's exact-sphere spatial-index prefilter and larger
+  regional pages; no freshness rules, history or original profile files are removed.
+
+- Run independent targeted Mining Finder Powerplay, ring and market checks with
+  one shared two-worker budget and worker-owned, reused HTTP sessions. Reuse
+  validated mine-system coordinates instead of resolving the same systems again.
+  Preserve provider fallbacks, check limits, freshness rules and deterministic
+  publication order; stop queued HTTP after profile/path/reset/shutdown changes.
+  No observations, BGS rules or retained files are removed.
+
 ## 1.5.41 — 2026-10-08
 
 ### Improved

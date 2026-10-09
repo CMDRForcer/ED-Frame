@@ -20,7 +20,7 @@ def static_revision():
     digest = hashlib.sha256(json.dumps(facts, sort_keys=True).encode())
     # A deployment changing response/projection rules must also invalidate
     # clients. Processes load their bundled references once, just as the API.
-    for name in ("api.py", "mining_revision.py", "mining_metadata.py", "mining_overlaps.py"):
+    for name in ("api.py", "mining_revision.py", "mining_metadata.py", "mining_overlaps.py", "mining_region.py"):
         digest.update(Path(__file__).with_name(name).read_bytes())
     return digest.hexdigest()
 

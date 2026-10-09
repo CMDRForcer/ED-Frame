@@ -1548,7 +1548,8 @@ class MiningFinderUiContractTests(unittest.TestCase):
         self.assertIn('cockpit.setEdFrameCatalogEnabled(checked)', main_qml)
         self.assertIn('cockpit.edFrameCatalogLog', main_qml)
         self.assertIn('"Disabled · local catalog active"', controller)
-        self.assertIn('include_edframe=getattr(', controller)
+        self.assertIn('include_edframe = getattr(self, "_edframe_catalog_enabled", True)', controller)
+        self.assertIn('include_edframe=include_edframe', controller)
 
 
 if __name__ == "__main__":
