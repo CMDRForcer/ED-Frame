@@ -9,6 +9,11 @@ from ed_companion.navigation.mining_powerplay import (
 )
 from ed_companion.navigation.mining_planner import (
     plan_mining_routes, OPTIMIZE_MERITS, _powerplay_index, _merit_status,
+    _candidate_power_fact, _market_power_fact,
+)
+from ed_companion.navigation.mining_finder import (
+    merge_mining_candidates, project_local_mining_evidence,
+    project_spansh_mining_candidates,
 )
 
 
@@ -37,6 +42,108 @@ def plan(facts, **fields):
 
 
 class PowerplayEvidenceTests(unittest.TestCase):
+    def test_fresh_ring_cannot_refresh_older_powerplay_snapshot(self):
+        base = {"system": "Mine", "ring": "Mine A Ring", "coordinates": [0, 0, 0]}
+        old = (NOW - timedelta(hours=25)).isoformat()
+        merged = merge_mining_candidates([
+            {**base, "evidence": "LOCAL_CONFIRMED", "observedAt": NOW.isoformat()},
+            {**base, "evidence": "CATALOG_CANDIDATE", "observedAt": old,
+             "controllingPower": "Aisling Duval", "powerState": "Stronghold",
+             "powers": ["Aisling Duval"], "powerplayObservedAt": old},
+        ], now=NOW)[0]
+        self.assertEqual(merged["observedAt"], NOW.isoformat())
+        self.assertEqual(merged["powerplayObservedAt"], old)
+        row = plan_mining_routes([merged], "Platinum", OPTIMIZE_MERITS,
+            power="Aisling Duval", power_goal="REINFORCE", markets=[market()], now=NOW)[0]
+        self.assertEqual(row["powerplayEvidenceState"], "STALE")
+        self.assertIsNone(row["meritScore"])
+
+    def test_merged_powerplay_is_one_snapshot_even_when_newest_ring_is_stronger(self):
+        base = {"system": "Mine", "ring": "Mine A Ring"}
+        merged = merge_mining_candidates([
+            {**base, "evidence": "LOCAL_CONFIRMED", "observedAt": NOW.isoformat(),
+             "controllingPower": "Aisling Duval", "powerState": "Stronghold",
+             "powers": ["Aisling Duval"],
+             "powerplayObservedAt": (NOW - timedelta(hours=1)).isoformat()},
+            {**base, "evidence": "CATALOG_CANDIDATE", "observedAt": NOW.isoformat(),
+             "controllingPower": "", "powerState": "Unoccupied", "powers": [],
+             "powersKnown": True, "powerplayObservedAt": NOW.isoformat()},
+        ], now=NOW)[0]
+        self.assertEqual(merged["controllingPower"], "")
+        self.assertEqual(merged["powerState"], "Unoccupied")
+        self.assertEqual(merged["powers"], [])
+
+    def test_local_scan_retains_jump_powerplay_time(self):
+        old = (NOW - timedelta(hours=25)).isoformat()
+        projected = project_local_mining_evidence([
+            {"event": "FSDJump", "timestamp": old, "StarSystem": "Mine",
+             "StarPos": [0, 0, 0], "ControllingPower": "Aisling Duval",
+             "PowerplayState": "Stronghold", "Powers": ["Aisling Duval"]},
+            {"event": "Scan", "timestamp": NOW.isoformat(), "BodyName": "Mine A",
+             "Rings": [{"Name": "Mine A Ring", "RingClass": "eRingClass_Metalic"}]},
+        ])["candidates"][0]
+        self.assertEqual(projected["observedAt"], NOW.isoformat())
+        self.assertEqual(projected["powerplayObservedAt"], old)
+        source = _candidate_power_fact(projected, "Aisling Duval", _powerplay_index([]))
+        self.assertEqual(source["controlObservedAt"], old)
+
+    def test_spansh_quote_and_ring_times_cannot_refresh_system_control(self):
+        old = (NOW - timedelta(hours=25)).isoformat()
+        projected = project_spansh_mining_candidates({"system": {
+            "name": "Mine", "date": old, "coords": {"x": 0, "y": 0, "z": 0},
+            "controllingPower": "Aisling Duval", "powerState": "Stronghold",
+            "powers": ["Aisling Duval"], "bodies": [{"name": "Mine A",
+                "updateTime": NOW.isoformat(), "rings": [{"name": "Mine A Ring"}]}],
+            "stations": [{"name": "Port", "controllingPower": "Yuri Grom",
+                "updateTime": NOW.isoformat(), "commodities": [{"name": "Platinum",
+                    "sellPrice": 200000, "demand": 10000}]}],
+        }})[0]
+        sale = projected["markets"][0]
+        self.assertEqual(sale["observedAt"], NOW.isoformat())
+        self.assertEqual(sale["powerplayObservedAt"], old)
+        self.assertEqual(sale["controllingPower"], "Aisling Duval")
+        row = plan_mining_routes([projected], "Platinum", OPTIMIZE_MERITS,
+            power="Aisling Duval", power_goal="REINFORCE", now=NOW)[0]
+        self.assertEqual(row["powerplayEvidenceState"], "STALE")
+
+    def test_legacy_metadata_without_powerplay_time_remains_unknown(self):
+        legacy = {**market(), "ring": "Mine A Ring", "controllingPower": "Aisling Duval",
+                  "powerState": "Stronghold", "powers": ["Aisling Duval"]}
+        empty = _powerplay_index([])
+        for join in (_candidate_power_fact, _market_power_fact):
+            joined = join(legacy, "Aisling Duval", empty)
+            self.assertIsNone(joined["controlObservedAt"])
+        status, score, _ = _merit_status(legacy, legacy, "Aisling Duval",
+                                          "REINFORCE", "ANY", empty, now=NOW)
+        self.assertIsNone(score)
+        self.assertIn("TIME MISSING", status)
+        current = _powerplay_index([fact(controllingPower="Yuri Grom")])
+        for join in (_candidate_power_fact, _market_power_fact):
+            self.assertEqual(join(legacy, "Aisling Duval", current)["controllingPower"], "Yuri Grom")
+
+    def test_metadata_unoccupied_clears_control_and_participants(self):
+        index = _powerplay_index([fact(observedAt=(NOW - timedelta(hours=1)).isoformat())])
+        metadata = {"system": "Mine", "controllingPower": "", "powerState": "Unoccupied",
+                    "powers": [], "powersKnown": True, "powerplayObservedAt": NOW.isoformat()}
+        for join in (_candidate_power_fact, _market_power_fact):
+            joined = join(metadata, "Aisling Duval", index)
+            self.assertEqual(joined["controllingPower"], "")
+            self.assertEqual(joined["controlPowerState"], "Unoccupied")
+            self.assertEqual(joined["powers"], [])
+            self.assertTrue(joined["powersKnown"])
+
+    def test_new_control_metadata_is_not_hidden_by_newer_presence(self):
+        index = _powerplay_index([
+            fact(observedAt=(NOW - timedelta(hours=25)).isoformat()),
+            fact(controllingPower="", source="EDSM daily PowerPlay catalog",
+                 powerRelationship="PRESENCE", controlKnown=False),
+        ])
+        metadata = {"system": "Mine", "controllingPower": "Yuri Grom", "powerState": "Fortified",
+                    "powers": ["Yuri Grom"],
+                    "powerplayObservedAt": (NOW - timedelta(hours=1)).isoformat()}
+        for join in (_candidate_power_fact, _market_power_fact):
+            self.assertEqual(join(metadata, "Aisling Duval", index)["controllingPower"], "Yuri Grom")
+
     def test_explicit_unoccupied_without_powers_survives_all_client_stages(self):
         payload = {"event": "FSDJump", "timestamp": NOW.isoformat(),
                    "StarSystem": "Sale", "StarPos": [15, 0, 0],

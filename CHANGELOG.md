@@ -1,5 +1,20 @@
 # Changelog
 
+## 1.0.6 — 2026-10-09
+
+- Keep Powerplay metadata as one source snapshot with its own timestamp when
+  merging ring observations. A newer ring confirmation or commodity quote cannot
+  renew older control/state/participant evidence. Retained legacy metadata without
+  a Powerplay timestamp remains unknown and cannot override current server facts.
+- Preserve the original Location/FSDJump/CarrierJump timestamp in local ring
+  projections. Spansh ring/market projections use their system snapshot time for
+  system control rather than body, ring signal, station or commodity updates.
+- New explicit unoccupied metadata clears older controller and participant facts.
+  New control metadata can supersede older control even after a newer presence
+  observation; complete snapshots are not assembled from unrelated fields.
+- Includes the 1.0.5 Powerplay transport, freshness and coverage fixes, with
+  catalog server 0.9.1. Profile storage and historical downloads are retained.
+
 ## 1.0.5 — 2026-10-09
 
 - Preserve explicit `Unoccupied` Journal/EDDN snapshots even without participating

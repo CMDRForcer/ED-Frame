@@ -1871,6 +1871,8 @@ class MiningFinderProjectionTests(unittest.TestCase):
             "distanceToArrivalLs": 412.5,
             "controllingPower": "Aisling Duval",
             "powerState": "Reinforcement",
+            "powerplayObservedAt": payload["system"].get("date", ""),
+            "powersKnown": False,
             "powers": [],
             "systemState": "",
             "source": "Spansh system dump market",

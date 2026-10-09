@@ -165,6 +165,12 @@ def _market_rows(
             "landingPadSize": str(row.get("landingPadSize") or ""),
             "controllingPower": str(row.get("controllingPower") or ""),
             "powerState": str(row.get("powerState") or ""),
+            "powerplayObservedAt": row.get("powerplayObservedAt") if (
+                _system_key(row.get("sellSystem") or row.get("system"))
+                == _system_key(row.get("system"))
+            ) else None,
+            "powers": row.get("powers"),
+            "powersKnown": row.get("powersKnown", isinstance(row.get("powers"), list)),
             "distanceToArrivalLs": row.get("stationDistanceLs"),
         })
     return result
@@ -862,72 +868,61 @@ def _indexed_power_fact(
     return fact
 
 
+def _metadata_power_fact(
+    metadata: dict[str, Any], power: str,
+    catalog: dict[str, dict[Any, dict[str, Any]]],
+) -> dict[str, Any]:
+    """Join ring/market metadata only at its own Powerplay observation time."""
+    fact = _indexed_power_fact(metadata.get("system"), power, catalog)
+    controlling = str(metadata.get("controllingPower") or "").strip()
+    state = str(metadata.get("powerState") or "").strip()
+    unoccupied = state.casefold() == "unoccupied" and not controlling
+    if unoccupied:
+        state = "Unoccupied"
+    indexed_at = _timestamp(
+        fact.get("controlObservedAt") or fact.get("controlStateObservedAt")
+        or fact.get("powerStateObservedAt")
+    )
+    observed_at = metadata.get("powerplayObservedAt")
+    metadata_at = _timestamp(observed_at)
+    use_metadata = indexed_at is None or (
+        metadata_at is not None and metadata_at >= indexed_at
+    )
+    if use_metadata and (controlling or unoccupied):
+        fact["controllingPower"] = controlling
+        fact["controlKnown"] = bool(controlling)
+        fact["controlObservedAt"] = observed_at
+        fact["controlPowerState"] = state
+        fact["controlStateObservedAt"] = observed_at
+        # A new system snapshot replaces participant membership, including an
+        # explicitly empty list or an unknown list; do not retain old opponents.
+        powers = metadata.get("powers")
+        fact["powers"] = list(powers) if isinstance(powers, (list, tuple)) else []
+        fact["powersKnown"] = metadata.get(
+            "powersKnown", isinstance(powers, (list, tuple))
+        )
+        fact["powersObservedAt"] = observed_at
+    if state and use_metadata:
+        fact["powerState"] = state
+        fact["powerStateObservedAt"] = observed_at
+    if metadata.get("coordinates"):
+        fact["coordinates"] = metadata.get("coordinates")
+    fact.setdefault("system", str(metadata.get("system") or ""))
+    return fact
+
+
 def _candidate_power_fact(
     candidate: dict[str, Any], power: str,
     catalog: dict[str, dict[Any, dict[str, Any]]],
 ) -> dict[str, Any]:
-    fact = _indexed_power_fact(candidate.get("system"), power, catalog)
-    controlling = str(candidate.get("controllingPower") or "").strip()
-    state = str(candidate.get("powerState") or "").strip()
-    indexed_at = _timestamp(fact.get("observedAt"))
-    candidate_at = _timestamp(candidate.get("powerplayObservedAt") or candidate.get("observedAt"))
-    use_metadata = indexed_at is None or (candidate_at is not None and candidate_at >= indexed_at)
-    if controlling and use_metadata:
-        fact["controllingPower"] = controlling
-        fact["controlKnown"] = True
-        fact["controlObservedAt"] = (candidate.get("powerplayObservedAt")
-                                     or candidate.get("observedAt"))
-    if state and use_metadata:
-        fact["powerState"] = state
-        fact["powerStateObservedAt"] = (candidate.get("powerplayObservedAt")
-                                        or candidate.get("observedAt"))
-        if controlling:
-            fact["controlPowerState"] = state
-            fact["controlStateObservedAt"] = fact["powerStateObservedAt"]
-    if candidate.get("coordinates"):
-        fact["coordinates"] = candidate.get("coordinates")
-    candidate_powers = candidate.get("powers")
-    if use_metadata and isinstance(candidate_powers, (list, tuple)) and candidate_powers:
-        fact["powers"] = list(candidate_powers)
-        fact["powersKnown"] = candidate.get("powersKnown", True)
-        fact["powersObservedAt"] = (candidate.get("powerplayObservedAt")
-                                    or candidate.get("observedAt"))
-    fact.setdefault("system", str(candidate.get("system") or ""))
-    return fact
+    return _metadata_power_fact(candidate, power, catalog)
 
 
 def _market_power_fact(
     market: dict[str, Any], power: str,
     catalog: dict[str, dict[Any, dict[str, Any]]],
 ) -> dict[str, Any]:
-    fact = _indexed_power_fact(market.get("system"), power, catalog)
-    controlling = str(market.get("controllingPower") or "").strip()
-    state = str(market.get("powerState") or "").strip()
-    indexed_at = _timestamp(fact.get("observedAt"))
-    market_at = _timestamp(market.get("powerplayObservedAt") or market.get("observedAt"))
-    use_metadata = indexed_at is None or (market_at is not None and market_at >= indexed_at)
-    if controlling and use_metadata:
-        fact["controllingPower"] = controlling
-        fact["controlKnown"] = True
-        fact["controlObservedAt"] = (market.get("powerplayObservedAt")
-                                     or market.get("observedAt"))
-    if state and use_metadata:
-        fact["powerState"] = state
-        fact["powerStateObservedAt"] = (market.get("powerplayObservedAt")
-                                        or market.get("observedAt"))
-        if controlling:
-            fact["controlPowerState"] = state
-            fact["controlStateObservedAt"] = fact["powerStateObservedAt"]
-    if market.get("coordinates"):
-        fact["coordinates"] = market.get("coordinates")
-    market_powers = market.get("powers")
-    if use_metadata and isinstance(market_powers, (list, tuple)) and market_powers:
-        fact["powers"] = list(market_powers)
-        fact["powersKnown"] = market.get("powersKnown", True)
-        fact["powersObservedAt"] = (market.get("powerplayObservedAt")
-                                    or market.get("observedAt"))
-    fact.setdefault("system", str(market.get("system") or ""))
-    return fact
+    return _metadata_power_fact(market, power, catalog)
 
 
 def _route_system_state(

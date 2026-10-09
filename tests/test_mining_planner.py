@@ -30,6 +30,7 @@ def candidate(system, distance, target="HOTSPOT", **extra):
         "reserveLevel": "PristineResources",
         "evidence": "LIVE_REPORTED",
         "observedAt": "2026-09-30T11:00:00Z",
+        "powerplayObservedAt": extra.get("observedAt", "2026-09-30T11:00:00Z"),
         **extra,
     }
 

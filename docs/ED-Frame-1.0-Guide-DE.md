@@ -1,6 +1,6 @@
 # ED-Frame 1.0 — Einstieg und Funktionen
 
-Aktualisiert für das Powerplay-Wartungsupdate 1.0.5.
+Aktualisiert für das Powerplay-Wartungsupdate 1.0.6.
 
 ED-Frame ist eine kostenlose Windows-Begleitapp für Elite Dangerous mit offenem Quellcode. Dein lokales Journal liefert die Commander-Daten. Unser eigener Community-Server ergänzt sie um gemeinsam gesammelte öffentliche Beobachtungen der Galaxie.
 

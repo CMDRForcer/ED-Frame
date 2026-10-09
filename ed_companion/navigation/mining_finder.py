@@ -639,8 +639,7 @@ def _merge_mining_group(observations):
     fill_fields = (
         "system", "systemAddress", "coordinates", "distanceLy", "body",
         "bodyId", "ring", "ringType", "reserveLevel", "distanceToArrivalLs",
-        "miningSiteType", "controllingPower", "powerState", "powers",
-        "systemState",
+        "miningSiteType", "systemState",
     )
     observations.sort(key=lambda row: (
         not row.get("stale"),
@@ -658,6 +657,29 @@ def _merge_mining_group(observations):
             if not _missing(value):
                 strongest[field] = value
                 break
+
+    # Powerplay is a separate system observation, not ring evidence. Keep one
+    # complete snapshot and its own time rather than mixing individual fields
+    # or borrowing the newest ring/market timestamp for legacy metadata.
+    powerplay_sources = [source for source in observations if (
+        _text(source.get("controllingPower"))
+        or _text(source.get("powerState")) or source.get("powers")
+    )]
+    powerplay_fields = (
+        "controllingPower", "powerState", "powers", "powersKnown",
+        "powerplayObservedAt",
+    )
+    for field in powerplay_fields:
+        strongest.pop(field, None)
+    if powerplay_sources:
+        snapshot = max(powerplay_sources, key=lambda source: (
+            _timestamp(source.get("powerplayObservedAt"))
+            or datetime.min.replace(tzinfo=timezone.utc)
+        ))
+        for field in powerplay_fields:
+            if field in snapshot:
+                strongest[field] = snapshot[field]
+        strongest["powerplayObservedAt"] = snapshot.get("powerplayObservedAt")
 
     hotspots: dict[str, dict[str, Any]] = {}
     for source in observations:
@@ -920,6 +942,8 @@ def project_local_mining_evidence(
     controlling_power = ""
     powerplay_state = ""
     powers: list[str] = []
+    powers_known = False
+    powerplay_observed_at = ""
 
     def ensure_ring(
         ring_name: str, body_id: Any, observed_at: str, source: str,
@@ -942,6 +966,8 @@ def project_local_mining_evidence(
                 "controllingPower": controlling_power,
                 "powerState": powerplay_state,
                 "powers": list(powers),
+                "powersKnown": powers_known,
+                "powerplayObservedAt": powerplay_observed_at,
                 "hotspots": [],
                 "evidence": "LOCAL_CONFIRMED",
                 "observedAt": observed_at,
@@ -996,8 +1022,10 @@ def project_local_mining_evidence(
             star_pos = _coordinates(event.get("StarPos")) or star_pos
             controlling_power = _text(event.get("ControllingPower"))
             powerplay_state = _text(event.get("PowerplayState"))
+            powers_known = isinstance(event.get("Powers"), list)
+            powerplay_observed_at = _text(event.get("timestamp"))
             powers = [
-                _text(value) for value in event.get("Powers", []) or []
+                _text(value) for value in (event.get("Powers") if powers_known else [])
                 if _text(value)
             ]
             body_type = _text(event.get("BodyType")).casefold()
@@ -1281,13 +1309,12 @@ def _spansh_mining_markets(system: dict[str, Any]) -> list[dict[str, Any]]:
                 ),
                 "landingPadSize": landing_pad_size,
                 "distanceToArrivalLs": station.get("distanceToArrival"),
-                "controllingPower": _text(
-                    station.get("controllingPower")
-                    or system.get("controllingPower")
-                ),
-                "powerState": _text(
-                    station.get("powerState") or system.get("powerState")
-                ),
+                # System control belongs to the system snapshot; station and
+                # commodity update times describe different observations.
+                "controllingPower": _text(system.get("controllingPower")),
+                "powerState": _text(system.get("powerState")),
+                "powerplayObservedAt": _text(system.get("date")),
+                "powersKnown": isinstance(system.get("powers"), list),
                 "powers": [
                     _text(item) for item in system.get("powers") or []
                     if _text(item)
@@ -1347,6 +1374,8 @@ def project_spansh_mining_candidates(
                 "markets": [dict(row) for row in markets],
                 "controllingPower": _text(system.get("controllingPower")),
                 "powerState": _text(system.get("powerState")),
+                "powerplayObservedAt": _text(system.get("date")),
+                "powersKnown": isinstance(system.get("powers"), list),
                 "powers": [
                     _text(item) for item in system.get("powers") or []
                     if _text(item)

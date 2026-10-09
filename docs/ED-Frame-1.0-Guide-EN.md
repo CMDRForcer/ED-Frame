@@ -1,6 +1,6 @@
 # ED-Frame 1.0 — getting started and features
 
-Updated for the 1.0.5 Powerplay maintenance release.
+Updated for the 1.0.6 Powerplay maintenance release.
 
 ED-Frame is a free, open-source Windows companion for Elite Dangerous. Your local Journal drives your Commander workspace; ED-Frame's own community server supplements it with shared public galaxy observations.
 

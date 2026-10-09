@@ -14,7 +14,7 @@ ED-Frame is a free, open-source Windows companion for [Elite Dangerous](https://
 
 [**Download the latest ED-Frame 1.0 update**](https://github.com/CMDRForcer/ED-Frame/releases/latest) · [Website](https://cmdrforcer.github.io/) · [English guide](docs/ED-Frame-1.0-Guide-EN.md) · [Deutsche Anleitung](docs/ED-Frame-1.0-Guide-DE.md) · [Changelog](CHANGELOG.md) · [Report a bug](https://github.com/CMDRForcer/ED-Frame/issues)
 
-**1.0.5 Powerplay update:** preserve explicit unoccupied systems for Acquire, distinguish missing and outdated evidence, and verify control/state at their original observation times. Coverage still depends on actual public observations. Historical 1.0.1–1.0.4 tags were already occupied; 1.0.5 is the first maintenance update after the new 1.0 release.
+**1.0.6 Powerplay update:** preserve explicit unoccupied systems for Acquire, distinguish missing and outdated evidence, and keep Powerplay observation times separate from ring and market updates. Coverage still depends on actual public observations. Historical 1.0.1–1.0.4 tags were already occupied; 1.0.5 started the maintenance updates after the new 1.0 release.
 
 **Release numbering:** 1.0 starts the new public ED-Frame release line and succeeds the earlier EDEC/ED-Frame versions, including 1.5.43. Those older tags and downloads remain available as outdated historical releases. Use the current release link rather than choosing the largest historical version number.
 
