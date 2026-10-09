@@ -2,21 +2,27 @@ from __future__ import annotations
 
 import base64
 import binascii
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, ExitStack
 from datetime import datetime, timezone
 import json
+import os
 import threading
 import time
 from typing import Annotated
 
 from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.responses import ORJSONResponse
+from psycopg.errors import UndefinedTable, QueryCanceled
 from ed_companion.navigation.mining_commodities import MINING_COMMODITIES, mining_commodity_id
 
 from . import __version__
 from .mining_metadata import enrich_ring_metadata
 from .mining_revision import mining_revision, static_revision
 from .mining_region import regional_page_limit, regional_box_clause
+from .mining_pages import (
+    configured_pages, decode_cursor, FrozenUnavailable, FrozenExpired,
+    MAX_ROWS as MINING_FROZEN_MAX_ROWS, CHUNK_ROWS as MINING_FROZEN_CHUNK_ROWS,
+)
 from .mining_overlaps import (
     attach_overlap_reports, catalog as overlap_catalog, overlap_site_identities,
     community_reference_candidates,
@@ -34,6 +40,20 @@ from .projection import (
     project_yield_observations,
     project_state_signals,
 )
+
+
+# Explicit operator gate: install/backfill transactional markers before
+# enabling. Ordinary deployments retain the legacy regional path by default.
+MINING_SNAPSHOT_PROTOCOL_ENABLED = os.environ.get("EDFRAME_MINING_SNAPSHOT_PROTOCOL", "0") == "1"
+
+
+def _snapshot_revision(conn, query):
+    try:
+        return mining_revision(conn, query)
+    except (ValueError, UndefinedTable) as exc:
+        # Never fall back to expensive content proofs or accept an unverified
+        # cache. The client can use fresh legacy pages until installation.
+        raise HTTPException(status_code=503, detail="Mining revision markers unavailable") from exc
 
 
 def _now() -> str:
@@ -1363,6 +1383,131 @@ def search_mining_powerplay(
     }
 
 
+def _mining_sites_sql(clauses):
+    # Both paths use exactly the same selection, projection and ordering.
+    return f"""
+        WITH selected_sites AS MATERIALIZED (
+            SELECT * FROM mining_sites ms WHERE {' AND '.join(clauses)}
+            ORDER BY ms.observed_at DESC, ms.identity DESC LIMIT %s OFFSET %s
+        )
+        SELECT ms.identity AS "siteIdentity", ms.system_address AS "systemAddress",
+               ms.system_name AS system, ms.x, ms.y, ms.z,
+               ms.body_id AS "bodyId", ms.body_name AS body,
+               ms.ring_name AS ring, ms.ring_type AS "ringType",
+               ms.reserve_level AS "reserveLevel",
+               ms.distance_to_arrival_ls AS "distanceToArrivalLs",
+               ms.hotspots, ms.evidence, ms.source,
+               ms.observed_at AS "observedAt", ms.received_at AS "receivedAt",
+               COALESCE(yield_data.sample_count, 0) AS "prospectorSampleCount",
+               COALESCE(yield_data.stats, '[]'::jsonb) AS "yieldStats"
+        FROM selected_sites ms
+        LEFT JOIN LATERAL (
+            SELECT (SELECT COUNT(*) FROM mining_yield_samples counted
+                    WHERE counted.site_identity = ms.identity) AS sample_count,
+                   (SELECT jsonb_agg(jsonb_build_object(
+                        'commodity', grouped.commodity, 'prospectorHits', grouped.hits,
+                        'proportionSamples', grouped.hits, 'proportionTotal', grouped.total,
+                        'averageProportion', grouped.average, 'maxProportion', grouped.maximum,
+                        'lastObservedAt', grouped.last_observed_at) ORDER BY grouped.commodity)
+                    FROM (SELECT ym.commodity, COUNT(*) AS hits, SUM(ym.proportion) AS total,
+                                 AVG(ym.proportion) AS average, MAX(ym.proportion) AS maximum,
+                                 MAX(material_sample.observed_at) AS last_observed_at
+                          FROM mining_yield_materials ym
+                          JOIN mining_yield_samples material_sample
+                            ON material_sample.sample_id = ym.sample_id
+                          WHERE material_sample.site_identity = ms.identity
+                          GROUP BY ym.commodity) grouped) AS stats
+        ) yield_data ON TRUE
+        ORDER BY ms.observed_at DESC, ms.identity DESC
+    """
+
+
+def _freeze_sites_search(query, clauses, values, *, ring_types, page_limit, known_revision,
+                         snapshot_revision, snapshot_static, cursor, offset):
+    pages = configured_pages()
+    projection = static_revision()
+    try:
+        if snapshot_revision:
+            # Continuations use ONLY the already published immutable projection,
+            # not fresh counters/SQL. A rolling code deployment still fences it.
+            if snapshot_static != projection:
+                raise FrozenExpired("Mining projection changed; restart paging")
+            token, cursor_offset = decode_cursor(cursor)
+            if cursor_offset != offset:
+                raise FrozenExpired("Mining cursor/offset mismatch")
+            return {"generatedAt": _now(), **pages.page(token, query=query,
+                    revision=snapshot_revision, projection=projection, offset=offset, limit=page_limit)}
+        with ExitStack() as cleanup:
+            with connection() as conn:
+                conn.execute("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ, READ ONLY")
+                revision = _snapshot_revision(conn, query)
+                if known_revision == revision:
+                    return {"generatedAt": _now(), "snapshotProtocol": 1,
+                            "revision": revision, "notModified": True,
+                            "snapshotStatic": projection, "snapshotComplete": True,
+                            "results": [], "communityReferences": [], "hasMore": False,
+                            "nextCursor": None, "nextOffset": None}
+                token = pages.find(query, revision, projection)
+                if token:
+                    return {"generatedAt": _now(), **pages.page(token, query=query,
+                            revision=revision, projection=projection, offset=0, limit=page_limit)}
+                build = cleanup.enter_context(pages.build(query, revision, projection))
+                conn.execute("SELECT set_config('statement_timeout', %s, true)",
+                             (str(build.remaining_ms()),))
+                # Fetch the whole bounded search, not an optimistic fraction of
+                # a server cursor. Release the PG cursor/transaction before any
+                # snapshot is published and before the HTTP response is sent.
+                conn.execute("SET LOCAL cursor_tuple_fraction = 1.0")
+                if query["commodity"] and query["include_community_overlaps"]:
+                    identities = overlap_site_identities(conn, query["commodity"])
+                    if identities:
+                        clauses[1] = '(' + clauses[1] + ' OR ms.identity = ANY(%s))'
+                        values.insert(5 if ring_types else 3, identities)
+                values[-2:] = [MINING_FROZEN_MAX_ROWS + 1, 0]
+                first_rows = []
+                truncated = False
+                with conn.cursor(name="mining_frozen_pages") as stream:
+                    stream.execute(_mining_sites_sql(clauses), values)
+                    while True:
+                        conn.execute("SELECT set_config('statement_timeout', %s, true)",
+                                     (str(build.remaining_ms()),))
+                        batch = stream.fetchmany(MINING_FROZEN_CHUNK_ROWS)
+                        if not batch:
+                            break
+                        remaining = MINING_FROZEN_MAX_ROWS - build.rows
+                        if len(batch) > remaining:
+                            truncated = True
+                            batch = batch[:remaining]
+                        if batch:
+                            conn.execute("SELECT set_config('statement_timeout', %s, true)",
+                                         (str(build.remaining_ms()),))
+                            batch = attach_overlap_reports(enrich_ring_metadata(conn, batch))
+                            first_rows.extend(batch[:max(0, query["limit"] - len(first_rows))])
+                            pages.append(build, batch)
+                        if truncated:
+                            break
+                references = []
+                if query["include_community_overlaps"]:
+                    conn.execute("SELECT set_config('statement_timeout', %s, true)",
+                                 (str(build.remaining_ms()),))
+                    references = community_reference_candidates(conn, first_rows,
+                        commodity=query["commodity"] or None, system=query["system"] or None,
+                        origin=tuple(query[k] for k in ("x", "y", "z"))
+                            if all(query[k] is not None for k in ("x", "y", "z")) else None,
+                        radius=query["max_distance"], limit=query["limit"])
+                # Report the actual RR transaction time, never re-date sources.
+                conn.execute("SELECT set_config('statement_timeout', %s, true)",
+                             (str(build.remaining_ms()),))
+                snapshot_at = conn.execute("SELECT transaction_timestamp() AS stamp").fetchone()["stamp"]
+            pages.publish(build, references=references, truncated=truncated, snapshot_at=snapshot_at)
+            return {"generatedAt": _now(), **pages.page(build.token, query=query,
+                    revision=revision, projection=projection, offset=0, limit=page_limit)}
+    except FrozenExpired as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except (FrozenUnavailable, QueryCanceled) as exc:
+        raise HTTPException(status_code=503, detail="Frozen mining search temporarily unavailable") from exc
+
+
 @app.get("/v1/sites/search")
 def search_sites(
     commodity: Annotated[str | None, Query(max_length=80)] = None,
@@ -1383,15 +1528,18 @@ def search_sites(
     snapshot_static: Annotated[str | None, Query(max_length=64)] = None,
     regional_page_size: Annotated[int | None, Query(ge=1, le=5000)] = None,
 ) -> dict:
+    if not MINING_SNAPSHOT_PROTOCOL_ENABLED:
+        snapshot_protocol = known_revision = snapshot_revision = snapshot_static = None
     reference_page_limit = limit
     limit = regional_page_limit(limit, regional_page_size, regional=(not system and all(
         value is not None for value in (x, y, z, max_distance))), maximum=5000)
-    revision = None
     revision_query = {
         "commodity": (commodity or "").strip().casefold(),
-        "system": (system or "").strip().casefold(),
+        "system": (system or "").strip(),
         "max_age_days": max_age_days, "x": x, "y": y, "z": z,
-        "max_distance": max_distance, "limit": limit,
+        # References depend on the original requested limit. Page size may
+        # shrink on the last bounded client page without changing the query.
+        "max_distance": max_distance, "limit": reference_page_limit,
         "include_community_overlaps": include_community_overlaps,
         "include_ring_candidates": include_ring_candidates,
     }
@@ -1401,6 +1549,8 @@ def search_sites(
     if snapshot_protocol and ((known_revision and (offset or cursor or snapshot_revision))
                               or ((offset or cursor) and not snapshot_revision)):
         raise HTTPException(status_code=400, detail="Invalid snapshot continuation")
+    if snapshot_protocol and snapshot_revision and not cursor:
+        raise HTTPException(status_code=409, detail="Frozen mining cursor required; restart paging")
     clauses = ["ms.observed_at >= NOW() - (%s * INTERVAL '1 day')"]
     values: list[object] = [max_age_days]
     ring_types = []
@@ -1441,7 +1591,7 @@ def search_sites(
         box_clause, box_values = regional_box_clause(x, y, z, max_distance, alias="ms")
         clauses.append(box_clause)
         values.extend(box_values)
-    if cursor:
+    if cursor and not snapshot_protocol:
         cursor_at, cursor_kind, cursor_identity = _decode_state_cursor(cursor)
         if cursor_kind != "mining-sites" or not cursor_identity:
             raise HTTPException(status_code=400, detail="Invalid mining sites cursor")
@@ -1450,88 +1600,17 @@ def search_sites(
     paginated = offset is not None or bool(cursor)
     values.append(limit + 1 if paginated else limit)
     values.append(0 if cursor else offset or 0)
+    if snapshot_protocol:
+        return _freeze_sites_search(revision_query, clauses, values, ring_types=ring_types,
+            page_limit=limit, known_revision=known_revision, snapshot_revision=snapshot_revision,
+            snapshot_static=snapshot_static, cursor=cursor, offset=offset)
     with connection() as conn:
-        if snapshot_protocol:
-            # First/last content proofs include tuple versions: even a change
-            # followed by a revert invalidates the proof. Intermediate pages
-            # need no repeated large digest; they remain provisional until the
-            # final page validates the entire domain. Every page checks code/
-            # reference versions, including across rolling API deployments.
-            conn.execute("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ, READ ONLY")
-            if snapshot_revision:
-                if snapshot_static != static_revision():
-                    raise HTTPException(status_code=409, detail="Mining projection changed; restart paging")
-                revision = snapshot_revision
-            else:
-                revision = mining_revision(conn, revision_query)
-            if known_revision == revision:
-                return {"generatedAt": _now(), "snapshotProtocol": 1,
-                        "revision": revision, "notModified": True,
-                        "snapshotStatic": static_revision(), "snapshotComplete": True,
-                        "results": [], "communityReferences": [], "hasMore": False,
-                        "nextCursor": None, "nextOffset": None}
         if commodity and include_community_overlaps:
             identities = overlap_site_identities(conn, commodity.strip().casefold())
             if identities:
                 clauses[1] = '(' + clauses[1] + ' OR ms.identity = ANY(%s))'
                 values.insert(5 if ring_types else 3, identities)
-        rows = conn.execute(
-            f"""
-            WITH selected_sites AS MATERIALIZED (
-                SELECT * FROM mining_sites ms
-                WHERE {' AND '.join(clauses)}
-                ORDER BY ms.observed_at DESC, ms.identity DESC
-                LIMIT %s OFFSET %s
-            )
-            SELECT ms.identity AS "siteIdentity", ms.system_address AS "systemAddress",
-                   ms.system_name AS system, ms.x, ms.y, ms.z,
-                   ms.body_id AS "bodyId", ms.body_name AS body,
-                   ms.ring_name AS ring, ms.ring_type AS "ringType",
-                   ms.reserve_level AS "reserveLevel",
-                   ms.distance_to_arrival_ls AS "distanceToArrivalLs",
-                   ms.hotspots, ms.evidence, ms.source,
-                   ms.observed_at AS "observedAt",
-                   ms.received_at AS "receivedAt",
-                   COALESCE(yield_data.sample_count, 0)
-                       AS "prospectorSampleCount",
-                   COALESCE(yield_data.stats, '[]'::jsonb) AS "yieldStats"
-            FROM selected_sites ms
-            LEFT JOIN LATERAL (
-                SELECT (
-                           SELECT COUNT(*)
-                           FROM mining_yield_samples counted
-                           WHERE counted.site_identity = ms.identity
-                       ) AS sample_count,
-                       (
-                         SELECT jsonb_agg(
-                           jsonb_build_object(
-                               'commodity', grouped.commodity,
-                               'prospectorHits', grouped.hits,
-                               'proportionSamples', grouped.hits,
-                               'proportionTotal', grouped.total,
-                               'averageProportion', grouped.average,
-                               'maxProportion', grouped.maximum,
-                               'lastObservedAt', grouped.last_observed_at
-                           ) ORDER BY grouped.commodity
-                         )
-                         FROM (
-                    SELECT ym.commodity, COUNT(*) AS hits,
-                           SUM(ym.proportion) AS total,
-                           AVG(ym.proportion) AS average,
-                           MAX(ym.proportion) AS maximum,
-                           MAX(material_sample.observed_at) AS last_observed_at
-                    FROM mining_yield_materials ym
-                    JOIN mining_yield_samples material_sample
-                      ON material_sample.sample_id = ym.sample_id
-                    WHERE material_sample.site_identity = ms.identity
-                    GROUP BY ym.commodity
-                         ) grouped
-                       ) AS stats
-            ) yield_data ON TRUE
-            ORDER BY ms.observed_at DESC, ms.identity DESC
-            """,
-            values,
-        ).fetchall()
+        rows = conn.execute(_mining_sites_sql(clauses), values).fetchall()
         has_more = paginated and len(rows) > limit
         next_cursor = None
         if has_more:
@@ -1550,13 +1629,7 @@ def search_sites(
             # behind a full page of ordinary observations. Keep the total bounded.
             if not paginated:
                 rows = references + rows[:max(0, limit - len(references))]
-        if snapshot_protocol and snapshot_revision and not has_more:
-            if mining_revision(conn, revision_query) != snapshot_revision:
-                raise HTTPException(status_code=409, detail="Mining snapshot changed; restart paging")
-    return {**({"snapshotProtocol": 1, "revision": revision, "notModified": False}
-               if snapshot_protocol else {}), "generatedAt": _now(), "results": rows,
-            **({"snapshotStatic": static_revision(), "snapshotComplete": not has_more}
-               if snapshot_protocol else {}),
+    return {"generatedAt": _now(), "results": rows,
             "communityReferences": references if paginated else [],
             "hasMore": has_more,
             "nextCursor": next_cursor,

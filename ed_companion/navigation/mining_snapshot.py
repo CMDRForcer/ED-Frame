@@ -45,14 +45,30 @@ class MiningSnapshotStore:
         finally:
             conn.close()
 
-    def load(self, key):
+    def revision(self, key):
+        """Read only the small hint; rows must still validate before reuse.
+
+        A changed region never needs to allocate/decompress its old payload.
+        Missing/corrupt payloads after confirmation take the fresh paging path.
+        """
+        if not self.path.is_file():
+            return None
+        try:
+            with self._connect() as conn:
+                row = conn.execute("SELECT revision FROM snapshots WHERE key=?", (key,)).fetchone()
+            return row[0] if row and valid_revision(row[0]) else None
+        except (OSError, sqlite3.DatabaseError, ValueError, TypeError):
+            return None
+
+    def load(self, key, *, expected_revision=None):
         if not self.path.is_file():
             return None
         try:
             with self._connect() as conn:
                 row = conn.execute("SELECT revision, payload, checksum FROM snapshots WHERE key=?",
                                    (key,)).fetchone()
-            if not row or not valid_revision(row[0]) or len(row[1]) > MAX_STORED_BYTES:
+            if (not row or not valid_revision(row[0]) or len(row[1]) > MAX_STORED_BYTES
+                    or (expected_revision is not None and row[0] != expected_revision)):
                 return None
             decoder = zlib.decompressobj()
             raw = decoder.decompress(row[1], MAX_EXPANDED_BYTES + 1)

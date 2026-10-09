@@ -46,6 +46,9 @@ services:
       POSTGRES_DB: ${POSTGRES_DB}
       POSTGRES_USER: ${POSTGRES_USER}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      # Install transactional markers explicitly before approved activation.
+      EDFRAME_MINING_SNAPSHOT_PROTOCOL: ${EDFRAME_MINING_SNAPSHOT_PROTOCOL:-0}
+      EDFRAME_MINING_PAGES_PATH: ${EDFRAME_MINING_PAGES_PATH:-/tmp/edframe-mining-pages.sqlite3}
     depends_on:
       db:
         condition: service_healthy

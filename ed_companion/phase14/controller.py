@@ -687,6 +687,13 @@ class CockpitController(
         self._mining_save_sequence = 0
         self._mining_save_sequences = {}
         self._mining_catalog_load_token = 0
+        self._mining_catalog_loaded = False
+        self._mining_catalog_load_future = None
+        self._mining_catalog_load_retry_at = 0.0
+        self._mining_catalog_pending_search_refresh = False
+        self._mining_catalog_pending_status = ""
+        self._mining_catalog_reset_requested = False
+        self._mining_powerplay_refresh_deferred = False
         self._mining_rows_build_token = 0
         self._mining_rows_build_in_flight = False
         self._mining_rows_build_dirty = False
@@ -694,7 +701,6 @@ class CockpitController(
         self.miningRowsReady.connect(self._finish_mining_rows_build)
         self._async_mining_plan_enabled = True
         self.miningPlanReady.connect(self._finish_mining_plan)
-        self._start_mining_catalog_load()
         self._mining_sync_busy = False
         self._mining_sync_status = "Ready"
         self._active_mining_request = None
@@ -966,6 +972,8 @@ class CockpitController(
         QTimer.singleShot(5_000, self.refreshEdFrameCatalogStatus)
         QTimer.singleShot(20_000, self._schedule_mining_market_backup)
         self._ensure_eddn_listener()
+        if self._last_page == 12:
+            self._ensure_mining_catalog_loaded()
 
     def _start_initial_state_load(self):
         """Build the initial Journal state without blocking the Qt GUI thread."""
@@ -2714,6 +2722,7 @@ class CockpitController(
         self._last_mining_batch_monotonic = time.monotonic()
         self._profile_generation += 1
         self._mining_region_cache = None
+        self._mining_geometry_cache = None
         self._profile_sync_signature = None
         self._inara_scan_token = getattr(self, "_inara_scan_token", 0) + 1
         self._inara_scan_in_flight = False
@@ -2865,7 +2874,16 @@ class CockpitController(
             if isinstance(item, str)
         )
         if hasattr(self, "_network_threads_lock"):
-            self._start_mining_catalog_load()
+            self._mining_catalog_load_token += 1
+            self._mining_catalog_loaded = False
+            self._mining_catalog_load_future = None
+            self._mining_catalog_load_retry_at = 0.0
+            self._mining_catalog_pending_search_refresh = False
+            self._mining_catalog_pending_status = ""
+            self._mining_catalog_reset_requested = False
+            self._mining_powerplay_refresh_deferred = False
+            if self._last_page == 12:
+                self._ensure_mining_catalog_loaded()
         else:
             # Lightweight test/controller shells have no worker runtime.
             self._mining_catalog = self._read_local_json(
@@ -3129,6 +3147,8 @@ class CockpitController(
                 self._mining_find_cache_key = None
                 self._mining_find_cache = []
             self._last_page = page
+            if page == 12:
+                self._ensure_mining_catalog_loaded()
             timer = getattr(self, "uiConfigSaveTimer", None)
             if timer is not None:
                 timer.start()

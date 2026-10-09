@@ -99,6 +99,35 @@ class MiningSnapshotTests(unittest.TestCase):
         self.assertEqual(get.calls[1][1]["params"]["cursor"], "cursor")
         self.assertTrue(coverage["_snapshot"]["complete"])
 
+    def test_opaque_frozen_cursors_keep_one_projection_and_original_observation_times(self):
+        token = "f1." + "d" * 32
+        responses = [{**page([site("A")]), "hasMore": True, "snapshotComplete": False,
+                      "snapshotAt": "2026-10-09T12:00:00Z", "nextOffset": 5000,
+                      "nextCursor": token + ".5000"},
+                     {**page([site("B")]), "hasMore": True, "snapshotComplete": False,
+                      "snapshotAt": "2026-10-09T12:00:00Z", "nextOffset": 10000,
+                      "nextCursor": token + ".10000"}, page([site("C")])]
+        get = Getter(*responses)
+        coverage = {}
+        rows = self.fetch(get, diagnostics=coverage)
+        self.assertEqual([row["ring"] for row in rows], ["Test A Ring", "Test B Ring", "Test C Ring"])
+        self.assertEqual(get.calls[1][1]["params"]["cursor"], token + ".5000")
+        self.assertEqual(get.calls[2][1]["params"]["snapshot_revision"], REV)
+        self.assertTrue(coverage["_snapshot"]["complete"])
+        self.assertTrue(all(row["observedAt"] == STAMP and row["learnedAt"] == STAMP for row in rows))
+
+    def test_frozen_capacity_limit_does_not_save_a_complete_local_snapshot(self):
+        responses = [{**page([site(str(i))]), "hasMore": True, "snapshotComplete": False,
+                      "snapshotTruncated": True, "nextOffset": (i + 1) * 5000,
+                      "nextCursor": "f1." + "d" * 32 + "." + str((i + 1) * 5000)}
+                     for i in range(10)]
+        get = Getter(*responses)
+        coverage = {}
+        self.assertEqual(len(self.fetch(get, diagnostics=coverage)), 10)
+        self.assertEqual(len(get.calls), 10)
+        self.assertTrue(coverage["bounded"])
+        self.assertNotIn("_snapshot", coverage)
+
     def test_page_race_restarts_once_and_discards_mixed_partial_records(self):
         first = {**page([site("Old")]), "hasMore": True, "nextOffset": 1000}
         for changed in (409, page([site("Bad")], NEW), {"results": [], "hasMore": False}):
@@ -172,7 +201,9 @@ class MiningSnapshotTests(unittest.TestCase):
                 conn.execute("UPDATE snapshots SET checksum='corrupt'")
             get = Getter(page([site()], NEW))
             self.fetch(get, snapshot_store=store)
-            self.assertNotIn("known_revision", get.calls[0][1]["params"])
+            # The small header is only a hint. A changed full response never
+            # uses the corrupt cached payload and needs no pre-HTTP expansion.
+            self.assertEqual(get.calls[0][1]["params"]["known_revision"], REV)
             store.save(snapshot)
             store.reset()
             self.assertIsNone(store.load(snapshot["key"]))
@@ -184,6 +215,66 @@ class MiningSnapshotTests(unittest.TestCase):
             self.assertNotEqual(key, snapshot_key("https://server", {**base, **change}))
         self.assertNotEqual(key, snapshot_key("https://other", base))
         self.assertEqual(key, snapshot_key("https://server", {**base, "cursor": "c", "offset": 2}))
+
+    def test_changed_response_never_loads_or_decompresses_old_rows(self):
+        with TemporaryDirectory() as directory:
+            store = MiningSnapshotStore(Path(directory, "sites.sqlite3"))
+            coverage = {}
+            self.fetch(Getter(page([site()])), diagnostics=coverage)
+            store.save(coverage["_snapshot"])
+            with patch.object(store, "load", wraps=store.load) as load:
+                rows = self.fetch(Getter(page([site(proportion=40)], NEW)), snapshot_store=store)
+            load.assert_not_called()
+            self.assertEqual(rows[0]["yieldStats"][0]["averageProportion"], 40)
+
+    def test_corrupt_payload_after_unchanged_hint_retries_fresh_and_keeps_age(self):
+        with TemporaryDirectory() as directory:
+            store = MiningSnapshotStore(Path(directory, "sites.sqlite3"))
+            coverage = {}
+            original = self.fetch(Getter(page([site()])), diagnostics=coverage)
+            store.save(coverage["_snapshot"])
+            with closing(sqlite3.connect(store.path)) as conn, conn:
+                conn.execute("UPDATE snapshots SET checksum='bad'")
+            get = Getter({**page(), "notModified": True}, page([site()], NEW))
+            checked = {}
+            rows = self.fetch(get, snapshot_store=store, diagnostics=checked)
+            self.assertEqual(rows, original)
+            self.assertEqual(len(get.calls), 2)
+            self.assertNotIn("known_revision", get.calls[1][1]["params"])
+            self.assertEqual(get.calls[1][1]["params"]["snapshot_protocol"], 1)
+            self.assertNotIn("notModified", checked)
+            store.save(checked["_snapshot"])
+            self.assertEqual(store.revision(checked["_snapshot"]["key"]), NEW)
+
+    def test_replaced_cache_during_request_cannot_return_different_revision_rows(self):
+        with TemporaryDirectory() as directory:
+            store = MiningSnapshotStore(Path(directory, "sites.sqlite3"))
+            coverage = {}
+            self.fetch(Getter(page([site()])), diagnostics=coverage)
+            snapshot = coverage["_snapshot"]
+            store.save(snapshot)
+            get = Getter({**page(), "notModified": True}, page([site(proportion=40)], NEW))
+            def replace(url, **kwargs):
+                if len(get.calls) == 0:
+                    store.save({**snapshot, "revision": NEW, "candidates": [{"system": "Wrong", "ring": "Wrong"}]})
+                return get(url, **kwargs)
+            rows = self.fetch(replace, snapshot_store=store)
+            self.assertEqual(rows[0]["system"], "Test")
+            self.assertEqual(rows[0]["yieldStats"][0]["averageProportion"], 40)
+            self.assertEqual(len(get.calls), 2)
+
+    def test_missing_hint_and_expected_revision_mismatch_are_never_row_proof(self):
+        with TemporaryDirectory() as directory:
+            store = MiningSnapshotStore(Path(directory, "sites.sqlite3"))
+            self.assertIsNone(store.revision("missing"))
+            snapshot = dict(key="test", revision=REV, candidates=[{"system": "Test", "ring": "Test"}], complete=True)
+            store.save(snapshot)
+            self.assertEqual(store.revision("test"), REV)
+            self.assertIsNone(store.load("test", expected_revision=NEW))
+            self.assertIsNotNone(store.load("test", expected_revision=REV))
+            with closing(sqlite3.connect(store.path)) as conn, conn:
+                conn.execute("UPDATE snapshots SET revision='bad'")
+            self.assertIsNone(store.revision("test"))
 
     def test_storage_is_bounded_and_partial_snapshots_cannot_be_saved(self):
         with TemporaryDirectory() as directory:

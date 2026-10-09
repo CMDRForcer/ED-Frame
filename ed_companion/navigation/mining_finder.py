@@ -131,6 +131,7 @@ def fetch_edframe_mining_candidates(
     if diagnostics is not None:
         for name in ("_snapshot", "revision", "notModified", "consistent", "snapshotStatus", "complete"):
             diagnostics.pop(name, None)
+    use_cached_revision = True
     for attempt in range(2):
         try:
             return _fetch_edframe_mining_snapshot(
@@ -138,7 +139,19 @@ def fetch_edframe_mining_candidates(
                 timeout=timeout, max_distance=max_distance,
                 diagnostics=diagnostics, snapshot_store=snapshot_store,
                 use_snapshot=max_distance is None or float(max_distance) <= 500,
+                use_cached_revision=use_cached_revision,
             )
+        except _MiningSnapshotCacheMissing:
+            # A header is a hint, never evidence for row reuse. The cache may
+            # have been evicted/corrupted/replaced while HTTP was in flight.
+            # Retry once without the hint, still asking for fresh complete rows.
+            use_cached_revision = False
+            if attempt:
+                return _fetch_edframe_mining_snapshot(
+                    system, get, commodity=commodity, origin=origin,
+                    timeout=timeout, max_distance=max_distance,
+                    diagnostics=diagnostics, snapshot_store=None, use_snapshot=False,
+                )
         except _MiningSnapshotUnavailable:
             # Versioning is an optimization, not a dependency for coverage.
             # Overloaded/mismatched servers retain the original fresh path.
@@ -168,9 +181,13 @@ class _MiningSnapshotUnavailable(Exception):
     pass
 
 
+class _MiningSnapshotCacheMissing(Exception):
+    pass
+
+
 def _fetch_edframe_mining_snapshot(
     system, get, *, commodity, origin, timeout, max_distance,
-    diagnostics, snapshot_store, use_snapshot,
+    diagnostics, snapshot_store, use_snapshot, use_cached_revision=True,
 ):
     requested = _text(system)
     if not requested:
@@ -196,11 +213,12 @@ def _fetch_edframe_mining_snapshot(
     if commodity_id and commodity_id != "allcommodities":
         params["commodity"] = commodity_id
     key = snapshot_key(EDFRAME_CATALOG_SITES_URL, params)
-    cached = snapshot_store.load(key) if snapshot_store is not None and use_snapshot else None
+    cached_revision = snapshot_store.revision(key) \
+        if snapshot_store is not None and use_snapshot and use_cached_revision else None
     if use_snapshot:
         params["snapshot_protocol"] = 1
-    if cached:
-        params["known_revision"] = cached["revision"]
+    if cached_revision:
+        params["known_revision"] = cached_revision
     candidates = []
     bounded = False
     seen_cursors = set()
@@ -225,15 +243,18 @@ def _fetch_edframe_mining_snapshot(
         if versioned and not valid_revision(payload.get("revision")):
             raise ValueError("ED-Frame mining catalog returned an invalid revision")
         if payload.get("notModified"):
-            if (page != 0 or not cached or not versioned or payload.get("revision") != cached["revision"]
+            if (page != 0 or not cached_revision or not versioned or payload.get("revision") != cached_revision
                     or payload.get("notModified") is not True or payload.get("hasMore") is not False
                     or payload.get("snapshotComplete") is not True
                     or payload.get("results") != [] or payload.get("communityReferences", []) != []):
                 raise ValueError("ED-Frame mining catalog returned an invalid unchanged snapshot")
+            cached = snapshot_store.load(key, expected_revision=cached_revision)
+            if cached is None:
+                raise _MiningSnapshotCacheMissing()
             candidates = cached["candidates"]
             if diagnostics is not None:
                 diagnostics.update(count=len(candidates), bounded=False, pages=1, complete=True,
-                                   notModified=True, revision=cached["revision"])
+                                   notModified=True, revision=cached_revision)
             return candidates
         if page == 0 and versioned:
             revision = payload["revision"]

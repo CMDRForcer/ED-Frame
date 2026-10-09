@@ -7,6 +7,7 @@ import json
 import time
 from ed_companion.worker_budget import WorkerBudget
 
+_CONTAINERS = (dict, list, tuple)
 
 SHARED_FIELDS = frozenset({
     "system", "body", "ringType", "reserveLevel", "evidence", "sourceEvidence",
@@ -69,16 +70,16 @@ def catalog_record_snapshot(record, *, factory=None, exclude=()):
         if isinstance(value, dict):
             result = factory.new_dict(value)
             for key, field in value.items():
-                result[key] = snapshot(field)
+                result[key] = snapshot(field) if isinstance(field, _CONTAINERS) else field
             return result
         if isinstance(value, (list, tuple)):
-            return tuple(snapshot(field) for field in value)
+            return tuple(snapshot(field) if isinstance(field, _CONTAINERS) else field for field in value)
         return value
 
     result = factory.new_dict(key for key in record if key not in exclude)
     for key, field in record.items():
         if key not in exclude:
-            result[key] = snapshot(field)
+            result[key] = snapshot(field) if isinstance(field, _CONTAINERS) else field
     return result
 
 

@@ -63,32 +63,96 @@ consent.
 
 ## Conditional Mining snapshots (source-only until deployed)
 
+The protocol is disabled by default (`EDFRAME_MINING_SNAPSHOT_PROTOCOL=0`),
+including after an unrelated API deployment. Disabled mode treats protocol
+hints as ordinary fresh regional paging, including continuations, without
+hash work. In-flight frozen cursors cannot survive disabling/restarting the
+page store; clients discard those partial pages and retry fresh. Set `1` only after explicitly installing
+the transactional revision markers and approving rollout.
+
 `GET /v1/sites/search` optionally accepts `snapshot_protocol=1` on bounded,
 paginated system/region queries. Initial requests may send `known_revision`
-only when holding a complete local snapshot. A matching content revision
+only when holding a complete local snapshot. A matching regional revision
 returns `notModified: true`, empty row arrays and `snapshotComplete: true`.
 This confirms identity, not a new observation or extended lifetime.
 
-Changed initial requests return rows, `revision` and `snapshotStatic`. Every
-continuation sends that `snapshot_revision` and `snapshot_static` along with
-the ordinary offset/cursor. Intermediate pages are explicitly provisional
-(`snapshotComplete: false`). The final page checks the whole domain again in
-the same repeatable-read transaction as its rows. Only a matching start/end
-revision proves completeness. Database tuple versions prevent an intervening
-change followed by a revert from hiding in an equal-content checksum;
-projection/reference versions are checked on every page. Conflict is HTTP 409.
+Changed initial requests freeze the complete bounded projection in ONE short
+repeatable-read, read-only PostgreSQL transaction: ring selection/order,
+source timestamps, yield aggregates, fallback metadata and community references.
+The transaction ends before publication. Rows are streamed in 5,000-row chunks,
+not retained as 50,000 Python objects or an open transaction between requests.
+Responses include `revision`, `snapshotStatic` and diagnostic `snapshotAt`;
+source observation timestamps are unchanged. Every continuation sends the same
+`snapshot_revision`/`snapshot_static`, offset and opaque `f1.<token>.<offset>` cursor.
+It reads the frozen projection ONLY, without another PostgreSQL query or live
+counter check. Collector writes cannot reshuffle these pages or restart a search.
+The next search checks live counters and immediately sees new commits, even
+before the frozen page TTL expires. Insert/delete and change/revert invalidate
+that next search too. Intermediate pages are `snapshotComplete: false` until
+the final page; a bounded/truncated projection NEVER claims complete coverage.
+
+The two API workers share a container-local SQLite page store (default
+`/tmp/edframe-mining-pages.sqlite3`; optionally `EDFRAME_MINING_PAGES_PATH`).
+It contains only public projections and is not a durable catalog volume.
+Limits: one builder, 20-second build budget, 50,000 rows plus one truncation
+sentinel, eight entries, three-minute page lifetime, 8 MiB compressed and
+64 MiB raw per entry, 8 MiB raw per chunk and 2 MiB raw reference metadata.
+SQLite is limited to 96 MiB; rollback journal rather than WAL keeps auxiliary
+disk usage bounded (database plus worst-case journal under roughly 192 MiB).
+Expired/aborted entries reclaim pages; unexpired entries are NOT evicted to
+admit a new search. Busy/full/oversize/timed-out builds return 503 and clients
+use fresh legacy paging. Missing/expired/corrupt/query-mismatched cursors or a
+rolling projection change return 409; clients discard partial rows and retry.
+TTL is only an availability limit, never proof that data is unchanged.
+
+Tradeoff: the initial response waits for materialization of the bounded search
+instead of sending a live first page early. Later pages are cheap and consistent;
+total search time and first-response latency must both be measured before rollout.
+The protocol's default-off gate and existing non-protocol path are retained.
 
 The digest covers regional membership/expiry, site fields/deletions, both
 yield tables, same-system fallback metadata, imported references and their
-public system positions. Bundled/code changes invalidate revisions. No
-schema migration, server snapshot cache, trigger or persistent epoch is
-required. Existing clients and non-protocol queries remain unchanged.
+public system positions. Bundled/code changes invalidate revisions. This
+requires an **explicit migration**; it is not installed by ordinary startup.
+Existing clients and non-protocol queries remain unchanged.
+
+Migration procedure (approved maintenance window, verified DB backup first):
+
+1. Keep `EDFRAME_MINING_SNAPSHOT_PROTOCOL=0`; stop collector and API writes.
+2. Run the matching API image's operator command:
+   `python -m edframe_catalog.mining_epochs --install`.
+   The command uses one transaction, source-table write locks and bounded
+   timeouts. Failure rolls everything back. No source records are deleted.
+3. It creates five small tables: state/generation, cell/system counters, historical
+   128-LY cell footprints, and reference names; it backfills existing positions
+   and installs 20 statement-level DML/TRUNCATE triggers atomically.
+4. Restart services with matching code. Approve/enable the protocol only after
+   checking real paging and concurrent collector throughput.
+5. After restoring a DB backup, **before serving conditional queries**, run
+   `python -m edframe_catalog.mining_epochs --install --rotate-after-restore`.
+   Otherwise restored counters might reuse previously issued revisions.
+
+Never prune footprints/counters, disable the triggers, or change replication
+trigger handling while the protocol is enabled. These rows retain deletion and
+movement evidence. Reinstallation preserves them and the database generation.
+New bundled reference names require rerunning installation; unseeded names,
+missing tables or an unready migration return 503 rather than unverifiable reuse.
+
+Each proof reads a few conservative grid-cell counters plus reference counters, not
+full mining JSON or yield histories. Changes outside those cells do not normally
+invalidate the region; unknown positions invalidate conservatively. Same-system
+metadata/yields and both old/new positions are included. An indexed global
+oldest eligible observation guards rolling-age expiry, including without any
+write. It can invalidate an unrelated region but cannot overlook an aged-out row.
 
 App snapshots are bounded to eight compressed entries and 64 MiB of retained
 payload per Commander profile. They are persisted on tracked workers, with
 checksum validation, profile/reset fences and unchanged source timestamps.
-Regions above 500 LY keep legacy paging because broad-domain hashing costs
-are not yet optimized. Protocol failures also fall back to fresh paging;
+The app reads a small revision hint first and only decompresses the old payload
+after an unchanged response. The hint alone never proves usable rows: checksum
+failure, eviction or a concurrent replacement retries fresh paging without it.
+Regions above 500 LY keep the existing legacy client path until separately
+evaluated. Protocol failures also fall back to fresh paging;
 repeated paging conflicts produce explicitly provisional, non-cacheable rows.
 
 `ops/benchmark-mining-revision.py` is a read-only SQL probe; append it after
@@ -97,6 +161,32 @@ repeated paging conflicts produce explicitly provisional, non-cacheable rows.
 not install files, change data/schema or deploy the protocol. Deployment
 requires the matching app and server code; no client speedup is claimed for
 the currently published Windows release.
+
+`ops/verify-mining-revision-cost.py` compares historical content-proof variants
+in the same read-only transaction. The optimized historical proof binds the regional
+system-name set, then fingerprints all original dependencies in that same
+repeatable-read snapshot. Small spheres (up to 100 LY) use the existing GiST
+box prefilter; broad spheres retain the cheaper exact-sphere scan. No hash
+domain was narrowed to only the requested commodity or current page.
+`ops/verify-mining-revision-handler.py` compares every returned ring/reference
+and its order with the deployed handler, then tests conditional confirmation.
+
+The old full-content prototype was rejected: the 2026-10-09 250-LY probe took
+27.7 seconds with proofs vs 15.8 without; unchanged confirmation took 5.0 seconds.
+These are sequential in-process SQL/handler samples, not installed-app timings.
+It is retained only as `mining_content_revision` for diagnostics, not called by
+the API and never used as a missing-migration fallback.
+`ops/verify-mining-epochs.py` tests real triggers, MVCC, rollback, concurrent
+commits, deletes, movement and expiry in a generated isolated schema; optional
+benchmarks copy only public data and remove that exact schema in `finally`.
+With `api` and `pages` source inputs it also compares frozen/legacy HTTP row
+projections and ordering, concurrent updates, next-search invalidation, page
+latencies, cross-instance continuation without PG, and capacity failures.
+Sources execute only in the isolated child process; no installed API code,
+public tables, production schema or service settings are changed.
+Do not automatically deploy/enable a general rollout without confirming
+collector write overhead and cold paging under live churn. See
+`reports/server_revalidation_2026-10-09.md` in the repository root.
 
 ## Production deployment
 

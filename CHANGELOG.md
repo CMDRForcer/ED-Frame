@@ -2,6 +2,28 @@
 
 ## Unreleased
 
+## 1.5.43 — 2026-10-09
+
+### Improved
+
+- Load retained ring and Powerplay catalogs only when needed, on tracked
+  background workers. Preserve observations arriving during loading and reject
+  stale profile/path/reset completions. Avoid eager and duplicate global indexes;
+  unrelated tabs do not hydrate large mining catalogs during startup.
+- Reuse bounded mining geometry preparations while recalculating freshness,
+  prices, yields and Powerplay suitability from current inputs. Read small local
+  snapshot revision hints before decompressing payloads; accept reuse only after
+  server confirmation and checksum/profile validation. No observations, history,
+  search functions, ranking rules or BGS predictions are removed.
+- Add opt-in server support for transactional regional change counters and
+  immutable, cross-worker mining ring pages. Read each bounded search in one
+  short read-only snapshot, preserving yields, metadata, community references
+  and source timestamps. Collector updates cannot reshuffle its continuations;
+  subsequent searches check live revisions. Bound temporary storage, build time
+  and row coverage, retaining fresh legacy paging on capacity/version failures.
+  The first response can wait longer for materialization; later pages avoid
+  repeated PostgreSQL scans. Enabling requires the explicit backed-up migration.
+
 ## 1.5.42 — 2026-10-09
 
 ### Improved
