@@ -234,6 +234,14 @@ files per service. Mining evidence and system geography are retained.
   parameters select up to 200 exact systems using the identity index, independent
   of radius (response `selection: systems`). The 24-hour default freshness and
   explicit-control requirement are unchanged; no database migration is needed.
+- Exact-system queries may opt into `include_coverage=true`. The bounded
+  `coverage` array labels each requested system `CURRENT`, `STALE` or `MISSING`
+  and includes the original last observation time where known. It does not
+  transfer old facts into `results` or extend freshness. Regional queries never
+  perform a historical galaxy-wide lookup for this option.
+- Explicit `Unoccupied` snapshots are retained even when `Powers` is empty or
+  absent. Such rows use an empty `power` and `UNOCCUPIED` relationship; no Power
+  or controller is invented. Consumers must accept these system-wide facts.
 - `GET /v1/sync/markets`
 - `GET /v1/sync/station-offers`
 - `GET /v1/sync/state-finds`

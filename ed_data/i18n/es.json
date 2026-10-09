@@ -152,6 +152,7 @@
 "mining.sale_unverified": "VENTA SIN VERIFICAR",
 "mining.also_at_station": "TAMBIÉN EN ESTA ESTACIÓN",
 "mining.powerplay_verified": "VERIFICADO",
+"mining.powerplay_too_old": "DATOS DE POWERPLAY ANTIGUOS",
 "mining.powerplay_known": "RUTA CONOCIDA",
 "mining.powerplay_ineligible": "NO APTO",
 "mining.subtitle_unified": "Un buscador para minería dirigida, rendimiento, beneficio, rutas cortas y méritos Powerplay",

@@ -65,6 +65,7 @@ def fetch_edframe_powerplay(*, origin: list, max_distance: float, get: Any,
         if len(wanted) > 200 or any(len(name) > 100 for name in wanted):
             raise MiningPowerplayError("Powerplay lookup exceeds the system batch limit")
         params["system"] = wanted
+        params["include_coverage"] = True
     else:
         # Backward compatible: older servers ignore the larger-page opt-in.
         params["regional_page_size"] = 1000
@@ -96,6 +97,13 @@ def fetch_edframe_powerplay(*, origin: list, max_distance: float, get: Any,
         if diagnostics is not None:
             diagnostics.update(bounded=has_more, pages=page + 1,
                                complete=payload.get("hasMore") is False)
+            if wanted and isinstance(payload.get("coverage"), list):
+                diagnostics["coverage"] = [
+                    {key: item[key] for key in ("system", "state", "observedAt") if key in item}
+                    for item in payload["coverage"] if isinstance(item, dict)
+                    and str(item.get("system") or "").casefold() in wanted
+                    and item.get("state") in {"CURRENT", "STALE", "MISSING"}
+                ]
         if not has_more:
             break
         if not wanted and system_count >= 20_000:
@@ -125,7 +133,11 @@ def _public_powerplay_rows(sources: list) -> list[dict[str, Any]]:
             continue
         # Whitelist public fields. An explicit controller must be present;
         # never trust a claimed CONTROL relationship alone.
-        if not source.get("system") or not source.get("power") or not source.get("observedAt"):
+        unoccupied = (source.get("powerState") == "Unoccupied"
+                      and "controllingPower" in source and not source["controllingPower"])
+        if (not source.get("system") or not source.get("observedAt")
+                or (not source.get("power") and not unoccupied)
+                or (source.get("powerState") == "Unoccupied" and source.get("controllingPower"))):
             continue
         try:
             stamp = datetime.fromisoformat(str(source["observedAt"]).replace("Z", "+00:00"))
@@ -137,14 +149,15 @@ def _public_powerplay_rows(sources: list) -> list[dict[str, Any]]:
             continue
         row = {key: source[key] for key in (
             "system", "systemAddress", "coordinates", "power", "powerState",
-            "controllingPower", "powers", "observedAt",
+            "controllingPower", "powers", "powersKnown", "observedAt",
         ) if key in source}
         controller = str(row.get("controllingPower") or "").strip()
         row.update({
             "source": "ED-Frame live catalog · EDDN journal/1",
             "controlKnown": bool(controller),
-            "powerRelationship": "CONTROL" if controller and controller.casefold()
-                == str(row["power"]).casefold() else "PRESENCE",
+            "powerRelationship": "UNOCCUPIED" if unoccupied and not row.get("power")
+                else "CONTROL" if controller and controller.casefold()
+                == str(row.get("power") or "").casefold() else "PRESENCE",
         })
         rows.append(row)
     return rows
@@ -203,7 +216,7 @@ def fetch_powerplay_targets(targets, *, origin, get, diagnostics=None):
     validation. Callers run this on a cancellable network worker.
     """
     diagnostics = diagnostics if diagnostics is not None else {}
-    rows, checked, failed = [], [], []
+    rows, checked, failed, coverage = [], [], [], []
     targets = list(targets)
     legacy = False
     for start in range(0, len(targets), 200):
@@ -217,6 +230,7 @@ def fetch_powerplay_targets(targets, *, origin, get, diagnostics=None):
                 ))
                 if diagnostics.get("bounded"):
                     raise MiningPowerplayError("Incomplete exact Powerplay lookup")
+                coverage.extend(diagnostics.get("coverage", []))
                 checked.extend(names)
                 continue
             except MiningPowerplayError as exc:
@@ -243,7 +257,10 @@ def fetch_powerplay_targets(targets, *, origin, get, diagnostics=None):
                 checked.append(target["system"])
             except Exception:
                 failed.append(target["system"])
-    return {"rows": rows, "checked": checked, "failed": failed}
+    result = {"rows": rows, "checked": checked, "failed": failed}
+    if coverage:
+        result["coverage"] = coverage
+    return result
 
 
 def _coordinates(value: Any) -> list[float]:
@@ -276,15 +293,20 @@ def project_powerplay_observations(
     system = str(message.get("StarSystem") or "").strip()
     state = str(message.get("PowerplayState") or "").strip()
     controller = str(message.get("ControllingPower") or "").strip()
-    powers = [
+    participants = message.get("Powers")
+    if participants is not None and not isinstance(participants, list):
+        return []
+    powers = list(dict.fromkeys(
         str(value).strip() for value in message.get("Powers", []) or []
-        if str(value).strip()
-    ]
+        if isinstance(value, str) and value.strip()
+    ))
     if controller and controller.casefold() not in {
         value.casefold() for value in powers
     }:
         powers.append(controller)
-    if not system or not state or not powers:
+    unoccupied = state == "Unoccupied" and not controller
+    if (not system or state not in POWERPLAY_STATES or (not powers and not unoccupied)
+            or (state == "Unoccupied" and controller)):
         return []
     try:
         address = int(message.get("SystemAddress") or 0)
@@ -294,6 +316,8 @@ def project_powerplay_observations(
     if isinstance(coordinates, (list, tuple)) and len(coordinates) == 3:
         try:
             coordinates = [float(value) for value in coordinates]
+            if not all(isfinite(value) for value in coordinates):
+                return []
         except (TypeError, ValueError):
             coordinates = []
     else:
@@ -309,21 +333,23 @@ def project_powerplay_observations(
         "powerState": state,
         "controllingPower": controller,
         "powers": list(powers),
+        "powersKnown": isinstance(participants, list),
         "powerRelationship": (
-            "CONTROL" if controller.casefold() == power.casefold()
+            "UNOCCUPIED" if unoccupied and not power
+            else "CONTROL" if controller.casefold() == power.casefold()
             else "PRESENCE"
         ),
         "controlKnown": bool(controller),
         "observedAt": observed_at,
         "source": source,
-    } for power in powers]
+    } for power in powers or [""]]
 
 
 def merge_powerplay_observations(
     existing: Any, additions: Any, *, limit: int = 20_000,
 ) -> list[dict[str, Any]]:
     """Keep the newest compact observation for each system and Power."""
-    latest: dict[tuple[Any, ...], dict[str, Any]] = {}
+    latest: dict[tuple[Any, ...], tuple[datetime, dict[str, Any]]] = {}
     for source in [*(existing or []), *(additions or [])]:
         if not isinstance(source, dict):
             continue
@@ -333,23 +359,27 @@ def merge_powerplay_observations(
             address = int(source.get("systemAddress") or 0)
         except (TypeError, ValueError):
             address = 0
-        if not system or not power:
+        if not system or (not power and not (
+                source.get("powerState") == "Unoccupied"
+                and "controllingPower" in source and not source["controllingPower"])):
             continue
         key = (
             ("address", address) if address > 0
             else ("name", system.casefold()),
             power.casefold(),
         )
+        try:
+            stamp = datetime.fromisoformat(str(source.get("observedAt") or "").replace("Z", "+00:00"))
+            stamp = stamp.replace(tzinfo=timezone.utc) if stamp.tzinfo is None else stamp
+            stamp = stamp.astimezone(timezone.utc)
+        except ValueError:
+            stamp = datetime.min.replace(tzinfo=timezone.utc)
         current = latest.get(key)
-        if current is None or str(source.get("observedAt") or "") >= str(
-            current.get("observedAt") or ""
-        ):
-            latest[key] = dict(source)
-    return sorted(
-        latest.values(),
-        key=lambda row: str(row.get("observedAt") or ""),
-        reverse=True,
-    )[:max(1, int(limit or 1))]
+        if current is None or stamp >= current[0]:
+            latest[key] = (stamp, dict(source))
+    return [row for _stamp, row in sorted(
+        latest.values(), key=lambda item: item[0], reverse=True,
+    )[:max(1, int(limit or 1))]]
 
 
 def project_powerplay_catalog(payload: Any) -> list[dict[str, Any]]:

@@ -1,10 +1,12 @@
 # ED-Frame 1.0 — Einstieg und Funktionen
 
+Aktualisiert für das Powerplay-Wartungsupdate 1.0.5.
+
 ED-Frame ist eine kostenlose Windows-Begleitapp für Elite Dangerous mit offenem Quellcode. Dein lokales Journal liefert die Commander-Daten. Unser eigener Community-Server ergänzt sie um gemeinsam gesammelte öffentliche Beobachtungen der Galaxie.
 
 ## Installation und Umstieg
 
-1. Lade `ED-Frame-1.0-Windows.zip` aus dem [Release ED-Frame 1.0](https://github.com/CMDRForcer/ED-Frame/releases/tag/1.0) herunter.
+1. Lade das Windows-ZIP aus dem [aktuellen ED-Frame-Release](https://github.com/CMDRForcer/ED-Frame/releases/latest) herunter.
 2. Entpacke das vollständige Archiv in einen neuen, beschreibbaren Ordner.
 3. Starte `ED-Frame.exe`. Der Ordner `_internal` muss daneben bleiben; Python ist enthalten.
 4. Wähle deinen Elite-Dangerous-Journalordner, falls er nicht automatisch gefunden wird.
@@ -40,6 +42,8 @@ Voraussetzung ist Windows 10 oder 11. Einstellungen, Zugangsdaten, Baupläne und
 Der Server verarbeitet laufend unterstützte öffentliche EDDN-Beobachtungen. Er liefert Systeme, Stationen, Warenmärkte, Modul- und Schiffsangebote, Ringe/Hotspots, Powerplay-Fakten und State-Finds-Beobachtungen. Unterstützte anonyme Beiträge zu Mining-Ertrag, Signalen und Stationspreisen ergänzen den gemeinsamen Bestand.
 
 **Aktualität richtet sich nach dem Zeitpunkt der Beobachtung.** Ein frisch heruntergeladener alter Preis bleibt alt. MiningFinder prüft Marktbelege und Powerplay-Eignung getrennt. Fehlende Kontrolle, Preise, Nachfrage oder Landeplatzdaten bleiben erkennbar. Eine bestätigte Markt-/Powerplayroute beweist keinen gemessenen Ertrag und garantiert keine im Spiel erhaltenen Merits.
+
+Powerplay-Bestätigungen benötigen höchstens 24 Stunden alte Beobachtungen, unabhängig vom Marktalter-Filter. Ältere Kontroll- und Statusangaben bleiben gespeichert und werden als veraltet angezeigt. Ausdrücklich unbesetzte Systeme können als Acquire-Ziel dienen, auch ohne Präsenzzeile der gewählten Macht. Gezielte Serverprüfungen unterscheiden noch nie beobachtete Systeme von zu alten Beobachtungen; erneutes Laden kann eine nicht gemeldete Beobachtung nicht erzeugen.
 
 Bereits gespeicherte Beobachtungen bleiben bei Ausfall oder Abschaltung eines Dienstes lokal nutzbar. Der SQLite-Ringspeicher liest die relevante Region und erhält ursprüngliche Beobachtungen sowie deren Historie. Offline kommen keine bislang unbekannten Live-Meldungen hinzu.
 

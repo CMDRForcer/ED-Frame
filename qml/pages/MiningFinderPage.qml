@@ -407,6 +407,9 @@ Item {
     }
     function verificationShortLabel(row) {
         if (!row) return appWindow.t("status.unknown", "UNKNOWN")
+        if (row.powerplayVerificationState === "POWERPLAY_DATA_MISSING"
+                && row.powerplayEvidenceState === "STALE")
+            return appWindow.t("mining.powerplay_too_old", "POWERPLAY DATA TOO OLD")
         let explicitLabel = row.powerplayVerificationLabel === undefined
                 || row.powerplayVerificationLabel === null
                 ? "" : String(row.powerplayVerificationLabel)

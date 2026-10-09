@@ -1,4 +1,4 @@
-ED-Frame 1.0 - Portable Windows Edition
+ED-Frame 1.0.5 - Portable Windows Edition
 ===================================================================
 
 1. Extract the complete ZIP archive.

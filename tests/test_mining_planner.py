@@ -244,6 +244,7 @@ class MiningPlannerTests(unittest.TestCase):
             markets=markets, powerplay_systems=[{
                 "system": "HIP 11402", "power": "Aisling Duval",
                 "controllingPower": "Aisling Duval", "powerState": "Stronghold",
+                "observedAt": "2026-10-03T16:00:00Z",
             }], now=now,
         )
         by_ring = {row["ring"]: row for row in planned}
@@ -275,6 +276,7 @@ class MiningPlannerTests(unittest.TestCase):
                     "system": system, "power": "Aisling Duval",
                     "controllingPower": "Aisling Duval",
                     "powerState": "Stronghold",
+                    "observedAt": "2026-09-30T11:30:00Z",
                 })
             if index < 14:
                 markets.append({
@@ -916,10 +918,12 @@ class MiningPlannerTests(unittest.TestCase):
             "controllingPower": "Aisling Duval",
             "powers": ["Aisling Duval", "Yuri Grom"],
             "powerRelationship": "PRESENCE", "controlKnown": True,
+            "observedAt": "2026-09-30T11:30:00Z",
         }, {
             "system": "Acquire Target", "power": "Aisling Duval",
             "powerState": "Unoccupied", "coordinates": [25, 0, 0],
             "powerRelationship": "PRESENCE", "controlKnown": False,
+            "observedAt": "2026-09-30T11:30:00Z",
         }]
         markets = [{
             "commodity": "Platinum", "station": "Target Port",
@@ -1016,6 +1020,7 @@ class MiningPlannerTests(unittest.TestCase):
             power_goal="ACQUIRE", powerplay_systems=[{
                 "system": "Expansion Target", "power": "Aisling Duval",
                 "powerState": "Unoccupied", "coordinates": [25, 0, 0],
+                "observedAt": "2026-09-30T11:30:00Z",
             }], now=NOW,
         )
 
@@ -1056,6 +1061,7 @@ class MiningPlannerTests(unittest.TestCase):
             "system": "Target", "power": "Aisling Duval",
             "powerState": "Unoccupied", "coordinates": [25, 0, 0],
             "systemState": "Expansion",
+            "observedAt": "2026-09-30T11:30:00Z",
         }]
 
         planned = plan_mining_routes(
@@ -1080,6 +1086,7 @@ class MiningPlannerTests(unittest.TestCase):
         catalog = [{
             "system": "Target", "power": "Aisling Duval",
             "powerState": "Unoccupied", "coordinates": [25, 0, 0],
+            "observedAt": "2026-09-30T11:30:00Z",
         }]
 
         planned = plan_mining_routes(
@@ -1102,6 +1109,7 @@ class MiningPlannerTests(unittest.TestCase):
         catalog = [{
             "system": "Far Target", "power": "Aisling Duval",
             "powerState": "Unoccupied", "coordinates": [21, 0, 0],
+            "observedAt": "2026-09-30T11:30:00Z",
         }]
 
         planned = plan_mining_routes(
@@ -1146,7 +1154,7 @@ class MiningPlannerTests(unittest.TestCase):
             "powerState": "Exploited", "controllingPower": "Yuri Grom",
             "powers": ["Yuri Grom", "Aisling Duval"],
             "powerRelationship": "PRESENCE", "controlKnown": True,
-            "observedAt": "2026-10-02T12:00:00Z",
+            "observedAt": "2026-09-30T11:45:00Z",
         }]
 
         planned = plan_mining_routes(
@@ -1200,6 +1208,7 @@ class MiningPlannerTests(unittest.TestCase):
             "powerState": "Fortified", "controllingPower": "Yuri Grom",
             "powers": ["Yuri Grom", "Aisling Duval"],
             "powerRelationship": "CONTROL", "controlKnown": True,
+            "observedAt": "2026-09-30T11:30:00Z",
         }]
         markets = [{
             "commodity": "Platinum", "station": "Occupied Port",

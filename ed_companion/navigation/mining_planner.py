@@ -748,7 +748,8 @@ def _powerplay_index(
             key = _power_key(item)
             if key:
                 known_powers[key] = str(item).strip()
-        system_fact["powers"] = list(known_powers.values())
+        if "powersKnown" not in system_fact:
+            system_fact["powers"] = list(known_powers.values())
 
         # Control is system-wide, but only an explicit control assertion may
         # populate it.  An EDSM PRESENCE row must never become control merely
@@ -757,19 +758,34 @@ def _powerplay_index(
         if controller:
             system_fact["controllingPower"] = controller
             system_fact["controlKnown"] = True
+            system_fact["controlObservedAt"] = source.get("observedAt")
             state = str(source.get("powerState") or "").strip()
             if state:
                 system_fact["controlPowerState"] = state
+                system_fact["controlStateObservedAt"] = source.get("observedAt")
             controller_key = _power_key(controller)
             if controller_key:
-                known_powers[controller_key] = controller
-                system_fact["powers"] = list(known_powers.values())
+                # A new location snapshot replaces its participants. Historic
+                # presence must not prove that a Power is still contesting.
+                participants = source.get("powers")
+                system_fact["powers"] = list(dict.fromkeys([
+                    *(participants if isinstance(participants, list) else []), controller,
+                ]))
+                system_fact["powersKnown"] = source.get(
+                    "powersKnown", isinstance(participants, list),
+                )
+                system_fact["powersObservedAt"] = source.get("observedAt")
         elif ("controllingPower" in source and source.get("powerState") == "Unoccupied"
               and "edsm" not in str(source.get("source") or "").casefold()):
             # An explicit newer unoccupied observation clears historic control.
             # A daily presence row, which omits controller, cannot do this.
             system_fact.update(controllingPower="", controlKnown=False,
-                               controlPowerState="Unoccupied")
+                               controlPowerState="Unoccupied",
+                               controlObservedAt=source.get("observedAt"),
+                               controlStateObservedAt=source.get("observedAt"),
+                               powers=list(source.get("powers") or []),
+                               powersKnown=source.get("powersKnown", True),
+                               powersObservedAt=source.get("observedAt"))
 
         if power:
             fact = by_power.setdefault((system, power), {})
@@ -779,6 +795,8 @@ def _powerplay_index(
             fact.setdefault(
                 "system", str(source.get("system") or source.get("name") or "")
             )
+            if source.get("powerState"):
+                fact["powerStateObservedAt"] = source.get("observedAt")
     return {"byPower": by_power, "bySystem": by_system}
 
 
@@ -832,16 +850,14 @@ def _indexed_power_fact(
     if "controllingPower" in system_fact:
         fact["controllingPower"] = controller
         fact["controlKnown"] = bool(controller)
-    combined_powers = {
-        _power_key(item): str(item).strip()
-        for item in [
-            *(system_fact.get("powers") or []),
-            *(power_fact.get("powers") or []),
-        ]
-        if _power_key(item)
-    }
-    if combined_powers:
-        fact["powers"] = list(combined_powers.values())
+    if "powersKnown" in system_fact:
+        fact["powers"] = list(system_fact.get("powers") or [])
+        fact["powersKnown"] = system_fact["powersKnown"]
+        fact["powersObservedAt"] = system_fact.get("powersObservedAt")
+    if "controlPowerState" in system_fact:
+        fact["controlPowerState"] = system_fact["controlPowerState"]
+        fact["controlObservedAt"] = system_fact.get("controlObservedAt")
+        fact["controlStateObservedAt"] = system_fact.get("controlStateObservedAt")
     fact.setdefault("system", str(system or ""))
     return fact
 
@@ -859,15 +875,23 @@ def _candidate_power_fact(
     if controlling and use_metadata:
         fact["controllingPower"] = controlling
         fact["controlKnown"] = True
+        fact["controlObservedAt"] = (candidate.get("powerplayObservedAt")
+                                     or candidate.get("observedAt"))
     if state and use_metadata:
         fact["powerState"] = state
+        fact["powerStateObservedAt"] = (candidate.get("powerplayObservedAt")
+                                        or candidate.get("observedAt"))
         if controlling:
             fact["controlPowerState"] = state
+            fact["controlStateObservedAt"] = fact["powerStateObservedAt"]
     if candidate.get("coordinates"):
         fact["coordinates"] = candidate.get("coordinates")
     candidate_powers = candidate.get("powers")
     if use_metadata and isinstance(candidate_powers, (list, tuple)) and candidate_powers:
         fact["powers"] = list(candidate_powers)
+        fact["powersKnown"] = candidate.get("powersKnown", True)
+        fact["powersObservedAt"] = (candidate.get("powerplayObservedAt")
+                                    or candidate.get("observedAt"))
     fact.setdefault("system", str(candidate.get("system") or ""))
     return fact
 
@@ -885,15 +909,23 @@ def _market_power_fact(
     if controlling and use_metadata:
         fact["controllingPower"] = controlling
         fact["controlKnown"] = True
+        fact["controlObservedAt"] = (market.get("powerplayObservedAt")
+                                     or market.get("observedAt"))
     if state and use_metadata:
         fact["powerState"] = state
+        fact["powerStateObservedAt"] = (market.get("powerplayObservedAt")
+                                        or market.get("observedAt"))
         if controlling:
             fact["controlPowerState"] = state
+            fact["controlStateObservedAt"] = fact["powerStateObservedAt"]
     if market.get("coordinates"):
         fact["coordinates"] = market.get("coordinates")
     market_powers = market.get("powers")
     if use_metadata and isinstance(market_powers, (list, tuple)) and market_powers:
         fact["powers"] = list(market_powers)
+        fact["powersKnown"] = market.get("powersKnown", True)
+        fact["powersObservedAt"] = (market.get("powerplayObservedAt")
+                                    or market.get("observedAt"))
     fact.setdefault("system", str(market.get("system") or ""))
     return fact
 
@@ -912,10 +944,33 @@ def _route_system_state(
     return str(value or "").strip()
 
 
+def _powerplay_age_issue(fact: dict[str, Any], role: str, now: datetime,
+                        *, participants: bool = False) -> str:
+    """Assess each supporting field at its own observation time, not cache time."""
+    stamps = [("STATE", fact.get("controlStateObservedAt")
+               if fact.get("controlPowerState") else fact.get("powerStateObservedAt"))]
+    if fact.get("controllingPower"):
+        stamps.append(("CONTROL", fact.get("controlObservedAt")))
+    if participants:
+        stamps.append(("PARTICIPANTS", fact.get("powersObservedAt")))
+    for field, value in stamps:
+        observed = _timestamp(value)
+        if observed is None:
+            return f"UNKNOWN · {role} POWERPLAY {field} TIME MISSING"
+        age = (now - observed).total_seconds()
+        if age < -300:
+            return f"UNKNOWN · {role} POWERPLAY {field} TIME INVALID"
+        if age > 86400:
+            return (f"UNKNOWN · {role} POWERPLAY {field} TOO OLD "
+                    f"({_readable_age(age)} · {observed.isoformat()})")
+    return ""
+
+
 def _merit_status(
     candidate: dict[str, Any], market: dict[str, Any], power: str,
     power_goal: str, opposing_power: str,
     catalog: dict[str, dict[Any, dict[str, Any]]],
+    *, now: datetime | None = None,
 ) -> tuple[str, float | None, float | None]:
     """Apply the same route relationships explained by MeritMiner.
 
@@ -941,6 +996,7 @@ def _merit_status(
         source.get("controlPowerState") or source.get("powerState") or ""
     ).strip()
     source_controller = _power_key(source.get("controllingPower"))
+    now = now or datetime.now(timezone.utc)
     # EDSM's daily dump contains one row for every Power present in a system.
     # Presence is useful for contesting/range context but is not proof of
     # control.  Only an explicit ControllingPower may confirm the source.
@@ -951,8 +1007,14 @@ def _merit_status(
             return "NOT ELIGIBLE · MINE AND SELL IN THE SAME SYSTEM", 0.0, None
         if not source_state:
             return "UNKNOWN · SOURCE POWER STATE MISSING", None, None
+        if source.get("controlPowerState") == "Unoccupied":
+            issue = _powerplay_age_issue(source, "SOURCE", now)
+            return (issue, None, None) if issue else ("NOT ELIGIBLE · UNOCCUPIED", 0.0, None)
         if not source_controller:
             return "UNKNOWN · CONTROLLING POWER MISSING", None, None
+        issue = _powerplay_age_issue(source, "SOURCE", now)
+        if issue:
+            return issue, None, None
         if not controls_source:
             return "NOT ELIGIBLE · POWER DOES NOT CONTROL SOURCE", 0.0, None
         if source_state.casefold() == "headquarters":
@@ -964,8 +1026,14 @@ def _merit_status(
     if goal == "undermine":
         if source_system != target_system:
             return "NOT ELIGIBLE · MINE AND SELL IN THE SAME SYSTEM", 0.0, None
+        if source.get("controlPowerState") == "Unoccupied":
+            issue = _powerplay_age_issue(source, "SOURCE", now)
+            return (issue, None, None) if issue else ("NOT ELIGIBLE · UNOCCUPIED", 0.0, None)
         if not source_state or not source_controller:
             return "UNKNOWN · OPPOSING POWER STATE MISSING", None, None
+        issue = _powerplay_age_issue(source, "SOURCE", now)
+        if issue:
+            return issue, None, None
         if source_state.casefold() == "headquarters":
             return "NOT ELIGIBLE · HEADQUARTERS CANNOT BE UNDERMINED", 0.0, None
         wanted_opponent = _power_key(opposing_power)
@@ -973,11 +1041,16 @@ def _merit_status(
             return "NOT ELIGIBLE · THIS IS YOUR POWER'S SYSTEM", 0.0, None
         if wanted_opponent not in {"", "any"} and source_controller != wanted_opponent:
             return "NOT ELIGIBLE · OPPOSING POWER MISMATCH", 0.0, None
+        if source.get("powersKnown") is False:
+            return "UNKNOWN · CONTESTING POWERS MISSING", None, None
         powers = {_power_key(item) for item in source.get("powers") or []}
         if powers and selected_power not in powers:
             return "NOT ELIGIBLE · YOUR POWER IS NOT CONTESTING", 0.0, None
         if not powers:
             return "UNKNOWN · CONTESTING POWERS MISSING", None, None
+        issue = _powerplay_age_issue(source, "SOURCE", now, participants=True)
+        if issue:
+            return issue, None, None
         return (
             "CONFIRMED · UNDERMINE · "
             + str(source.get("controllingPower") or opposing_power).upper(),
@@ -989,6 +1062,9 @@ def _merit_status(
             return "UNKNOWN · SOURCE POWER STATE MISSING", None, None
         if not source_controller:
             return "UNKNOWN · CONTROLLING POWER MISSING", None, None
+        issue = _powerplay_age_issue(source, "SOURCE", now)
+        if issue:
+            return issue, None, None
         if not controls_source:
             return "NOT ELIGIBLE · POWER DOES NOT CONTROL SOURCE", 0.0, None
         source_state_key = source_state.casefold()
@@ -1002,6 +1078,9 @@ def _merit_status(
         ).strip()
         if not target_state:
             return "UNKNOWN · TARGET POWER STATE MISSING", None, None
+        issue = _powerplay_age_issue(target, "TARGET", now)
+        if issue:
+            return issue, None, None
         if target_state.casefold() != "unoccupied":
             return f"NOT ELIGIBLE · TARGET IS {target_state.upper()}", 0.0, None
         distance = _coordinate_distance(
@@ -1179,7 +1258,10 @@ def plan_mining_routes(
                 shared_market, power, powerplay_catalog
             )
             explicit = shared_market.get("meritEligible")
-            target_state = str(target.get("powerState") or "").casefold()
+            target_state = str(target.get("controlPowerState")
+                               or target.get("powerState") or "").casefold()
+            if target_state and _powerplay_age_issue(target, "TARGET", now):
+                target_state = ""  # Retained old targets remain explicitly pending.
             if explicit is None and (
                 not target_state
                 or (
@@ -1268,6 +1350,7 @@ def plan_mining_routes(
         status, merit_score, route_distance = _merit_status(
             row, market, power, power_goal, opposing_power,
             powerplay_catalog,
+            now=now,
         )
         if route_distance is None:
             mine_system = _system_key(row.get("system"))
@@ -1355,7 +1438,8 @@ def plan_mining_routes(
                 return explicit_market
             source = _candidate_power_fact(row, power, powerplay_catalog)
             selected_power = _power_key(power)
-            source_state = str(source.get("powerState") or "").casefold()
+            source_state = str(source.get("controlPowerState")
+                               or source.get("powerState") or "").casefold()
             source_controller = _power_key(source.get("controllingPower"))
             controls_source = source_controller == selected_power
             radius = 20.0 if source_state == "fortified" else (
@@ -1366,7 +1450,8 @@ def plan_mining_routes(
             # indexed compatible market is enough to produce the exact same
             # status; the previous full fallback scan made ACQUIRE O(rings ×
             # markets) and could block the GUI for more than a minute.
-            if not source_state or not controls_source or not radius:
+            if (not source_state or not controls_source or not radius
+                    or _powerplay_age_issue(source, "SOURCE", now)):
                 return first_indexed_market(row, fallback_indexes)
             if controls_source and radius and cell is not None:
                 for dx in (-1, 0, 1):
@@ -1771,6 +1856,10 @@ def plan_mining_routes(
             verification_group = combined["group"]
             verification_rank = combined["rank"]
             pending_reason = combined["reason"]
+            if (verification_state == POWERPLAY_DATA_MISSING
+                    and "POWERPLAY" in str(row.get("meritStatus"))
+                    and " TOO OLD" in str(row.get("meritStatus"))):
+                verification_label = "POWERPLAY DATA TOO OLD"
         else:
             powerplay_status = (
                 POWERPLAY_VERIFIED
@@ -1820,6 +1909,15 @@ def plan_mining_routes(
             "verificationStatus": verification_state,
             "verificationGroupLabel": verification_group,
             "powerplayStatus": powerplay_status,
+            "powerplayEvidenceState": (
+                "STALE" if "POWERPLAY" in str(row.get("meritStatus"))
+                and " TOO OLD" in str(row.get("meritStatus"))
+                else "TIME_UNKNOWN" if "POWERPLAY" in str(row.get("meritStatus"))
+                and (" TIME MISSING" in str(row.get("meritStatus"))
+                     or " TIME INVALID" in str(row.get("meritStatus")))
+                else "MISSING" if powerplay_status == POWERPLAY_DATA_MISSING
+                else "CURRENT"
+            ),
             "pendingReason": pending_reason,
             "powerplayVerificationRank": verification_rank,
             "resPreferred": bool(prefer_res and (

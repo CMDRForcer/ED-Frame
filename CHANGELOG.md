@@ -1,5 +1,22 @@
 # Changelog
 
+## 1.0.5 — 2026-10-09
+
+- Preserve explicit `Unoccupied` Journal/EDDN snapshots even without participating
+  Powers; carry them through server storage, client transport and retained facts.
+  Acquire recognizes explicit unoccupied targets independently of the selected
+  Power. Reinforce/Undermine correctly reject currently unoccupied systems.
+- Assess Powerplay control, state and participants against their own source times
+  on every plan. Evidence older than 24 hours remains retained but cannot confirm
+  current eligibility; missing/invalid times remain unknown. A newer presence
+  observation cannot renew an older control assertion. Complete new snapshots
+  replace contesting participants rather than accumulating old membership.
+- Compare observation timestamps chronologically across time zones and fractional
+  seconds. Display outdated Powerplay evidence separately from missing data.
+- Server 0.9.1 adds bounded opt-in exact-system coverage diagnostics (`CURRENT`,
+  `STALE`, `MISSING`) without returning historical facts as current results.
+- Use the next free maintenance tag: historical 1.0.1–1.0.4 tags remain untouched.
+
 ## 1.0 — 2026-10-09
 
 ### Public release

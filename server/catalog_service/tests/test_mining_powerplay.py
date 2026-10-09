@@ -1,6 +1,6 @@
 import json
 import unittest
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from unittest.mock import MagicMock, patch
 
 from edframe_catalog.api import search_mining_powerplay, _decode_state_cursor, _encode_state_cursor
@@ -34,6 +34,51 @@ class MiningPowerplayServerTests(unittest.TestCase):
         payload["message"].pop("ControllingPower")
         row = project_powerplay_snapshot(payload, payload["message"]["timestamp"])
         self.assertTrue(all(not fact["controlKnown"] for fact in json.loads(row["facts"])))
+
+    def test_unoccupied_without_participants_is_a_durable_public_snapshot(self):
+        payload = self.payload()
+        payload["message"].update(PowerplayState="Unoccupied")
+        payload["message"].pop("Powers")
+        payload["message"].pop("ControllingPower")
+        snapshot = project_powerplay_snapshot(payload, payload["message"]["timestamp"])
+        self.assertIsNotNone(snapshot)
+        facts = json.loads(snapshot["facts"])
+        self.assertEqual(len(facts), 1)
+        self.assertEqual(facts[0]["powerState"], "Unoccupied")
+        self.assertEqual(facts[0]["power"], "")
+        self.assertEqual(facts[0]["powers"], [])
+        self.assertNotIn("PRIVATE", str(snapshot))
+        connection = MagicMock()
+        self.assertEqual(upsert_powerplay_snapshot(connection, snapshot), 1)
+
+    def test_exact_coverage_reports_old_and_missing_without_serving_old_facts(self):
+        now = datetime.now(timezone.utc)
+        fresh = {"facts": [{"system": "Fresh"}], "identity": "fresh", "observed_at": now}
+        connection = MagicMock()
+        connection.execute.return_value.fetchall.side_effect = [[fresh], [
+            {"identity": "fresh", "system_name": "Fresh", "observed_at": now},
+            {"identity": "old", "system_name": "Old", "observed_at": now - timedelta(hours=25)},
+        ]]
+        with patch("edframe_catalog.api.connection") as factory:
+            factory.return_value.__enter__.return_value = connection
+            result = search_mining_powerplay(1, 2, 3, system=["Fresh", "Old", "Missing"], include_coverage=True)
+        self.assertEqual(result["results"], [{"system": "Fresh"}])
+        self.assertEqual([item["state"] for item in result["coverage"]], ["CURRENT", "STALE", "MISSING"])
+        self.assertIsNone(result["coverage"][-1]["observedAt"])
+        self.assertEqual(connection.execute.call_count, 2)
+        sql, args = connection.execute.call_args.args
+        self.assertIn("identity = ANY(%s)", sql)
+        self.assertEqual(args, (["fresh", "old", "missing"],))
+        self.assertNotIn("facts", sql)  # Diagnostic reads need no historical payload transfer.
+
+    def test_regional_coverage_opt_in_never_starts_a_global_historical_query(self):
+        connection = MagicMock()
+        connection.execute.return_value.fetchall.return_value = []
+        with patch("edframe_catalog.api.connection") as factory:
+            factory.return_value.__enter__.return_value = connection
+            result = search_mining_powerplay(1, 2, 3, include_coverage=True)
+        self.assertNotIn("coverage", result)
+        self.assertEqual(connection.execute.call_count, 1)
 
     def test_rejects_other_schemas_and_invalid_timestamp(self):
         payload = self.payload()

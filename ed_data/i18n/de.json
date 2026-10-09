@@ -152,6 +152,7 @@
 "mining.sale_unverified": "VERKAUF UNBESTÄTIGT",
 "mining.also_at_station": "AUCH AN DIESER STATION",
 "mining.powerplay_verified": "BESTÄTIGT",
+"mining.powerplay_too_old": "POWERPLAY-DATEN VERALTET",
 "mining.powerplay_known": "ROUTE BEKANNT",
 "mining.powerplay_ineligible": "NICHT GEEIGNET",
 "mining.subtitle_unified": "Ein Finder für gezieltes Mining, Ertrag, Gewinn, kurze Routen und Powerplay-Merits",

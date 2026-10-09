@@ -1,10 +1,12 @@
 # ED-Frame 1.0 — getting started and features
 
+Updated for the 1.0.5 Powerplay maintenance release.
+
 ED-Frame is a free, open-source Windows companion for Elite Dangerous. Your local Journal drives your Commander workspace; ED-Frame's own community server supplements it with shared public galaxy observations.
 
 ## Install and upgrade
 
-1. Download `ED-Frame-1.0-Windows.zip` from [ED-Frame 1.0](https://github.com/CMDRForcer/ED-Frame/releases/tag/1.0).
+1. Download the Windows ZIP from the [latest ED-Frame release](https://github.com/CMDRForcer/ED-Frame/releases/latest).
 2. Extract the complete archive into a new, writable folder.
 3. Run `ED-Frame.exe` with `_internal` beside it. Python is bundled.
 4. Select your Elite Dangerous Journal folder if it is not detected automatically.
@@ -40,6 +42,8 @@ Use Windows 10 or 11. Personal settings, credentials, builds and retained data l
 The server continuously processes supported public EDDN observations. It supplies systems, stations, commodity markets, module/ship inventories, rings/hotspots, Powerplay facts and State Finds observations. Supported anonymous mining-yield, signal and station-price contributions extend that shared knowledge.
 
 **Freshness is based on the source observation.** A newly downloaded old quote is still old. Mining Finder separates market confirmation from Powerplay suitability. A missing controller, price, demand or pad observation stays visibly missing. A verified market/Powerplay route does not prove a measured yield or promise the merits you will receive in-game.
+
+Powerplay confirmation requires observations within 24 hours, assessed separately from the market-age filter. Older control/state facts remain stored and show as outdated. Explicit unoccupied systems can support Acquire targets without a selected-Power presence row. Exact server checks distinguish systems not yet observed from systems whose last observation is too old; another refresh cannot create an unreported observation.
 
 Retained observations remain available locally when a service is unavailable or disabled. The ring store reads the relevant region from SQLite and preserves original observations and their history. Offline data cannot provide unseen live updates.
 

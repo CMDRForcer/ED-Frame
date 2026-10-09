@@ -5850,7 +5850,11 @@ class NavigationMixin:
         self._mining_market_verification_states = verification_states
         lookup = result.get("powerplayLookup") or {}
         lookup_cache = dict(getattr(self, "_mining_powerplay_lookup_cache", {}))
-        found = {str(row.get("system") or "").casefold() for row in lookup.get("rows", [])}
+        found = {
+            str(row.get("system") or "").casefold()
+            for row in lookup.get("rows", [])
+            if row.get("controllingPower") or row.get("powerState") == "Unoccupied"
+        }
         for name in lookup.get("checked", []):
             key = str(name).casefold()
             lookup_cache[key] = now_epoch + (3600 if key in found else 600)
@@ -5946,6 +5950,13 @@ class NavigationMixin:
                 f"Top routes checked · {total}/{total} checks completed"
                 + (f" · {missing} systems without recent Powerplay evidence" if missing else "")
             )
+            coverage = lookup.get("coverage") or []
+            stale = sum(item.get("state") == "STALE" for item in coverage)
+            unseen = sum(item.get("state") == "MISSING" for item in coverage)
+            if stale or unseen:
+                self._mining_verification_status += (
+                    f" · {stale} last observations too old · {unseen} not yet observed"
+                )
         else:
             self._mining_verification_status = (
                 f"Top routes current · {total}/{total} systems verified"

@@ -3,7 +3,7 @@ from __future__ import annotations
 import base64
 import binascii
 from contextlib import asynccontextmanager, ExitStack
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 import json
 import os
 import threading
@@ -1344,6 +1344,7 @@ def search_mining_powerplay(
     cursor: Annotated[str | None, Query(max_length=1024)] = None,
     system: Annotated[list[str] | None, Query()] = None,
     regional_page_size: Annotated[int | None, Query(ge=1, le=1000)] = None,
+    include_coverage: bool = False,
 ) -> dict:
     limit = regional_page_limit(limit, regional_page_size,
                                 regional=system is None, maximum=1000)
@@ -1372,15 +1373,29 @@ def search_mining_powerplay(
             ORDER BY observed_at DESC, identity
             LIMIT %s
         """, tuple(values)).fetchall()
+        coverage_rows = (conn.execute("""
+            SELECT identity, system_name, observed_at FROM mining_powerplay
+            WHERE identity = ANY(%s)
+        """, (names,)).fetchall() if include_coverage and system is not None else [])
     more = len(rows) > limit
     last = rows[limit - 1] if more else None
-    return {
+    result = {
         "generatedAt": _now(), "hasMore": more,
         "nextCursor": _encode_state_cursor(last["observed_at"], "mining-powerplay", last["identity"]) if last else None,
         "selection": "systems" if system is not None else "region",
         "systemCount": len(rows[:limit]),
         "results": [fact for row in rows[:limit] for fact in row["facts"]],
     }
+    if include_coverage and system is not None:
+        known = {row["identity"]: row for row in coverage_rows}
+        cutoff = datetime.now(timezone.utc) - timedelta(hours=max_age_hours)
+        result["coverage"] = [{
+            "system": known[name]["system_name"] if name in known else name,
+            "state": ("CURRENT" if known[name]["observed_at"] >= cutoff else "STALE")
+                if name in known else "MISSING",
+            "observedAt": known[name]["observed_at"].isoformat() if name in known else None,
+        } for name in names]
+    return result
 
 
 def _mining_sites_sql(clauses):

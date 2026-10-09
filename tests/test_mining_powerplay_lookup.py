@@ -126,6 +126,18 @@ class PowerplayLookupTests(unittest.TestCase):
         result = fetch_powerplay_targets(missing_powerplay_targets([route()]), origin=[], get=get)
         self.assertEqual(result, {"rows": [], "checked": ["Mine", "Sale"], "failed": []})
 
+    def test_exact_coverage_is_public_metadata_and_never_merit_evidence(self):
+        get = Mock(return_value=response(results=[], hasMore=False, selection="systems", coverage=[
+            {"system": "Mine", "state": "STALE", "observedAt": "2020-01-01T00:00:00Z", "PRIVATE": "PRIVATE"},
+            {"system": "Sale", "state": "MISSING", "observedAt": None},
+            {"system": "Other", "state": "STALE"},
+        ]))
+        result = fetch_powerplay_targets(missing_powerplay_targets([route()]), origin=[], get=get)
+        self.assertTrue(get.call_args.kwargs["params"]["include_coverage"])
+        self.assertEqual(result["rows"], [])
+        self.assertEqual([item["state"] for item in result["coverage"]], ["STALE", "MISSING"])
+        self.assertNotIn("PRIVATE", str(result))
+
     def controller(self):
         c = CockpitController.__new__(CockpitController)
         c.profile_context = Mock(key="alpha")
@@ -246,6 +258,21 @@ class PowerplayLookupTests(unittest.TestCase):
         c.verifyMiningRoutes([route()], "Origin")
         c._start_network_worker.assert_not_called()
         self.assertIn("remain unknown", c._mining_verification_status)
+
+    def test_presence_only_uses_short_retry_and_reports_coverage_without_confirmation(self):
+        c = self.controller()
+        c.verifyMiningRoutes([route()], "Origin")
+        request = dict(c._active_mining_verification_request)
+        c._finish_mining_verification({**request, "powerplayLookup": {
+            "rows": [fact("Mine", controllingPower="", controlKnown=False)],
+            "checked": ["Mine", "Sale"], "failed": [], "coverage": [
+                {"system": "Mine", "state": "STALE"}, {"system": "Sale", "state": "MISSING"},
+            ],
+        }})
+        self.assertLess(c._mining_powerplay_lookup_cache["mine"], NOW.timestamp() + 700)
+        self.assertIn("2 systems without recent Powerplay evidence", c._mining_verification_status)
+        self.assertIn("1 last observations too old", c._mining_verification_status)
+        self.assertIn("1 not yet observed", c._mining_verification_status)
 
     def test_successful_region_publishes_powerplay_before_markets_and_waits_for_ring_merge(self):
         c = self.controller()

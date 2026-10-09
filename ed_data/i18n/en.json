@@ -152,6 +152,7 @@
 "mining.sale_unverified": "SALE UNVERIFIED",
 "mining.also_at_station": "ALSO AT THIS STATION",
 "mining.powerplay_verified": "VERIFIED",
+"mining.powerplay_too_old": "POWERPLAY DATA TOO OLD",
 "mining.powerplay_known": "ROUTE KNOWN",
 "mining.powerplay_ineligible": "NOT ELIGIBLE",
 "mining.subtitle_unified": "One finder for targeted mining, yield, profit, short routes and Powerplay merits",
