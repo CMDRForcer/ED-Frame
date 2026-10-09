@@ -235,3 +235,103 @@ def load_catalog_json(path, default, *, snapshot_arrays=False):
 def load_catalog_snapshot(path, default):
     """Internal, replacement-only mining facts; not a generic JSON loader."""
     return load_catalog_json(path, default, snapshot_arrays=True)
+
+
+def catalog_snapshot_decoder():
+    """A read-local decoder with the same representation as catalog snapshots."""
+    shared, keys, factory = {}, {}, CatalogDictFactory()
+    def arrays(value):
+        return tuple(arrays(item) if isinstance(item, list) else item for item in value)
+    def record(pairs):
+        result = factory.new_dict(key for key, _value in pairs)
+        for key, value in pairs:
+            key = keys.setdefault(key, key)
+            if key in SHARED_FIELDS and isinstance(value, str):
+                value = shared.setdefault(value, value)
+            result[key] = arrays(value) if isinstance(value, list) else value
+        return result
+    return json.JSONDecoder(object_pairs_hook=record)
+
+
+class _CatalogStream:
+    def __init__(self, handle, chunk_size):
+        self.handle, self.chunk_size = handle, chunk_size
+        self.buffer, self.offset, self.eof = "", 0, False
+        self.decoder = json.JSONDecoder()
+
+    def fill(self):
+        chunk = self.handle.read(self.chunk_size)
+        self.buffer = self.buffer[self.offset:] + chunk
+        self.offset, self.eof = 0, not chunk
+
+    def char(self):
+        while True:
+            while self.offset < len(self.buffer) and self.buffer[self.offset].isspace():
+                self.offset += 1
+            if self.offset < len(self.buffer):
+                return self.buffer[self.offset]
+            if self.eof:
+                return ""
+            self.fill()
+
+    def consume(self, token):
+        if self.char() != token:
+            raise ValueError("Invalid catalog JSON separator")
+        self.offset += 1
+
+    def scalar(self):
+        self.char()
+        while True:
+            try:
+                value, end = self.decoder.raw_decode(self.buffer, self.offset)
+                if not self.eof and (end == len(self.buffer)
+                        or self.buffer[end] not in " \t\r\n,]}:"):
+                    self.fill()
+                    continue
+                self.offset = end
+                return value
+            except json.JSONDecodeError:
+                if self.eof:
+                    raise
+                self.fill()
+
+    def array(self):
+        self.consume("[")
+        if self.char() != "]":
+            while True:
+                yield self.scalar()
+                if self.char() != ",":
+                    break
+                self.consume(",")
+        self.consume("]")
+
+
+def iter_catalog_candidates(path, metadata, *, chunk_size=64 * 1024):
+    """Stream a complete candidates root without retaining its global array.
+
+    Reject ambiguous duplicate root keys and malformed roots; publish metadata
+    only after the caller has consumed and validated the complete stream.
+    """
+    if chunk_size <= 0:
+        raise ValueError("Positive chunk size required")
+    with path.open("r", encoding="utf-8-sig") as handle:
+        reader = _CatalogStream(handle, chunk_size)
+        reader.consume("{")
+        keys = set()
+        if reader.char() != "}":
+            while True:
+                key = reader.scalar()
+                if not isinstance(key, str) or key in keys:
+                    raise ValueError("Unique catalog root keys required")
+                keys.add(key)
+                reader.consume(":")
+                if key == "candidates":
+                    yield from reader.array()
+                else:
+                    metadata[key] = reader.scalar()
+                if reader.char() != ",":
+                    break
+                reader.consume(",")
+        reader.consume("}")
+        if reader.char() or "candidates" not in keys:
+            raise ValueError("Complete candidates catalog required")

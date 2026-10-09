@@ -2,6 +2,20 @@
 
 ## Unreleased
 
+### Improved
+
+- Read retained mining rings directly from a profile-local, versioned SQLite
+  catalog. Adopt the full original JSON without deleting or rewriting it; keep
+  all payloads, source timestamps, unknown fields and historical versions.
+  Regional reads preserve inclusive distance boundaries and complete offline
+  coverage while keeping a bounded cache instead of the global ring array.
+- Commit incoming ring observations and displaced-history outbox records in
+  one transaction. Retry the existing archive without losing facts, replay
+  shutdown batches once, and fence writes/publication by profile, catalog,
+  revision and reset generation. Reset large ring histories in a worker;
+  continue calculating freshness, filtering, yields and Powerplay eligibility
+  with the existing rules. BGS predictions are unchanged.
+
 ## 1.5.43 — 2026-10-09
 
 ### Improved

@@ -121,6 +121,7 @@ from ed_companion.navigation.mining_finder import (
     project_eddn_mining_candidates,
     project_spansh_mining_candidates,
 )
+from ed_companion.navigation.mining_ring_store import RingCatalogView
 from ed_companion.navigation.mining_commodities import (
     MINING_COMMODITIES,
     RHINO_SURFACE,
@@ -374,6 +375,7 @@ class CockpitController(
         self.trader_catalog_file = user_trader_catalog_path(context)
         self.tech_broker_catalog_file = self.config_dir / "tech_broker_catalog_user.json"
         self.mining_catalog_file = self.config_dir / "mining_finder_catalog.json"
+        self._mining_ring_storage_enabled = True
         self.mining_market_cache_file = self.config_dir / "mining_market_cache.json"
         self.mining_market_catalog_legacy_file = (
             self.config_dir / "mining_market_catalog.json"
@@ -698,6 +700,7 @@ class CockpitController(
         self._mining_rows_build_in_flight = False
         self._mining_rows_build_dirty = False
         self.miningCatalogLoaded.connect(self._finish_mining_catalog_load)
+        self.miningRingResetFinished.connect(self._finish_mining_ring_reset)
         self.miningRowsReady.connect(self._finish_mining_rows_build)
         self._async_mining_plan_enabled = True
         self.miningPlanReady.connect(self._finish_mining_plan)
@@ -2636,6 +2639,8 @@ class CockpitController(
         if self._eddn_busy:
             LOGGER.warning("EDDN profile switch deferred while an upload is active")
             return False
+        if getattr(self, "_active_mining_ring_reset", None):
+            return False
         if hasattr(self, "_network_threads_lock") and (
             getattr(self, "_active_hge_observation_batch", None)
             or getattr(self, "_active_mining_observation_batch", None)
@@ -2948,10 +2953,13 @@ class CockpitController(
                 "hge_active": self._hge_sightings,
                 "inara_receipts_active": self._inara_receipts,
                 "mining_catalog_active": (
-                    candidates if isinstance(candidates, list) else []
+                    candidates if isinstance(candidates, (list, RingCatalogView)) else []
                 ),
             }
         self._history_export_busy = True
+        if isinstance(candidates, RingCatalogView):
+            active["mining_catalog_history_pending"] = candidates.store.pending_history("mining_catalog")
+            active["mining_observations_pending"] = candidates.store.pending_history("mining_observations")
         self._eddn_status = "Exporting full history in background…"
         self.connectionChanged.emit()
 

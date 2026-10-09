@@ -124,6 +124,7 @@ def run(args):
     source = {name: hashlib.sha256((ROOT / name).read_bytes()).hexdigest() for name in (
         "ed_companion/phase14/controller.py", "ed_companion/phase14/controller_navigation.py",
         "ed_companion/navigation/mining_batch.py", "ed_companion/navigation/catalog_json.py",
+        "ed_companion/navigation/mining_ring_store.py",
     )}
 
     def factory():
@@ -182,6 +183,40 @@ def run(args):
                     self.loaded_at = now
                 if now - self.loaded_at >= 2:
                     self.samples["miningIdle"] = memory()
+                    if args.exercise_mining:
+                        if args.local_delta:
+                            state = dict(c._state)
+                            local = dict(state.get("localMiningEvidence") or {})
+                            local["candidates"] = [*local.get("candidates", []), {
+                                "system": "Ring Delta Fixture", "ring": "Ring Delta Fixture 1 A Ring",
+                                "coordinates": [111.9375, -113.0625, 41.21875],
+                                "ringType": "Metallic", "reserveLevel": "Pristine",
+                                "sourceEvidence": "LOCAL_CONFIRMED", "observedAt": "2026-10-09T12:00:00Z",
+                                "learnedAt": "2026-10-09T12:00:00Z",
+                                "hotspots": [{"commodity": "platinum", "count": 1}],
+                            }]
+                            state["localMiningEvidence"] = local
+                            c._state = state
+                            c._mining_rows_cache_key = None
+                        self.stage = "plan"
+                        self.plan_started = now
+                        self.plan_args = ("Shanteneri", "Platinum", args.mining_radius, "ALL RESERVES", "ANY RING",
+                            True, "LASER", "POWERPLAY MERITS", 5000, 500000, 1, 100, False, True,
+                            False, False, "L", "Aisling Duval", "ACQUIRE", "ANY", "ANY")
+                        c.miningPlanRoutes(*self.plan_args)
+                        return
+                    self.finish()
+            if self.stage == "plan":
+                c.miningPlanRoutes(*self.plan_args)
+                if (getattr(c, "_active_mining_plan", None) is None
+                        and getattr(c, "_mining_plan_cache_key", None) == c._mining_plan_key(self.plan_args)):
+                    self.plan_seconds = now - self.plan_started
+                    rows = c._mining_rows_cache
+                    if not hasattr(rows, "nearby") or not rows._region:
+                        self.finish("Planner did not exercise the regional ring view")
+                        return
+                    self.regional_count = len(rows._region)
+                    self.samples["afterRegionalPlan"] = memory()
                     self.finish()
 
         def finish(self, error=None):
@@ -207,6 +242,10 @@ def run(args):
                 "powerplayObservations": len(c._mining_powerplay_observations),
                 "memory": self.samples, "heartbeat": summaries, "loadRequests": load_requests, "error": error,
                 "elapsedSeconds": round(time.perf_counter() - started, 4)}
+            if args.exercise_mining:
+                result.update(planSeconds=getattr(self,"plan_seconds",None),
+                              regionalRows=getattr(self,"regional_count",None),
+                              miningRadius=args.mining_radius,localDelta=args.local_delta)
             (destination / "result.json").write_text(json.dumps(result, indent=2), encoding="utf-8")
             print(json.dumps(result, indent=2), flush=True)
             self.app.exit(1 if error else 0)
@@ -219,6 +258,9 @@ def main():
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--prepare", type=Path)
     parser.add_argument("--label", default="baseline")
+    parser.add_argument("--exercise-mining", action="store_true")
+    parser.add_argument("--local-delta", action="store_true", help="Add one synthetic local ring only to isolated in-memory state")
+    parser.add_argument("--mining-radius", type=int, choices=(250,500), default=250)
     args = parser.parse_args()
     args.output = args.output.resolve()
     if args.output == ROOT / ".test-tmp" or not args.output.is_relative_to(ROOT / ".test-tmp"):

@@ -34,6 +34,7 @@ from ed_companion.navigation.mining_verification import (
 from ed_companion.navigation.mining_region_cache import MiningRegionCache
 from ed_companion.navigation.mining_snapshot import MiningSnapshotStore
 from ed_companion.navigation.mining_batch import prepare_mining_batch
+from ed_companion.navigation.mining_ring_store import RingCatalogStore, RingCatalogView, RingStoreConflict
 from ed_companion.navigation.state_find_batch import prepare_state_find_page
 from ed_companion.navigation.hge_batch import prepare_hge_batch
 from ed_companion.navigation.catalog_json import (
@@ -397,6 +398,7 @@ class NavigationMixin:
 
 
     miningCatalogLoaded = Signal(object)
+    miningRingResetFinished = Signal(object)
 
 
     miningRowsReady = Signal(object)
@@ -920,12 +922,21 @@ class NavigationMixin:
         path = self.mining_catalog_file
         powerplay_path = getattr(self, "mining_powerplay_catalog_file", None)
         powerplay_observations_path = getattr(self, "mining_powerplay_observations_file", None)
+        ring_storage = getattr(self, "_mining_ring_storage_enabled", False)
+        archive = getattr(self, "_history_archive", None)
         future = Future()
         self._mining_catalog_load_future = future
         self._mining_catalog_loaded = False
 
         def read_catalogs():
-            catalog = load_json_file(path, {"candidates": []}, loader=load_catalog_snapshot)
+            if ring_storage:
+                store = RingCatalogStore(path.with_name("mining_ring_catalog.sqlite3"), profile_key)
+                view = store.adopt(path)
+                store.flush_history(archive)
+                view.signals()
+                catalog = {**view.head["root"], "candidates": view}
+            else:
+                catalog = load_json_file(path, {"candidates": []}, loader=load_catalog_snapshot)
             identity_migrated = (
                 int(catalog.get("identityVersion", 0) or 0)
                 < MINING_CATALOG_IDENTITY_VERSION
@@ -940,9 +951,8 @@ class NavigationMixin:
             # Filtering and suggestions need no global ring identity map.
             # The first actual merge builds its private index in its worker.
             positions = None
-            system_names, system_keys = self._mining_system_name_index(
-                candidates
-            )
+            system_names, system_keys = (candidates.system_names() if isinstance(candidates, RingCatalogView)
+                                        else self._mining_system_name_index(candidates))
             public_links = {}
             for name, source, default in (("catalog", powerplay_path, {}),
                                           ("observations", powerplay_observations_path, [])):
@@ -1010,9 +1020,12 @@ class NavigationMixin:
             return
         loaded = catalog.get("candidates", [])
         current = self._mining_catalog.get("candidates", [])
-        loaded = loaded if isinstance(loaded, list) else []
+        loaded = loaded if isinstance(loaded, (list, RingCatalogView)) else []
         current = current if isinstance(current, list) else []
-        if current:
+        if current and isinstance(loaded, RingCatalogView):
+            self._pending_mining_candidates.extend(current)
+            merged = loaded
+        elif current:
             if positions is None:
                 positions = mining_candidate_positions(loaded)
             merged, _displaced = merge_mining_candidate_batch(
@@ -1132,6 +1145,8 @@ class NavigationMixin:
         if not getattr(self, "_mining_catalog_loaded", True):
             LOGGER.warning("Unhydrated mining catalog save refused; existing file retained")
             return
+        if isinstance(self._mining_catalog.get("candidates"), RingCatalogView):
+            return  # Every store mutation has already committed facts/history.
         self._save_mining_json(self.mining_catalog_file, self._mining_catalog)
 
 
@@ -1377,7 +1392,7 @@ class NavigationMixin:
         local_rows = local.get("candidates") if isinstance(local, dict) else ()
         local_rows = local_rows if isinstance(local_rows, list) else ()
         catalog_rows = catalog.get("candidates", [])
-        catalog_rows = catalog_rows if isinstance(catalog_rows, list) else []
+        catalog_rows = catalog_rows if isinstance(catalog_rows, (list, RingCatalogView)) else []
         origin = state.get("currentPosition")
         # Production Journal workers fingerprint immutable local rows once.
         # Imported/legacy states and small test shells use content comparison.
@@ -1404,6 +1419,9 @@ class NavigationMixin:
         catalog = mining_catalog.get("candidates", [])
         catalog_rows = catalog if isinstance(catalog, list) else []
         reset_at = str(mining_catalog.get("resetAt") or "")
+        if isinstance(catalog, RingCatalogView):
+            local_rows = [row for row in local_rows if not reset_at or str(row.get("observedAt") or "") > reset_at]
+            return catalog.with_overlay(local_rows)
         if reset_at:
             local_rows = [
                 row for row in local_rows
@@ -1756,6 +1774,7 @@ class NavigationMixin:
             or getattr(self, "_mining_market_busy", False)
             or getattr(self, "_mining_sync_busy", False)
             or getattr(self, "_active_mining_observation_batch", None)
+            or getattr(self, "_active_mining_ring_reset", None)
             or getattr(self, "_mining_rows_build_in_flight", False)
         )
 
@@ -2001,7 +2020,9 @@ class NavigationMixin:
         )
         origin_coordinates = None
         if custom_origin:
-            for candidate in source_rows:
+            if isinstance(source_rows, RingCatalogView):
+                origin_coordinates = source_rows.coordinates_for(requested_origin)
+            for candidate in (() if isinstance(source_rows, RingCatalogView) else source_rows):
                 if (
                     str(candidate.get("system") or "").strip().casefold()
                     == requested_origin.casefold()
@@ -2065,6 +2086,9 @@ class NavigationMixin:
         geometry_cache = getattr(self, "_mining_geometry_cache", None)
         raw_distances = custom_origin or hasattr(self, "_network_threads_lock")
         indexed_geometry = geometry_cache is not None and raw_distances and nearby_limit > 0
+        if isinstance(source_rows, RingCatalogView):
+            source_rows = source_rows.nearby(requested_origin or current_system, distance_origin, nearby_limit)
+            indexed_geometry = False
         scoped_rows = (geometry_cache.rows_for(
             source_rows, requested_origin or current_system, distance_origin,
             nearby_limit, self._valid_star_position,
@@ -2413,7 +2437,10 @@ class NavigationMixin:
         observed = local.get("refinedCommodities", []) \
             if isinstance(local, dict) else []
         observed = list(observed) if isinstance(observed, list) else []
-        for row in self._mining_rows():
+        source_rows = self._mining_rows()
+        if isinstance(source_rows, RingCatalogView):
+            return mining_commodity_catalog([*observed, *source_rows.signals()])
+        for row in source_rows:
             for hotspot in row.get("hotspots", []):
                 if isinstance(hotspot, dict):
                     observed.append({"id": hotspot.get("commodity")})
@@ -2449,6 +2476,8 @@ class NavigationMixin:
     @staticmethod
     def _summarize_mining_rows(rows):
         """Calculate stored-record quality; safe to run in the row worker."""
+        if isinstance(rows, RingCatalogView):
+            return rows.summary()
         counts = {key: 0 for key in (
             "LOCAL_CONFIRMED", "LIVE_REPORTED", "CATALOG_CANDIDATE", "STALE"
         )}
@@ -4692,6 +4721,11 @@ class NavigationMixin:
             is not None
         ):
             return dict(market_origin)
+        rings = getattr(self, "_mining_catalog", {}).get("candidates")
+        if isinstance(rings, RingCatalogView):
+            coordinates = rings.coordinates_for(name)
+            if coordinates is not None:
+                return {"system": name, "coordinates": coordinates, "source": "Local ring catalog"}
         try:
             coordinates = self._valid_star_position(
                 self._system_coordinate_index().get(key)
@@ -5832,8 +5866,13 @@ class NavigationMixin:
             row for row in result.get("candidates", [])
             if isinstance(row, dict)
         ]
-        if (context_matches and incoming
-                and not self._dispatch_mining_observation_batch(incoming)):
+        fallback_incoming = bool(context_matches and incoming
+                and not self._dispatch_mining_observation_batch(incoming))
+        if fallback_incoming:
+            if self._merge_ring_rows_sync(incoming):
+                changed = True
+                incoming = []
+        if fallback_incoming and incoming:
             old = self._mining_catalog.get("candidates", [])
             old = old if isinstance(old, list) else []
             positions = self._mining_positions_for(old)
@@ -6006,6 +6045,37 @@ class NavigationMixin:
             self._mining_catalog_reset_requested = True
             return
         existing = self._mining_catalog.get("candidates", [])
+        reset_view = getattr(self, "_completed_mining_ring_reset", None)
+        if isinstance(existing, RingCatalogView) and reset_view is None:
+            if getattr(self, "_active_mining_ring_reset", None):
+                return
+            if (getattr(self, "_active_mining_observation_batch", None)
+                    or getattr(self, "_pending_mining_candidates", [])):
+                self._mining_ring_reset_requested = True
+                self.flushHgeObservationBatch(True)
+                return
+            self._mining_ring_reset_requested = False
+            request = {"id": uuid.uuid4().hex, "profileKey": self.profile_context.key,
+                       "generation": self._profile_generation, "path": str(self.mining_catalog_file)}
+            archive = getattr(self, "_history_archive", None)
+            self._active_mining_ring_reset = request
+            self._mining_sync_status = "Saving ring history and resetting in background…"
+            self.miningChanged.emit()
+
+            def worker():
+                result = dict(request)
+                try:
+                    result["view"] = existing.store.reset(existing, archive=archive)
+                except (OSError, sqlite3.Error, ValueError, TypeError) as exc:
+                    result["error"] = type(exc).__name__
+                self.miningRingResetFinished.emit(result)
+
+            if not self._start_network_worker(worker, "mining-ring-reset"):
+                self._active_mining_ring_reset = None
+                self._mining_sync_status = "Mining reset unavailable; existing data retained"
+                self.miningChanged.emit()
+            return
+        self._completed_mining_ring_reset = None
         if isinstance(existing, list) and not self._archive_history(
             "mining_catalog", existing
         ):
@@ -6038,7 +6108,8 @@ class NavigationMixin:
         self._mining_verification_status = (
             "Ready · verifies top routes after search"
         )
-        self._pending_mining_candidates = []
+        retained_pending = self._pending_mining_candidates if reset_view is not None else []
+        self._pending_mining_candidates = retained_pending
         self._active_mining_observation_batch = None
         self._active_mining_market_request = None
         self._pending_mining_market_query = None
@@ -6052,12 +6123,13 @@ class NavigationMixin:
         if not hasattr(self, "_mining_catalog_load_token"):
             self._mining_catalog_load_token = 0
         self._mining_catalog_load_token += 1
-        self._mining_catalog = {
+        self._mining_catalog = ({**reset_view.head["root"], "candidates": reset_view}
+                               if reset_view is not None else {
             "updatedAt": datetime.now(timezone.utc).isoformat(timespec="seconds"),
             "resetAt": datetime.now(timezone.utc).isoformat(timespec="seconds"),
             "identityVersion": MINING_CATALOG_IDENTITY_VERSION,
             "candidates": [],
-        }
+        })
         self._mining_catalog_revision = getattr(
             self, "_mining_catalog_revision", 0
         ) + 1
@@ -6093,12 +6165,12 @@ class NavigationMixin:
             ] = self._mining_save_sequence
             with self._mining_file_lock:
                 MiningSnapshotStore(self.mining_catalog_file.with_name("mining_site_snapshots.sqlite3")).reset()
-                self.mining_catalog_file.unlink(missing_ok=True)
-                load_json_file(self.mining_catalog_file, {}, encoding="utf-8")
-                saved = atomic_write(
-                    self.mining_catalog_file,
-                    json.dumps(self._mining_catalog, indent=2),
-                )
+                if reset_view is not None:
+                    saved = True  # Durable reset; the original adoption JSON stays intact.
+                else:
+                    self.mining_catalog_file.unlink(missing_ok=True)
+                    load_json_file(self.mining_catalog_file, {}, encoding="utf-8")
+                    saved = atomic_write(self.mining_catalog_file, json.dumps(self._mining_catalog, indent=2))
             store = getattr(self, "_mining_market_store", None)
             if store is not None:
                 saved = store.reset() and saved
@@ -6130,6 +6202,26 @@ class NavigationMixin:
         self.connectionChanged.emit()
         if saved and getattr(self, "_edframe_catalog_enabled", True):
             QTimer.singleShot(0, self.syncEdFrameCatalog)
+        if retained_pending:
+            self.flushHgeObservationBatch(True)
+
+
+    @Slot(object)
+    def _finish_mining_ring_reset(self, result):
+        active = getattr(self, "_active_mining_ring_reset", None)
+        if not active or active["id"] != result.get("id"):
+            return
+        self._active_mining_ring_reset = None
+        if (result["profileKey"] != self.profile_context.key
+                or result["generation"] != self._profile_generation
+                or result["path"] != str(self.mining_catalog_file)):
+            return
+        if result.get("error"):
+            self._mining_sync_status = "Mining reset failed; existing data retained"
+            self.miningChanged.emit()
+            return
+        self._completed_mining_ring_reset = result["view"]
+        self.resetMiningCatalog()
 
 
     @Slot(object)
@@ -6162,6 +6254,8 @@ class NavigationMixin:
         if self._dispatch_mining_observation_batch(
             incoming, status=f"Current system refreshed · {len(incoming)} rings"
         ):
+            return
+        if self._merge_ring_rows_sync(incoming):
             return
         old = old if isinstance(old, list) else []
         positions = self._mining_positions_for(old)
@@ -6247,6 +6341,9 @@ class NavigationMixin:
         if (getattr(self, "_shutdown_complete", False)
                 or not hasattr(self, "_network_threads_lock")):
             return False  # Final durable flush and lightweight/headless callers.
+        if getattr(self, "_active_mining_ring_reset", None):
+            self._pending_mining_candidates.extend(rows)
+            return True
         if not self._ensure_mining_catalog_loaded():
             self._pending_mining_candidates.extend(rows)
             self._mining_catalog_pending_search_refresh = bool(
@@ -6264,7 +6361,7 @@ class NavigationMixin:
                 active["searchRefresh"] = True
             return True
         existing = self._mining_catalog.get("candidates", [])
-        existing = existing if isinstance(existing, list) else []
+        existing = existing if isinstance(existing, (list, RingCatalogView)) else []
         # Do not build a missing index on the UI thread. Workers copy a valid
         # index, or build their own. Freeze the cheap dictionary snapshot here:
         # a delayed worker must not see an index for a newer catalog/list.
@@ -6278,6 +6375,7 @@ class NavigationMixin:
             "resetAt": str(self._mining_catalog.get("resetAt") or ""),
             "revision": getattr(self, "_mining_catalog_revision", 0),
             "rows": rows, "status": status,
+            "ringBase": existing if isinstance(existing, RingCatalogView) else None,
             "searchRefresh": bool(search_refresh),
         }
         archive = getattr(self, "_history_archive", None)
@@ -6289,11 +6387,15 @@ class NavigationMixin:
         def worker():
             result = dict(request)
             try:
-                result.update(prepare_mining_batch(
-                    existing, rows, positions=positions, archive=archive,
-                    archive_path=archive_path, transient_fields=MINING_TRANSIENT_FIELDS,
-                    snapshot_arrays=True, positions_owned=True,
-                ))
+                if isinstance(existing, RingCatalogView):
+                    result.update(existing.store.ingest(existing, rows, archive=archive,
+                                                        batch_id=request["id"]))
+                else:
+                    result.update(prepare_mining_batch(
+                        existing, rows, positions=positions, archive=archive,
+                        archive_path=archive_path, transient_fields=MINING_TRANSIENT_FIELDS,
+                        snapshot_arrays=True, positions_owned=True,
+                    ))
             except Exception as exc:
                 LOGGER.exception("Mining observation merge failed")
                 result["error"] = type(exc).__name__
@@ -6313,8 +6415,8 @@ class NavigationMixin:
         self._active_mining_observation_batch = None
         if not self._mining_batch_context_matches(result):
             return  # Explicit reset/profile switch must not resurrect old data.
-        if (result.get("error") or result.get("revision") != getattr(
-                self, "_mining_catalog_revision", 0)):
+        if (result.get("error") or (not isinstance(result.get("candidates"), RingCatalogView)
+                and result.get("revision") != getattr(self, "_mining_catalog_revision", 0))):
             # A baseline/current-system refresh landed while this snapshot was
             # merging. Rebase every observation, rather than overwrite it.
             self._pending_mining_candidates = [
@@ -6326,13 +6428,18 @@ class NavigationMixin:
                 return
         else:
             candidates = result["candidates"]
+            if isinstance(candidates, RingCatalogView):
+                current = self._mining_catalog.get("candidates")
+                if isinstance(current, RingCatalogView) and current.revision > candidates.revision:
+                    candidates = current
             self._mining_catalog = {
+                **(candidates.head["root"] if isinstance(candidates, RingCatalogView) else {}),
                 "updatedAt": datetime.now(timezone.utc).isoformat(timespec="seconds"),
                 "resetAt": result["resetAt"],
                 "identityVersion": MINING_CATALOG_IDENTITY_VERSION,
                 "candidates": candidates,
             }
-            self._mining_catalog_revision = result["revision"] + 1
+            self._mining_catalog_revision = getattr(self, "_mining_catalog_revision", 0) + 1
             self._mining_catalog_positions = result["positions"]
             self._mining_catalog_positions_identity = id(candidates)
             self._add_mining_system_names(result["rows"])
@@ -6349,11 +6456,44 @@ class NavigationMixin:
                 self.connectionChanged.emit()
             self.miningChanged.emit()
         pending = self._pending_mining_candidates
+        if getattr(self, "_mining_ring_reset_requested", False):
+            self.resetMiningCatalog()
+            return
         if pending and not getattr(self, "_shutdown_complete", False):
             self._pending_mining_candidates = []
             if not self._dispatch_mining_observation_batch(
                     pending, search_refresh=bool(active.get("searchRefresh"))):
                 self._pending_mining_candidates = pending
+
+
+    def _merge_ring_rows_sync(self, rows, *, batch_id=None, base=None):
+        """Final durable flush/replay; return True only for the disk-store path."""
+        current = self._mining_catalog.get("candidates")
+        if not isinstance(current, RingCatalogView):
+            return False
+        try:
+            if getattr(self, "_active_mining_ring_reset", None):
+                # Serialize behind the reset transaction, then target its
+                # actual durable epoch even if Qt completion is still queued.
+                with current.store._lock:
+                    current = current.store.view()
+            result = current.store.ingest(base if base is not None else current, rows,
+                archive=getattr(self, "_history_archive", None), batch_id=batch_id)
+            candidates = result["candidates"]
+            self._mining_catalog = {**candidates.head["root"], "candidates": candidates}
+            self._mining_catalog_revision = getattr(self, "_mining_catalog_revision", 0) + 1
+            self._mining_rows_cache_key = None
+            self._mining_find_cache_key = None
+            self._mining_find_cache = []
+            self._add_mining_system_names(rows)
+            self.miningChanged.emit()
+            self.stateChanged.emit()
+        except (OSError, sqlite3.Error, ValueError, TypeError):
+            self._pending_mining_candidates = [*rows, *getattr(self, "_pending_mining_candidates", [])]
+            if getattr(self, "_shutdown_complete", False):
+                self._archive_history("mining_observations", rows)
+            LOGGER.exception("Ring-store flush deferred; observations retained")
+        return True
 
 
     def _dispatch_hge_observation_batch(self, snapshots, additions):
@@ -6501,9 +6641,11 @@ class NavigationMixin:
                 # worker. Reclaim its inputs for the final synchronous save;
                 # its late result cannot overwrite this durable snapshot.
                 self._active_mining_observation_batch = None
-                self._pending_mining_candidates = [
-                    *active["rows"], *self._pending_mining_candidates,
-                ]
+                if not self._merge_ring_rows_sync(active["rows"], batch_id=active["id"],
+                                                  base=active.get("ringBase")):
+                    self._pending_mining_candidates = [
+                        *active["rows"], *self._pending_mining_candidates,
+                    ]
         pending_snapshots = self._pending_bgs_snapshots
         snapshots_due = bool(pending_snapshots) and (
             force or time.monotonic() - getattr(
@@ -6551,7 +6693,8 @@ class NavigationMixin:
                 self._dispatch_hge_observation_batch(snapshots, hge_rows)
             else:
                 removed = self._apply_hge_observation_batch_sync(snapshots, hge_rows)
-        if mining_rows and not self._dispatch_mining_observation_batch(mining_rows):
+        if mining_rows and not self._dispatch_mining_observation_batch(mining_rows) \
+                and not self._merge_ring_rows_sync(mining_rows):
             existing = self._mining_catalog.get("candidates", [])
             existing = existing if isinstance(existing, list) else []
             positions = self._mining_positions_for(existing)
