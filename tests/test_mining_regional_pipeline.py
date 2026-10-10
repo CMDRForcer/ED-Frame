@@ -213,9 +213,23 @@ class RegionalPipelineTests(unittest.TestCase):
                 rows = [ring('A', source='new')]
                 prepared = kwargs['prepare_sites'](rows)
                 return {'success': True, 'markets': [], 'preparedRings': prepared}
+            errors = []
+            refresh_worker = c._start_network_worker.call_args.args[0]
+            def run_refresh():
+                try:
+                    refresh_worker()
+                except Exception as exc:
+                    errors.append(exc)
             with patch('ed_companion.phase14.controller_navigation.fetch_mining_refresh', side_effect=fetch):
-                worker = threading.Thread(target=c._start_network_worker.call_args.args[0])
-                worker.start(); worker.join(3)
-            self.assertFalse(worker.is_alive())
+                worker = threading.Thread(target=run_refresh)
+                worker.start()
+                try:
+                    # This verifies durable archival, not hosted-runner I/O speed.
+                    worker.join(30)
+                    self.assertFalse(worker.is_alive(), 'archive worker did not finish')
+                finally:
+                    # Keep the fixture and patch alive until SQLite handles close.
+                    worker.join(30)
+            self.assertEqual(errors, [])
             archive = HistoryArchive(Path(directory) / 'data_history.sqlite3')
             self.assertEqual(archive.counts(), {'mining_catalog': 1, 'mining_observations': 1})
