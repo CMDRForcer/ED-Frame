@@ -56,11 +56,13 @@ class AppResponsivenessTests(unittest.TestCase):
     def test_slow_catalog_save_does_not_block_unrelated_settings_file(self):
         with TemporaryDirectory() as directory:
             entered, release = threading.Event(), threading.Event()
+            settings_finished = threading.Event()
+            settings_results = []
             errors = []
             def chunks():
                 yield '{"candidates":['
                 entered.set()
-                if not release.wait(3):
+                if not release.wait(30):
                     raise AssertionError("writer not released")
                 yield "]}"
             def writer():
@@ -68,18 +70,40 @@ class AppResponsivenessTests(unittest.TestCase):
                     atomic_write_chunks(Path(directory) / "catalog.json", chunks())
                 except Exception as exc:
                     errors.append(exc)
+            def settings_writer():
+                try:
+                    settings_results.append(atomic_write(
+                        Path(directory) / "settings.json", '{"last_page":1}',
+                    ))
+                except Exception as exc:
+                    errors.append(exc)
+                finally:
+                    settings_finished.set()
             worker = threading.Thread(target=writer)
+            settings_worker = threading.Thread(target=settings_writer)
             worker.start()
             try:
-                self.assertTrue(entered.wait(1))
-                started = time.monotonic()
-                self.assertTrue(atomic_write(Path(directory) / "settings.json", '{"last_page":1}'))
-                self.assertLess(time.monotonic() - started, 0.25)
+                self.assertTrue(entered.wait(10))
+                settings_worker.start()
+                # Assert independence while the catalog writer remains paused.
+                # Runner scheduling and fsync latency are not a lock regression.
+                self.assertTrue(settings_finished.wait(10),
+                                "settings write blocked behind the catalog writer")
+                self.assertEqual(settings_results, [True])
+                self.assertFalse(release.is_set())
                 self.assertTrue(worker.is_alive())
+                self.assertEqual(json.loads((Path(directory) / "settings.json").read_text()),
+                                 {"last_page": 1})
             finally:
                 release.set()
-                worker.join(3)
+                worker.join(10)
+                if settings_worker.ident is not None:
+                    settings_worker.join(10)
+            self.assertFalse(worker.is_alive())
+            self.assertFalse(settings_worker.is_alive())
             self.assertEqual(errors, [])
+            self.assertEqual(json.loads((Path(directory) / "catalog.json").read_text()),
+                             {"candidates": []})
 
     def test_stream_persistence_protects_wrong_root_then_accepts_repaired_file(self):
         with TemporaryDirectory() as directory:
