@@ -8,6 +8,11 @@ import traceback
 from pathlib import Path
 from types import SimpleNamespace
 
+# PyInstaller's Windows worker invocation must leave before app/single-instance setup.
+if __name__ == "__main__":
+    import multiprocessing
+    multiprocessing.freeze_support()
+
 from ed_companion.persistence import atomic_write, cleanup_stale_atomic_temps
 from ed_companion.logging_security import redact_secrets
 
@@ -430,6 +435,10 @@ class SmokeTestRunner(QObject):
         ])
         for label, object_name in self.DIALOG_STEPS:
             self.steps.append((label, lambda n=object_name: self._dialog(n)))
+        if os.environ.get("PHASE14_SMOKE_MINING_PROCESS") == "1":
+            self.steps.append(("mining-process", self._mining_worker_ready))
+        if os.environ.get("PHASE14_SMOKE_COMPUTE_WORK") == "1":
+            self.steps.append(("compute-work", self._compute_worker_ready))
         self.steps.append(("screenshot", self._capture))
 
     def start(self):
@@ -631,6 +640,19 @@ class SmokeTestRunner(QObject):
         QMetaObject.invokeMethod(target, "close")
         return True
 
+    def _mining_worker_ready(self):
+        stats = getattr(self.controller, "_mining_process_stats", {})
+        if stats.get("miningWorkerPid"):
+            return stats["miningWorkerPid"] != os.getpid()
+        # An explicit local query exercises the packaged spawn/pickle path.
+        # The usual surface smoke deliberately leaves SEARCH unpressed.
+        self.controller.miningPlanRoutes(
+            "Demo Junction", "Platinum", 250, "ALL RESERVES", "ANY RING",
+            True, "LASER", "PRICE", 0, 0, 24, 100,
+            False, False, False, False, "ANY", "", "REINFORCE", "ANY", "ANY",
+        )
+        return False
+
     def _capture(self):
         if not self.screenshot:
             return True
@@ -638,12 +660,37 @@ class SmokeTestRunner(QObject):
             raise RuntimeError(f"screenshot save failed: {self.screenshot}")
         return True
 
+    def _compute_worker_ready(self):
+        if not getattr(self, "_compute_smoke_started", False):
+            from ed_companion.cpu_tasks import journal_projection, powerplay_merge
+            self._compute_smoke_started = True
+            self._compute_smoke_results = []
+            events = [{"event": "Music", "timestamp": "2026-10-10T00:00:00Z"}] * 20000
+            rows = [{"system": "Fixture " + str(i), "power": "Aisling Duval",
+                     "observedAt": "2026-10-10T00:00:00Z"} for i in range(30000)]
+            jobs = [("qa-journal", journal_projection, (events,)),
+                    ("qa-powerplay", powerplay_merge, ([], rows, 30000))]
+            for name, function, args in jobs:
+                def check(name=name, function=function, args=args):
+                    try:
+                        value = self.controller._compute_work.compute(name, function, *args, memory_mb=256)
+                        self._compute_smoke_results.append({"name": name, "equal": value == function(*args)})
+                    except Exception as exc:
+                        self._compute_smoke_results.append({"name": name, "error": repr(exc)})
+                self.controller._background_work.submit(check, name, lane="interactive")
+        if len(self._compute_smoke_results) != 2:
+            return False
+        if not all(row.get("equal") for row in self._compute_smoke_results):
+            raise RuntimeError(str(self._compute_smoke_results))
+        return all(row["lastPid"] != os.getpid() for row in
+            self.controller._compute_work.snapshot()["computeJobs"] if row["name"].startswith("qa-"))
+
     def _next(self):
         if self.step_index >= len(self.steps):
             self._finish()
             return
         self.current = self.steps[self.step_index]
-        self.deadline = time.monotonic() + 3.0
+        self.deadline = time.monotonic() + (15.0 if self.current[0] in ("mining-process", "compute-work") else 3.0)
         self._poll()
 
     def _poll(self):
@@ -664,7 +711,7 @@ class SmokeTestRunner(QObject):
         elif time.monotonic() >= self.deadline:
             self.results.append({
                 "area": label, "status": "FAIL",
-                "error": "ready-state timeout after 3000 ms",
+                "error": "ready-state timeout after " + ("15000" if label in ("mining-process", "compute-work") else "3000") + " ms",
             })
             self.step_index += 1
             QTimer.singleShot(0, self._next)
@@ -685,6 +732,13 @@ class SmokeTestRunner(QObject):
             })
         failed = any(row["status"] == "FAIL" for row in self.results)
         report = {"status": "FAIL" if failed else "PASS", "areas": self.results}
+        # Windowed Windows builds have no stdout; keep packaged QA reviewable.
+        report_path = os.environ.get("PHASE14_SMOKE_REPORT_PATH")
+        if report_path:
+            report["miningProcess"] = getattr(self.controller, "_mining_process_stats", {})
+            service = getattr(self.controller, "_compute_work", None)
+            report["computeWork"] = service.snapshot() if service else {}
+            atomic_write(Path(report_path), json.dumps(report, ensure_ascii=False))
         print("PHASE14_SMOKE_REPORT=" + json.dumps(report, ensure_ascii=False), flush=True)
         self.app.exit(1 if failed else 0)
 

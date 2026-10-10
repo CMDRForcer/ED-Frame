@@ -184,7 +184,7 @@ Item {
             markets += Boolean(row.marketKnown) ? 1 : 0
             if (meritRequired) {
                 known += Boolean(row.meritKnown) ? 1 : 0
-                merits += Boolean(row.meritKnown) ? 1 : 0
+                merits += Boolean(row.meritVerified) ? 1 : 0
             }
         }
         return {
@@ -407,8 +407,10 @@ Item {
     }
     function verificationShortLabel(row) {
         if (!row) return appWindow.t("status.unknown", "UNKNOWN")
+        if (row.powerplayVerificationState === "PROVISIONAL")
+            return appWindow.t("mining.powerplay_last_known", "LAST KNOWN · CHECK IN GAME")
         if (row.powerplayVerificationState === "POWERPLAY_DATA_MISSING"
-                && row.powerplayEvidenceState === "STALE")
+                && (row.powerplayEvidenceState === "STALE" || powerplaySourceTooOld(row)))
             return appWindow.t("mining.powerplay_too_old", "POWERPLAY DATA TOO OLD")
         let explicitLabel = row.powerplayVerificationLabel === undefined
                 || row.powerplayVerificationLabel === null
@@ -431,11 +433,57 @@ Item {
         if (state === "MARKET_CHECK_RUNNING") return "MARKET CHECK RUNNING"
         return appWindow.t("status.unknown", "UNKNOWN")
     }
+    function powerplaySourceTooOld(row) {
+        let states = cockpit.miningPowerplayLookupStates || ({})
+        return [String(row.system || ""), String(row.sellSystem || "")].some(function(system) {
+            let entry = states[system.trim().toLowerCase()]
+            return entry && entry.state === "STALE"
+        })
+    }
     function verificationReason(row) {
-        if (!row || row.pendingReason === undefined
-                || row.pendingReason === null)
-            return ""
-        return String(row.pendingReason)
+        if (!row) return ""
+        return [String(row.pendingReason || ""), powerplaySourceDetails(row)]
+                .filter(function(value) { return value !== "" }).join("\n")
+    }
+    function powerplaySourceDetails(row) {
+        if (!row || appliedOptimization !== "POWERPLAY MERITS") return ""
+        let states = cockpit.miningPowerplayLookupStates || ({})
+        let systems = [String(row.system || ""), String(row.sellSystem || "")]
+        let observations = row.powerplayObservations || []
+        let details = []
+        let seen = ({})
+        for (let system of systems) {
+            let key = system.trim().toLowerCase()
+            let entry = states[key]
+            let observed = observations.find(function(item) {
+                return String(item.system || "").trim().toLowerCase() === key
+            })
+            if (observed && (!entry || entry.state === "STALE")) {
+                entry = {"state": row.powerplayEvidenceState === "LAST_KNOWN" ? "LAST_KNOWN" : "CURRENT",
+                         "observedAt": observed.observedAt}
+            }
+            if (!key || seen[key] || !entry) continue
+            seen[key] = true
+            let state = String(entry.state || "")
+            let labels = {
+                "CURRENT": appWindow.t("mining.pp_source_current", "Current control observation"),
+                "FETCHED": appWindow.t("mining.pp_source_fetched", "Control supplemented"),
+                "STALE": appWindow.t("mining.pp_source_stale", "Last control observation too old"),
+                "LAST_KNOWN": appWindow.t("mining.pp_source_last_known", "Last known control · unconfirmed"),
+                "MISSING": appWindow.t("mining.pp_source_missing", "Source has no current control observation"),
+                "NO_ADDRESS": appWindow.t("mining.pp_source_address", "No unique system address for lookup"),
+                "QUEUED": appWindow.t("mining.pp_source_queued", "Source check queued"),
+                "ERROR": appWindow.t("mining.pp_source_error", "Source temporarily unavailable"),
+                "BUSY": appWindow.t("mining.pp_source_busy", "Source busy; retry later")
+            }
+            let stamp = entry.observedAt ? new Date(String(entry.observedAt)) : null
+            let time = stamp && !isNaN(stamp.getTime())
+                    ? " · " + stamp.toLocaleString(Qt.locale(), "dd.MM.yyyy hh:mm") : ""
+            let control = observed ? " · " + String(observed.controllingPower || observed.powerState || "")
+                          + (observed.controllingPower && observed.powerState ? " · " + observed.powerState : "") : ""
+            details.push(system + ": " + (labels[state] || state) + control + time)
+        }
+        return details.join("\n")
     }
     function routeIndex(row) {
         for (let index = 0; index < resultRows.length; ++index) {
@@ -535,7 +583,10 @@ Item {
         cockpit.refreshMiningMarkets(
                     appliedStartSystem, appliedCommodityFilter,
                     appliedNearbyLy, appliedMinDemand,
-                    appliedMaxMarketAgeHours, appliedLandingPad)
+                    appliedMaxMarketAgeHours, appliedLandingPad,
+                    appliedOptimization === "POWERPLAY MERITS" ? appliedPower : "",
+                    appliedOptimization === "POWERPLAY MERITS" ? appliedPowerGoal : "",
+                    appliedOpposingPower, appliedMiningMethod)
         _miningRevisionSnapshot = cockpit.miningRevision
         Qt.callLater(refreshResults)
     }
@@ -577,10 +628,30 @@ Item {
 
     Connections {
         target: cockpit
+        enabled: appWindow.currentPage === 12
         function onMiningChanged() {
             if (!cockpit.miningMarketSyncBusy)
                 miningFinderPage._miningRevisionSnapshot = cockpit.miningRevision
-            Qt.callLater(miningFinderPage.refreshResults)
+            // A busy flag can finish without changing rows. Retry verification
+            // without reading/resetting the result model on every status signal.
+            Qt.callLater(miningFinderPage.verifyCurrentSearch)
+        }
+    }
+
+    Timer {
+        id: powerplayContinuation
+        objectName: "qa-mining-powerplay-continuation"
+        interval: 30000
+        repeat: true
+        running: appWindow.currentPage === 12 && searchRevision > 0
+                 && resultRows.length > 0 && cockpit.edFrameCatalogEnabled
+                 && (cockpit.miningPowerplayPendingSourceCount > 0
+                     || cockpit.miningMarketPendingSourceCount > 0)
+                 && !cockpit.miningVerificationBusy && !cockpit.miningPlanBusy
+                 && !cockpit.miningMarketSyncBusy
+        onTriggered: {
+            verifiedSearchRevision = -1
+            verifyCurrentSearch()
         }
     }
 
@@ -1183,6 +1254,12 @@ Item {
                             }
                         }
                     }
+                    Label {
+                        Layout.fillWidth: true
+                        visible: miningFinderPage.optimization === "POWERPLAY MERITS"
+                        text: appWindow.t("mining.pp_age_policy", "Powerplay: current within 48 h; last known up to 14 days is shown as unconfirmed.")
+                        color: muted; font.pixelSize: UiMetrics.caption; wrapMode: Text.WordWrap
+                    }
                     Flow {
                         Layout.fillWidth: true
                         Layout.preferredHeight: childrenRect.height
@@ -1339,33 +1416,40 @@ Item {
     RowLayout {
         Layout.fillWidth: true
         Layout.minimumHeight: 250
-        Layout.preferredHeight: 280
-        Layout.maximumHeight: 280
+        Layout.preferredHeight: powerplaySourceDetails(bestRoute) !== "" ? 360 : 280
+        Layout.maximumHeight: powerplaySourceDetails(bestRoute) !== "" ? 360 : 280
         spacing: 10
         objectName: "qa-mining-results"
         visible: resultRows.length > 0
 
         Rectangle {
-            Layout.fillWidth: true; Layout.fillHeight: true
+            id: bestRouteCard
+            objectName: "qa-mining-best-route"
+            Layout.fillWidth: true; Layout.fillHeight: true; Layout.minimumWidth: 0
             radius: 11; color: panelRaised; border.width: 1; border.color: orange
             ColumnLayout {
                 anchors.fill: parent; anchors.margins: 10; spacing: 5
                 RowLayout {
-                    Layout.fillWidth: true
+                    Layout.fillWidth: true; Layout.minimumWidth: 0
                     ColumnLayout {
-                        Layout.fillWidth: true; spacing: 3
+                        Layout.fillWidth: true; Layout.minimumWidth: 0; spacing: 3
                         Label {
                             text: activeRouteIndex === 0
                                   ? appWindow.t("mining.best_for_goal", "BEST ROUTE FOR YOUR GOAL")
                                   : appWindow.t("mining.selected_route", "SELECTED ROUTE")
                             color: orange; font.pixelSize: UiMetrics.caption; font.bold: true
                         }
-                        Label { text: String(bestRoute.selectedCommodityName || appliedCommodityFilter) + " · " + appliedMiningMethod + " · " + String(bestRoute.ringTypeName || "UNKNOWN RING"); color: textPrimary; font.pixelSize: 16; font.bold: true; elide: Text.ElideRight; Layout.fillWidth: true }
+                        Label { text: String(bestRoute.selectedCommodityName || appliedCommodityFilter) + " · " + appliedMiningMethod + " · " + String(bestRoute.ringTypeName || "UNKNOWN RING"); color: textPrimary; font.pixelSize: 16; font.bold: true; elide: Text.ElideRight; Layout.fillWidth: true; Layout.minimumWidth: 0 }
                     }
+                }
+                RowLayout {
+                    Layout.fillWidth: true; Layout.minimumWidth: 0
                     Rectangle {
                         visible: appliedOptimization === "POWERPLAY MERITS"
                         implicitWidth: powerplayVerificationLabel.implicitWidth + 16
                         implicitHeight: 26
+                        Layout.minimumWidth: 0
+                        Layout.maximumWidth: implicitWidth
                         radius: 6
                         color: inputBackground
                         border.width: 1
@@ -1376,13 +1460,16 @@ Item {
                         HoverHandler { id: bestVerificationHover }
                         Label {
                             id: powerplayVerificationLabel
-                            anchors.centerIn: parent
+                            anchors.left: parent.left; anchors.right: parent.right
+                            anchors.margins: 8; anchors.verticalCenter: parent.verticalCenter
+                            elide: Text.ElideRight
                             text: verificationShortLabel(bestRoute)
                             color: verificationColor(bestRoute)
                             font.pixelSize: UiMetrics.caption
                             font.bold: true
                         }
                     }
+                    Item { Layout.fillWidth: true; Layout.minimumWidth: 0 }
                     Label { text: appWindow.tf("mining.overall_rating", "OVERALL %1 / 5", [Number(bestRoute.overallScore || 0).toLocaleString(Qt.locale(), "f", 1)]); color: green; font.pixelSize: 11; font.bold: true }
                     Button {
                         id: copyBestSystemButton
@@ -1421,9 +1508,9 @@ Item {
                     }
                 }
                 RowLayout {
-                    Layout.fillWidth: true; spacing: 8
+                    Layout.fillWidth: true; Layout.minimumWidth: 0; spacing: 8
                     Rectangle {
-                        Layout.fillWidth: true; Layout.preferredHeight: appliedPreferSecondary ? 84 : 66; radius: 8; color: backgroundSecondary
+                        Layout.fillWidth: true; Layout.minimumWidth: 0; Layout.preferredWidth: 1; Layout.preferredHeight: appliedPreferSecondary ? 84 : 66; radius: 8; color: backgroundSecondary
                         ColumnLayout { anchors.fill: parent; anchors.margins: 7; spacing: 2
                             Label { text: appWindow.t("mining.mine_step", "1 · MINE"); color: cyan; font.pixelSize: UiMetrics.caption; font.bold: true }
                             Label { text: String(bestRoute.system || "UNKNOWN") + " · " + String(bestRoute.ring || bestRoute.body || ""); color: textPrimary; font.pixelSize: 12; font.bold: true; Layout.fillWidth: true; elide: Text.ElideRight }
@@ -1433,7 +1520,7 @@ Item {
                     }
                     Label { text: appWindow.t("mining.route_arrow", "→"); color: orange; font.pixelSize: 19; font.bold: true }
                     Rectangle {
-                        Layout.fillWidth: true; Layout.preferredHeight: appliedPreferSecondary ? 84 : 66; radius: 8; color: backgroundSecondary
+                        Layout.fillWidth: true; Layout.minimumWidth: 0; Layout.preferredWidth: 1; Layout.preferredHeight: appliedPreferSecondary ? 84 : 66; radius: 8; color: backgroundSecondary
                         ColumnLayout { anchors.fill: parent; anchors.margins: 7; spacing: 2
                             Label { text: appWindow.t("mining.sell_step", "2 · SELL"); color: cyan; font.pixelSize: UiMetrics.caption; font.bold: true }
                             Label { text: marketRouteName(bestRoute); color: bestRoute.marketKnown ? textPrimary : orange; font.pixelSize: 12; font.bold: true; Layout.fillWidth: true; elide: Text.ElideRight }
@@ -1443,7 +1530,7 @@ Item {
                     }
                 }
                 GridLayout {
-                    Layout.fillWidth: true; columns: 4; columnSpacing: 7
+                    Layout.fillWidth: true; Layout.minimumWidth: 0; columns: 4; columnSpacing: 7
                     Repeater {
                         model: [
                             {"label": bestRoute.yieldMeasured
@@ -1456,16 +1543,16 @@ Item {
                         ]
                         delegate: Rectangle {
                             required property var modelData
-                            Layout.fillWidth: true; Layout.preferredHeight: 42; radius: 7; color: inputBackground
+                            Layout.fillWidth: true; Layout.minimumWidth: 0; Layout.preferredWidth: 1; Layout.preferredHeight: 42; radius: 7; color: inputBackground
                             ColumnLayout { anchors.fill: parent; anchors.margins: 5; spacing: 1
-                                Label { text: modelData.label; color: muted; font.pixelSize: UiMetrics.caption; font.bold: true }
-                                Label { text: modelData.value || "—"; color: orange; font.pixelSize: 13; font.bold: true }
+                                Label { Layout.fillWidth: true; Layout.minimumWidth: 0; elide: Text.ElideRight; text: modelData.label; color: muted; font.pixelSize: UiMetrics.caption; font.bold: true }
+                                Label { Layout.fillWidth: true; Layout.minimumWidth: 0; elide: Text.ElideRight; text: modelData.value || "—"; color: orange; font.pixelSize: 13; font.bold: true }
                             }
                         }
                     }
                 }
                 GridLayout {
-                    Layout.fillWidth: true; columns: 4; columnSpacing: 7
+                    Layout.fillWidth: true; Layout.minimumWidth: 0; columns: 4; columnSpacing: 7
                     Repeater {
                         model: [
                             {"label": appWindow.t("mining.price", "PRICE"), "value": bestRoute.marketKnown ? formatNumber(bestRoute.sellPrice) + " CR/T" : "—"},
@@ -1475,12 +1562,12 @@ Item {
                         ]
                         delegate: Rectangle {
                             required property var modelData
-                            Layout.fillWidth: true; Layout.preferredHeight: 40
+                            Layout.fillWidth: true; Layout.minimumWidth: 0; Layout.preferredWidth: 1; Layout.preferredHeight: 40
                             radius: 7; color: backgroundSecondary
                             ColumnLayout {
                                 anchors.fill: parent; anchors.margins: 5; spacing: 1
-                                Label { text: modelData.label; color: muted; font.pixelSize: UiMetrics.caption; font.bold: true }
-                                Label { text: modelData.value; color: textPrimary; font.pixelSize: 11; font.bold: true }
+                                Label { Layout.fillWidth: true; Layout.minimumWidth: 0; elide: Text.ElideRight; text: modelData.label; color: muted; font.pixelSize: UiMetrics.caption; font.bold: true }
+                                Label { Layout.fillWidth: true; Layout.minimumWidth: 0; elide: Text.ElideRight; text: modelData.value; color: textPrimary; font.pixelSize: 11; font.bold: true }
                             }
                         }
                     }
@@ -1497,7 +1584,7 @@ Item {
                 Label { text: appWindow.t("mining.why_route", "WHY THIS ROUTE?"); color: orange; font.pixelSize: UiMetrics.caption; font.bold: true }
                 Repeater {
                     model: [
-                        {"ok": bestRoute.meritKnown, "title": appWindow.t("mining.reason_merit", "Powerplay suitability"), "detail": (bestRoute.meritKnown || (bestRoute.sameSystemSaleRequired && !bestRoute.marketKnown)) ? bestRoute.meritStatus : (miningFinderPage.marketFiltersBlockRoute() ? appWindow.t("mining.reason_merit_filtered", "Unknown — active market filters leave no sell route to verify") : appWindow.t("mining.reason_merit_unknown", "Unknown — no merit claim is made"))},
+                        {"ok": bestRoute.meritVerified, "title": appWindow.t("mining.reason_merit", "Powerplay suitability"), "detail": bestRoute.powerplayVerificationState === "PROVISIONAL" ? appWindow.t("mining.powerplay_last_known_detail", "Rules fit the last known control. Confirm the current state in game.") : (bestRoute.meritKnown || (bestRoute.sameSystemSaleRequired && !bestRoute.marketKnown)) ? bestRoute.meritStatus : (miningFinderPage.marketFiltersBlockRoute() ? appWindow.t("mining.reason_merit_filtered", "Unknown — active market filters leave no sell route to verify") : appWindow.t("mining.reason_merit_unknown", "Unknown — no merit claim is made"))},
                         {"ok": bestRoute.targetMatch === "LOCAL_YIELD" || bestRoute.targetMatch === "HOTSPOT", "title": appWindow.t("mining.reason_method", "Mining evidence"), "detail": yieldEvidence(bestRoute)},
                         {"ok": false, "title": "Community RES reports", "detail": overlapSummary(bestRoute) || "NO COMMUNITY OVERLAP REPORT FOR THIS COMMODITY"},
                         {"ok": bestRoute.marketKnown, "title": appWindow.t("mining.reason_market", "Market demand"), "detail": bestRoute.marketKnown ? String(bestRoute.marketQualityStatus || "MARKET KNOWN") + " · " + (bestRoute.demandInfinite ? "∞" : formatNumber(bestRoute.demand) + " T") + " · " + String(bestRoute.marketSource || "EDDN") : miningFinderPage.marketDetail(bestRoute)},
@@ -1516,6 +1603,14 @@ Item {
                             Label { Layout.fillWidth: true; text: modelData.detail; color: textSecondary; font.pixelSize: UiMetrics.caption; elide: Text.ElideRight }
                         }
                     }
+                }
+                Label {
+                    Layout.fillWidth: true
+                    visible: text !== ""
+                    text: powerplaySourceDetails(bestRoute)
+                    color: textSecondary
+                    font.pixelSize: UiMetrics.caption
+                    wrapMode: Text.WordWrap
                 }
                 Item { Layout.fillHeight: true }
             }

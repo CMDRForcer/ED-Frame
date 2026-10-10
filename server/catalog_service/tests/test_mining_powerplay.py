@@ -10,6 +10,18 @@ from edframe_catalog.projection import project_powerplay_snapshot
 
 
 class MiningPowerplayServerTests(unittest.TestCase):
+    def test_power_filter_precedes_page_limit_and_exact_lookups_remain_unfiltered(self):
+        conn=MagicMock();conn.execute.return_value.fetchall.return_value=[]
+        with patch('edframe_catalog.api.connection') as factory:
+            factory.return_value.__enter__.return_value=conn
+            for goal in ('REINFORCE','UNDERMINE','ACQUIRE'):
+                search_mining_powerplay(0,0,0,power='Aisling Duval',goal=goal)
+                sql,values=conn.execute.call_args.args
+                self.assertIn('jsonb_array_elements(facts)',sql)
+                self.assertIn('Aisling Duval',values)
+                if goal=='ACQUIRE':self.assertIn('Unoccupied',sql)
+            search_mining_powerplay(0,0,0,system=['Mine'],power='Aisling Duval',goal='REINFORCE')
+            self.assertNotIn('jsonb_array_elements(facts)',conn.execute.call_args.args[0])
     def payload(self):
         return {"$schemaRef": "https://eddn.edcd.io/schemas/journal/1",
             "message": {"event": "FSDJump", "StarSystem": "Cubeo",

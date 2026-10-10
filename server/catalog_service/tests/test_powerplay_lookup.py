@@ -77,7 +77,7 @@ class SourceLookupTests(unittest.TestCase):
 
     def test_cached_control_cannot_extend_its_source_freshness(self):
         lookup = SpanshPowerplayLookup(clock=lambda: 0.0)
-        get = Mock(side_effect=lambda *a, **k: response(dump(date=(NOW - timedelta(hours=24)).isoformat())))
+        get = Mock(side_effect=lambda *a, **k: response(dump(date=(NOW - timedelta(hours=48)).isoformat())))
         self.assertEqual(lookup.lookup('Mine', 42, get=get, now=NOW)['state'], 'FETCHED')
         later = lookup.lookup('Mine', 42, get=get, now=NOW + timedelta(seconds=1))
         self.assertEqual(get.call_count, 2)
@@ -85,7 +85,7 @@ class SourceLookupTests(unittest.TestCase):
         self.assertEqual(later['rows'], [])
 
     def test_stale_requires_matched_explicit_snapshot_and_keeps_only_original_date(self):
-        stamp = (NOW - timedelta(hours=25)).isoformat()
+        stamp = (NOW - timedelta(hours=49)).isoformat()
         for fields, expected in (({}, 'STALE'), ({'name': 'Other'}, 'MISSING'),
                                  ({'id64': 99}, 'MISSING'), ({'controllingPower': ''}, 'MISSING'),
                                  ({'powerState': ['Stronghold']}, 'MISSING')):
@@ -168,7 +168,7 @@ class SourceLookupTests(unittest.TestCase):
                      [{**valid, 'controllingPower': ' '}], [{**valid, 'controllingPower': {}}],
                      [{**valid, 'coordinates': [True, 2, 3]}], [{**valid, 'coordinates': None}],
                      [{**valid, 'powerState': 'Unoccupied'}],
-                     [{**valid, 'observedAt': (NOW - timedelta(hours=25)).isoformat()}]):
+                     [{**valid, 'observedAt': (NOW - timedelta(hours=49)).isoformat()}]):
             with self.subTest(rows=rows):
                 self.assertFalse(current_control(rows, NOW))
 
@@ -228,7 +228,28 @@ class StorageLookupTests(unittest.TestCase):
         self.assertEqual(result['results'], rows)
         for call in conn.execute.call_args_list:
             if 'ANY(%s)' in call.args[0]:
-                self.assertEqual(call.args[1], (['mine'],))
+                self.assertEqual(call.args[1], (['mine'],) * call.args[0].count('ANY(%s)'))
+
+    def test_address_from_mining_or_station_catalog_is_used_without_systems_row(self):
+        rows = project_spansh_powerplay(dump(), 'Mine', 42, now=NOW)
+        result, lookup, _, conn = self.run_service(final=[snapshot(rows)],
+            addresses=[{'name': 'Mine', 'system_address': 42},
+                       {'name': 'MINE', 'system_address': 42}],
+            upstream={'state': 'FETCHED', 'rows': rows})
+        self.assertEqual(lookup.lookup.call_args.args, ('mine', 42))
+        self.assertEqual(result['lookup'][0]['state'], 'FETCHED')
+        address_sql = next(call.args[0] for call in conn.execute.call_args_list
+                           if 'FROM systems' in call.args[0])
+        self.assertIn('FROM mining_sites', address_sql)
+        self.assertIn('FROM stations', address_sql)
+
+    def test_stored_address_does_not_override_conflicting_catalog_identity(self):
+        rows = project_spansh_powerplay(dump(date=(NOW - timedelta(hours=49)).isoformat()),
+                                      'Mine', 42, now=NOW - timedelta(hours=49))
+        _, lookup, save, _ = self.run_service(initial=[snapshot(rows)],
+            addresses=[{'name': 'Mine', 'system_address': 43}])
+        self.assertEqual(lookup.lookup.call_args.args, ('mine', None))
+        save.assert_not_called()
 
     def test_concurrent_newer_control_or_equal_eddn_snapshot_remains_authoritative(self):
         fetched = project_spansh_powerplay(dump(date=(NOW - timedelta(hours=1)).isoformat()), 'Mine', 42, now=NOW)

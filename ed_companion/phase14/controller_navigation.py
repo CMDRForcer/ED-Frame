@@ -15,6 +15,7 @@ import threading
 import time
 import uuid
 import requests
+from ed_companion.network_activity import catalog_get, catalog_session
 from bisect import bisect_left
 from concurrent.futures import Future
 from datetime import datetime, timedelta, timezone
@@ -222,7 +223,7 @@ from ed_companion.exobiology import exobiology_distance_check
 
 
 MINING_MARKET_RETRY_SECONDS = (120, 300, 900, 1800)
-MINING_MARKET_WARM_INTERVAL_SECONDS = 60
+MINING_MARKET_WARM_INTERVAL_SECONDS = 300
 MINING_MARKET_WARM_COMMODITIES = (
     "platinum", "painite", "osmium", "monazite", "musgravite",
     "alexandrite", "lowtemperaturediamond", "opal", "tritium",
@@ -351,6 +352,7 @@ def _merge_edframe_station_offer_delta_page(store, page):
 
 
 class NavigationMixin:
+    backgroundActivityChanged = Signal()
     """Extracted from CockpitController (controller.py modularization).
 
     Call self._init_navigation() from CockpitController.__init__() at the
@@ -568,7 +570,7 @@ class NavigationMixin:
                 try:
                     server_rows = fetch_edframe_station_offers(
                         kind=normalized_kind, item=wanted,
-                        get=requests.get, timeout=20, limit=200,
+                        get=catalog_get, timeout=20, limit=200,
                     )
                     source = "ED-FRAME SERVER + LOCAL CATALOG"
                 except Exception as exc:  # local fallback is intentional
@@ -627,7 +629,7 @@ class NavigationMixin:
             if not origin:
                 try:
                     origin = fetch_edframe_system_coordinates(
-                        origin_name, get=requests.get, timeout=15,
+                        origin_name, get=catalog_get, timeout=15,
                     )
                 except Exception:
                     origin = {}
@@ -1661,6 +1663,8 @@ class NavigationMixin:
 
     def _maybe_auto_refresh_mining_markets(self):
         """Warm one useful stale market target without changing the open route."""
+        if getattr(self, "_last_page", 12) != 12 or getattr(self, "_active_mining_plan", None):
+            return
         if getattr(self, "_mining_market_busy", False) or getattr(
             self, "_shutdown_complete", False
         ):
@@ -1859,17 +1863,42 @@ class NavigationMixin:
             # This belongs only to this disposable worker facade, never the
             # live controller or a subsequent search/verification pass.
             snapshot._mining_plan_market_rows = {}
-            try:
+            def thread_plan():
+                started = time.monotonic()
                 routes = snapshot._compute_mining_plan_routes(*args)
                 diagnostic_args = (args[0], args[1], args[2], args[8], args[9], args[10], args[16])
                 diagnostics = snapshot.miningMarketDiagnostics(*diagnostic_args)
+                return routes, diagnostic_args, diagnostics, {
+                    "miningWorkerPid": os.getpid(), "miningWorkerMode": "thread",
+                    "miningComputeSeconds": round(time.monotonic() - started, 3)}
+            try:
+                process = getattr(self, "_mining_process", None)
+                if process is not None and isinstance(rows, RingCatalogView) and snapshot._mining_market_store is not None:
+                    attributes = {name: getattr(snapshot, name) for name in (
+                        "_state", "_mining_market_cache", "_mining_market_catalog",
+                        "_mining_powerplay_catalog", "_mining_powerplay_observations",
+                        "_data_dir", "_reference_data_dir", "_mining_market_verification_states",
+                        "_mining_rows_cache_key") if hasattr(snapshot, name)}
+                    routes, diagnostic_args, diagnostics, stats = process.compute({
+                        "rings": {"path": str(rows.store.path), "profile": rows.store.profile,
+                                  "head": rows.head, "overlay": rows.overlay, "signals": rows._signals},
+                        "markets": str(snapshot._mining_market_store.path),
+                        "attributes": attributes, "scope": scope, "args": args,
+                        "clock": datetime.now(timezone.utc).isoformat(),
+                    }, fallback=thread_plan)
+                    self._mining_process_stats = stats
+                else:
+                    routes = snapshot._compute_mining_plan_routes(*args)
+                    diagnostic_args = (args[0], args[1], args[2], args[8], args[9], args[10], args[16])
+                    diagnostics = snapshot.miningMarketDiagnostics(*diagnostic_args)
                 result = (request_id, key, args, routes, diagnostic_args, diagnostics, "")
             except Exception as exc:
                 LOGGER.exception("Background mining route plan failed")
                 result = (request_id, key, args, [], (), {}, str(exc))
             finally:
                 del snapshot._mining_plan_market_rows
-            self.miningPlanReady.emit(result)
+            if not getattr(self, "_shutdown_complete", False):
+                self.miningPlanReady.emit(result)
 
         if not self._start_network_worker(worker, "mining-route-plan"):
             self._active_mining_plan = None
@@ -1900,13 +1929,23 @@ class NavigationMixin:
                 self._mining_sync_status = "Route planning failed · " + error
         self._mining_plan_result_revision = getattr(self, "_mining_plan_result_revision", 0) + 1
         self.miningChanged.emit()
+        self._resume_deferred_mining_plan()
+
+
+    def _resume_deferred_mining_plan(self):
+        args = getattr(self, '_mining_plan_requested_args', None)
+        if (args and getattr(self, '_mining_plan_deferred', False)
+                and not getattr(self, '_active_mining_plan', None)
+                and not self._mining_plan_inputs_pending()
+                and not getattr(self, '_shutdown_complete', False)):
+            self._queue_mining_plan(args)
 
 
     def _mining_plan_is_busy(self):
+        deferred = getattr(self, "_mining_plan_deferred", False)
         return bool(
             getattr(self, "_active_mining_plan", None)
-            or (getattr(self, "_mining_plan_deferred", False)
-                and self._mining_plan_inputs_pending())
+            or (deferred and self._mining_plan_inputs_pending())
         )
 
 
@@ -2648,7 +2687,7 @@ class NavigationMixin:
             # this fence the first empty/interim result could remain visible.
             getattr(self, "_mining_rows_cache_key", None),
             getattr(self, "_mining_plan_result_revision", 0),
-            getattr(self, "_mining_market_revision", 0),
+            getattr(self, "_mining_market_public_revision", getattr(self, "_mining_market_revision", 0)),
             getattr(self, "_mining_market_verification_states", {}),
             local.get("refinedCommodities", []),
             state.get("activeShipId"), state.get("selectedShipId"),
@@ -2734,6 +2773,25 @@ class NavigationMixin:
     miningVerificationBusy = Property(
         bool,
         lambda self: getattr(self, "_mining_verification_busy", False),
+        notify=miningVerificationChanged,
+    )
+
+
+    miningPowerplayPendingSourceCount = Property(
+        int, lambda self: len(getattr(self, "_mining_powerplay_source_pending", [])),
+        notify=miningVerificationChanged,
+    )
+
+
+    miningMarketPendingSourceCount = Property(
+        int, lambda self: sum(state.get('state') == 'QUEUED' for state in
+            getattr(self, '_mining_market_verification_states', {}).values()),
+        notify=miningVerificationChanged,
+    )
+
+
+    miningPowerplayLookupStates = Property(
+        "QVariantMap", lambda self: dict(getattr(self, "_mining_powerplay_lookup_states", {})),
         notify=miningVerificationChanged,
     )
 
@@ -3131,7 +3189,7 @@ class NavigationMixin:
         def worker():
             result = dict(request)
             try:
-                result["catalog"] = fetch_powerplay_catalog(get=requests.get)
+                result["catalog"] = fetch_powerplay_catalog(get=catalog_get)
                 result["success"] = True
             except Exception as exc:
                 result.update({"success": False, "error": str(exc)})
@@ -3536,7 +3594,7 @@ class NavigationMixin:
 
 
     @Slot()
-    def refreshEdFrameCatalogStatus(self):
+    def refreshEdFrameCatalogStatus(self, *, background=False):
         if not getattr(self, "_edframe_catalog_enabled", True):
             self._edframe_catalog_status = "Disabled · local catalog active"
             self.connectionChanged.emit()
@@ -3544,17 +3602,16 @@ class NavigationMixin:
             return
         if getattr(self, "_edframe_catalog_busy", False):
             return
-        request = {"id": uuid.uuid4().hex}
+        request = {"id": uuid.uuid4().hex, "background": background}
         self._active_edframe_catalog_request = request
         self._edframe_catalog_busy = True
         self._edframe_catalog_status = "Checking server… · local catalog remains active"
         self.connectionChanged.emit()
-        self.miningChanged.emit()
 
         def worker():
             try:
                 health = fetch_edframe_catalog_health(
-                    get=requests.get,
+                    get=catalog_get,
                 )
             except Exception as exc:
                 self.edFrameCatalogStatusFinished.emit({
@@ -3571,7 +3628,7 @@ class NavigationMixin:
                 "health": health,
             })
             try:
-                status = fetch_edframe_catalog_status(get=requests.get)
+                status = fetch_edframe_catalog_status(get=catalog_get)
                 result = {
                     **request, "phase": "status", "success": True,
                     "status": status,
@@ -3590,7 +3647,6 @@ class NavigationMixin:
                 "Unavailable during shutdown · local catalog active"
             )
             self.connectionChanged.emit()
-            self.miningChanged.emit()
 
 
     def _record_catalog_source_result(self, source, *, success, error=""):
@@ -3710,6 +3766,18 @@ class NavigationMixin:
                 or datetime.now(timezone.utc).isoformat(timespec="seconds")
             )
             self._edframe_catalog_stats = {
+                **{key: value for key, value in self._edframe_catalog_stats.items() if key.startswith("local")},
+                "generatedAt": payload.get("generatedAt"),
+                "collector24hProjectedRows": intake.get("projectedRows"),
+                "collector24hUsedMessages": intake.get("usedMessages"),
+                "collector24hIgnoredMessages": intake.get("ignoredMessages"),
+                "collector24hBytes": intake.get("bytes"),
+                "freshMarketPercent24h": (
+                    100 * completeness["freshMarkets24h"] / markets
+                    if markets and completeness.get("freshMarkets24h") is not None else None),
+                "olderMarkets24h": (
+                    max(0, markets - completeness["freshMarkets24h"])
+                    if completeness.get("freshMarkets24h") is not None else None),
                 "freshMarkets1h": completeness.get("freshMarkets1h"),
                 "freshMarkets24h": completeness.get("freshMarkets24h"),
                 "collector24hMessages": intake.get("messages"),
@@ -3811,14 +3879,30 @@ class NavigationMixin:
                 )
             self._save_ui_config()
         self.connectionChanged.emit()
-        self.miningChanged.emit()
-        if phase == "status" and result.get("success") and store is not None:
-            QTimer.singleShot(0, self.syncEdFrameCatalog)
-            QTimer.singleShot(0, self.syncEdFrameStationOffers)
         if phase == "status" and result.get("success"):
-            state_sync = getattr(self, "syncEdFrameStateFinds", None)
-            if callable(state_sync):
-                QTimer.singleShot(0, state_sync)
+            sync = getattr(self, "_queue_background_catalog_sync", None)
+            if callable(sync):
+                sync()
+
+    @Slot()
+    def _queue_background_catalog_sync(self):
+        """One ten-minute sync cycle, independent of manual status checks."""
+        if (not getattr(self, "_edframe_catalog_enabled", True)
+                or getattr(self, "_shutdown_complete", False)):
+            return
+        now = time.monotonic()
+        remaining = 600 - (now - getattr(self, "_last_background_catalog_sync", -600))
+        timer = getattr(self, "catalogSyncTimer", None)
+        if remaining > 0:
+            if timer is not None:
+                timer.start(int(remaining * 1000) + 1)
+            return
+        self._last_background_catalog_sync = now
+        if timer is not None:
+            timer.start(600000)
+        QTimer.singleShot(0, self.syncEdFrameCatalog)
+        QTimer.singleShot(2000, self.syncEdFrameStationOffers)
+        QTimer.singleShot(4000, self.syncEdFrameStateFinds)
 
 
     @Slot()
@@ -3862,7 +3946,7 @@ class NavigationMixin:
             result = dict(request)
             try:
                 page = fetch_edframe_market_delta(
-                    cursor=cursor, get=requests.get,
+                    cursor=cursor, get=catalog_get,
                 )
                 result.update(_merge_edframe_market_delta_page(store, page))
                 result["success"] = True
@@ -3991,7 +4075,7 @@ class NavigationMixin:
             result = dict(request)
             try:
                 page = fetch_edframe_station_offer_delta(
-                    cursor=cursor, get=requests.get,
+                    cursor=cursor, get=catalog_get,
                 )
                 result.update(
                     _merge_edframe_station_offer_delta_page(store, page)
@@ -4156,7 +4240,7 @@ class NavigationMixin:
             result = dict(request)
             try:
                 result["page"] = fetch_edframe_state_find_delta(
-                    cursor=cursor, get=requests.get,
+                    cursor=cursor, get=catalog_get,
                     origin=region["origin"], radius_ly=region["radiusLy"],
                 )
                 result["success"] = True
@@ -4397,15 +4481,20 @@ class NavigationMixin:
 
 
     @Slot(str, str, int, int, int, str)
+    @Slot(str, str, int, int, int, str, str, str, str, str)
     def refreshMiningMarkets(
         self, start_system, commodity, nearby_ly, min_demand,
-        max_market_age_hours, landing_pad,
+        max_market_age_hours, landing_pad, power="", power_goal="",
+        opposing_power="ANY", method="LASER",
     ):
         """Refresh verified EDDN-derived sell markets for one user query."""
         query = self._normalized_mining_market_query(
             start_system, commodity, nearby_ly, min_demand,
             max_market_age_hours, landing_pad,
         )
+        if power and power_goal:
+            query['meritContext'] = {'power': str(power), 'goal': str(power_goal),
+                                    'opposingPower': str(opposing_power), 'method': str(method)}
         if not query["startSystem"] or not query["commodity"]:
             self._mining_market_status = (
                 "Market lookup needs a start system and commodity"
@@ -4414,6 +4503,9 @@ class NavigationMixin:
             return
         self._remember_mining_warm_targets(query)
         if query["commodity"] == "allcommodities":
+            query["siteCommodity"] = "allcommodities"
+            if query.get('meritContext'):
+                query['meritContext']['allCommodities'] = True
             store = getattr(self, "_mining_market_store", None)
             if not self._known_mining_origin(query["startSystem"]):
                 origin_query = dict(query)
@@ -4435,6 +4527,10 @@ class NavigationMixin:
                 # Warm-target persistence is asynchronous; the first search
                 # must still start a concrete commodity on an empty catalog.
                 target = {**query, "commodity": MINING_MARKET_WARM_COMMODITIES[0]}
+            if target and query.get('meritContext'):
+                target = {**target, 'meritContext': query['meritContext']}
+            if target:
+                target = {**target, 'siteCommodity': 'allcommodities'}
             if not getattr(self, "_mining_market_busy", False) and target:
                 self._start_mining_market_refresh(target, background=True)
             self._mining_market_status = (
@@ -4531,6 +4627,8 @@ class NavigationMixin:
         retry_timer = getattr(self, "_mining_market_retry_timer", None)
         if retry_timer is not None:
             retry_timer.stop()
+        merit_context = query.get('meritContext')
+        site_commodity = query.get('siteCommodity')
         query = self._normalized_mining_market_query(
             query.get("startSystem"), query.get("commodity"),
             query.get("nearbyLy"), query.get("minDemand"),
@@ -4579,10 +4677,15 @@ class NavigationMixin:
             try:
                 result.update(fetch_mining_refresh(
                     query, origin=request.get("origin"),
+                    session_factory=catalog_session,
                     include_edframe=include_edframe, is_current=is_current,
                     snapshot_path=request["siteSnapshotPath"],
                     region_cache=region_cache,
                     prepare_sites=prepare_sites,
+                    **self._io_worker_options(3),
+                    merit_context=merit_context, merit_market_cache=merit_market_cache,
+                    site_commodity=site_commodity,
+                    known_market_reader=known_market_reader,
                 ))
             except Exception as exc:
                 result.update(success=False, error=str(exc))
@@ -4597,6 +4700,21 @@ class NavigationMixin:
         # Capture the exact profile store/path before dispatch; never resolve a
         # replacement profile's store from a delayed worker.
         store = getattr(self, "_mining_market_store", None)
+        known_market_reader = None
+        if store is not None and merit_context and merit_context.get('allCommodities'):
+            def known_market_reader(origin):
+                if not is_current():
+                    return []
+                return store.nearby('allcommodities',origin_system=query['startSystem'],
+                    origin_coordinates=(origin or {}).get('coordinates'),max_distance=query['nearbyLy'])
+        # Cache identity is profile-specific; late workers retain their own instance.
+        from ed_companion.navigation.mining_merit_markets import MeritMarketCache
+        merit_cache_context = (request['profileKey'], request['generation'], request['path'],
+                               getattr(self, '_mining_catalog', {}).get('resetAt'))
+        if getattr(self, '_mining_merit_market_cache_context', None) != merit_cache_context:
+            self._mining_merit_market_cache = MeritMarketCache()
+            self._mining_merit_market_cache_context = merit_cache_context
+        merit_market_cache = self._mining_merit_market_cache
         include_edframe = getattr(self, "_edframe_catalog_enabled", True)
         prepare_sites = None
         catalog = getattr(self, "_mining_catalog", {})
@@ -4908,15 +5026,27 @@ class NavigationMixin:
         if not rows:
             return
         base = getattr(self, "_mining_powerplay_observations", [])
-        merged = merge_powerplay_observations(
-            base, rows, limit=max(20_000, len(base) + len(rows)),
-        )
+        limit = max(20_000, len(base) + len(rows))
+        compute = getattr(self, "_compute_work", None)
+        if compute is not None and len(base) + len(rows) >= 20000:
+            from ed_companion.cpu_tasks import powerplay_merge
+            merged = compute.compute("powerplay-merge", powerplay_merge, base, rows, limit,
+                memory_mb=max(256, (len(base) + len(rows)) / 200), priority=0,
+                fallback=lambda: merge_powerplay_observations(base, rows, limit=limit))
+        else:
+            merged = merge_powerplay_observations(base, rows, limit=limit)
         records = CatalogDictFactory()
         merged = [catalog_record_snapshot(row, factory=records) for row in merged]
         changed = merged != base
         result["preparedPowerplay"] = {
             "base": base, "rows": rows, "merged": merged, "changed": changed,
         }
+
+    def _io_worker_options(self, maximum):
+        """Worker-only sampling for nested provider pools, sharing the policy."""
+        compute = getattr(self, "_compute_work", None)
+        return ({"max_workers": min(maximum, compute.resources.sample()["ioWorkerLimit"])}
+                if compute is not None else {})
 
 
     def _defer_mining_powerplay_publication(self, result, rows, signal):
@@ -5048,7 +5178,8 @@ class NavigationMixin:
         retry_timer = getattr(self, "_mining_market_retry_timer", None)
         if retry_timer is not None:
             retry_timer.stop()
-        self._mining_market_revision += 1
+        if markets or origin_updated or not background:
+            self._mining_market_revision += 1
         warm_progress = (
             f" · {warm_summary.get('fresh', 0)}/"
             f"{warm_summary.get('total', 0)} warm"
@@ -5075,9 +5206,12 @@ class NavigationMixin:
             + (" · server rings unavailable (retained)" if result.get("siteError") else "")
             + (" · server Powerplay unavailable (Journal/EDSM retained)"
                if result.get("powerplayError") else "")
+            + (f" · exact merit markets {result['meritMarketCoverage']['checked']}/"
+               f"{result['meritMarketCoverage']['requested']} checked"
+               if result.get('meritMarketCoverage') else '')
             + (" · bounded server selection (not full coverage)" if any(
                 result.get(key, {}).get("bounded")
-                for key in ("siteCoverage", "powerplayCoverage")
+                for key in ("siteCoverage", "powerplayCoverage", "meritMarketCoverage")
             ) else "")
             + (" · ring snapshot changed during paging; provisional results"
                if result.get("siteCoverage", {}).get("consistent") is False else "")
@@ -5093,6 +5227,7 @@ class NavigationMixin:
         ):
             retry_timer.start(MINING_MARKET_WARM_INTERVAL_SECONDS * 1000)
         self.miningChanged.emit()
+        self._resume_deferred_mining_plan()
 
 
     @Slot()
@@ -5312,8 +5447,15 @@ class NavigationMixin:
         lookup_cache = getattr(self, "_mining_powerplay_lookup_cache", {})
         lookup_targets = missing_powerplay_targets(
             route_rows, getattr(self, "_mining_powerplay_observations", []),
-            retry_after=lookup_cache, now=now,
+            now=now,
         ) if getattr(self, "_edframe_catalog_enabled", True) else []
+        wanted = {target["system"].casefold() for target in lookup_targets}
+        self._mining_powerplay_source_pending = [
+            name for name in getattr(self, "_mining_powerplay_source_pending", [])
+            if name.casefold() in wanted
+        ]
+        lookup_targets = [target for target in lookup_targets
+                          if float(lookup_cache.get(target["system"].casefold(), 0) or 0) <= now_epoch]
         pending_rank = {name.casefold(): index for index, name in enumerate(
             getattr(self, "_mining_powerplay_source_pending", []))}
         lookup_targets.sort(key=lambda target: pending_rank.get(
@@ -5357,6 +5499,11 @@ class NavigationMixin:
         market_cached = 0
         market_candidates = []
         budget_market_keys = set()
+        # A new visible search must not retain an old search's deferred queue.
+        self._mining_market_verification_states = {
+            key: state for key, state in getattr(self, '_mining_market_verification_states', {}).items()
+            if state.get('state') != 'QUEUED'
+        }
         if commodity_id:
             pending_market_rows = []
             for row in route_rows:
@@ -5622,6 +5769,7 @@ class NavigationMixin:
             failure_count = 0
             for index, kind, target, value, error in iter_verification_jobs(
                 jobs, fetch_job, is_current=is_current,
+                **self._io_worker_options(2),
             ):
                 finished[index] = (kind, target, value, error)
                 if kind == "powerplay":
@@ -5900,8 +6048,19 @@ class NavigationMixin:
             if item.get("state") in {"ERROR", "BUSY"}:
                 lookup_cache[str(item.get("system") or "").casefold()] = now_epoch + 120
         for name in lookup.get("enrichmentDeferred", []):
-            lookup_cache[str(name).casefold()] = now_epoch + 120
+            lookup_cache[str(name).casefold()] = now_epoch + 20
         self._mining_powerplay_source_pending = list(lookup.get("enrichmentDeferred", []))
+        lookup_states = dict(getattr(self, "_mining_powerplay_lookup_states", {}))
+        for item in [*(lookup.get("coverage") or []), *(lookup.get("enrichment") or [])]:
+            key = str(item.get("system") or "").casefold()
+            if key:
+                lookup_states.pop(key, None)
+                lookup_states[key] = {field: item[field] for field in
+                    ("system", "state", "source", "observedAt") if field in item}
+        for name in lookup.get("enrichmentDeferred", []):
+            key = str(name).casefold()
+            lookup_states[key] = {**lookup_states.get(key, {}), "system": name, "state": "QUEUED"}
+        self._mining_powerplay_lookup_states = dict(list(lookup_states.items())[-400:])
         self._mining_powerplay_lookup_cache = {
             key: expiry for key, expiry in lookup_cache.items() if expiry > now_epoch
         }
@@ -6067,7 +6226,7 @@ class NavigationMixin:
             if getattr(self, "_edframe_catalog_enabled", True):
                 try:
                     candidates = fetch_edframe_mining_candidates(
-                        request["system"], requests.get,
+                        request["system"], catalog_get,
                         origin=request["origin"],
                     )
                     if candidates and all(
@@ -6083,7 +6242,7 @@ class NavigationMixin:
             try:
                 if address <= 0:
                     raise ValueError("Spansh fallback requires system address")
-                payload = fetch_spansh_system_dump(address, requests.get)
+                payload = fetch_spansh_system_dump(address, catalog_get)
                 result["candidates"] = merge_mining_candidates(
                     [*candidates, *project_spansh_mining_candidates(
                         payload, request["origin"]
@@ -6161,6 +6320,7 @@ class NavigationMixin:
         self._mining_verification_cache = {}
         self._mining_powerplay_lookup_cache = {}
         self._mining_powerplay_source_pending = []
+        self._mining_powerplay_lookup_states = {}
         self._mining_powerplay_market_verification_cache = {}
         self._mining_market_verification_states = {}
         self._active_edframe_catalog_sync_request = None
@@ -6675,6 +6835,9 @@ class NavigationMixin:
     @Slot()
     def flushHgeObservationBatch(self, force=False):
         force = bool(force or getattr(self, "_shutdown_complete", False))
+        drain = getattr(self, "_drain_eddn_batches", None)
+        if callable(drain):
+            drain(force=force)
         mining_ready = True
         if (getattr(self, "_pending_mining_candidates", [])
                 or getattr(self, "_pending_mining_powerplay_observations", [])):

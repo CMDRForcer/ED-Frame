@@ -40,6 +40,27 @@ class Session:
 
 
 class MiningRefreshTests(unittest.TestCase):
+    def test_all_search_fetches_all_rings_with_separate_cache_scope_and_concrete_markets(self):
+        from ed_companion.navigation.mining_region_cache import MiningRegionCache
+        cache = MiningRegionCache()
+        def sites(_system, _get, **kwargs):
+            kwargs['diagnostics'].update(count=1, pages=1, bounded=False, complete=True)
+            return [{'system':'Mine','ring':'Mine A Ring',
+                     'ringType': 'Icy' if kwargs['commodity']=='allcommodities' else 'Metallic'}]
+        with patch(MODULE+'fetch_edframe_mining_candidates', side_effect=sites) as fetch, \
+                patch(MODULE+'fetch_edframe_powerplay', return_value=[]), \
+                patch(MODULE+'fetch_market_imports', return_value=[]) as markets:
+            all_rows=fetch_mining_refresh(QUERY,origin=ORIGIN,session_factory=self.factory,
+                                         region_cache=cache,site_commodity='allcommodities')
+            concrete=fetch_mining_refresh(QUERY,origin=ORIGIN,session_factory=self.factory,region_cache=cache)
+            again=fetch_mining_refresh(QUERY,origin=ORIGIN,session_factory=self.factory,
+                                      region_cache=cache,site_commodity='allcommodities')
+        self.assertEqual(all_rows['serverCandidates'][0]['ringType'],'Icy')
+        self.assertEqual(concrete['serverCandidates'][0]['ringType'],'Metallic')
+        self.assertEqual(again['serverCandidates'][0]['ringType'],'Icy')
+        self.assertEqual(fetch.call_count,2)
+        self.assertTrue(all(call.args[1]=='platinum' for call in markets.call_args_list))
+
     def factory(self):
         session = Session()
         with self.lock:
@@ -96,6 +117,24 @@ class MiningRefreshTests(unittest.TestCase):
         self.assertEqual(result["serverCandidates"], [{"ring": "A"}])
         self.assertEqual(result["serverPowerplay"], [{"power": "P"}])
         self.assertTrue(all(session.closed for session in self.sessions))
+
+    def test_small_pc_serializes_domains_without_changing_results(self):
+        calls = []
+        def record(name, value):
+            def fetch(*args, **kwargs):
+                calls.append((name, threading.get_ident()))
+                return value
+            return fetch
+        with patch(MODULE + "fetch_edframe_mining_candidates", side_effect=record("rings", [{"ring": "A"}])), \
+             patch(MODULE + "fetch_edframe_powerplay", side_effect=record("powerplay", [{"power": "P"}])), \
+             patch(MODULE + "fetch_market_imports", side_effect=record("markets", [{"station": "Port"}])):
+            result = fetch_mining_refresh(QUERY, origin=ORIGIN, session_factory=self.factory, max_workers=1)
+        self.assertEqual([name for name, _ in calls], ["rings", "powerplay", "markets"])
+        self.assertEqual(len({ident for _, ident in calls}), 1)
+        self.assertTrue(result["success"])
+        self.assertEqual(result["serverCandidates"], [{"ring": "A"}])
+        self.assertEqual(result["serverPowerplay"], [{"power": "P"}])
+        self.assertEqual(result["markets"], [{"station": "Port"}])
 
     def test_ring_failure_does_not_drop_other_domains(self):
         with patch(MODULE + "fetch_edframe_mining_candidates", side_effect=ValueError("ring error")), \
@@ -171,6 +210,37 @@ class MiningRefreshTests(unittest.TestCase):
         return {"id": "request", "profileKey": "alpha", "generation": 3,
                 "path": "test-market-cache.json", "success": True,
                 "query": QUERY, "markets": [{"station": "Port"}], **changes}
+
+    def test_empty_background_refresh_does_not_restart_a_full_plan(self):
+        controller=self.controller()
+        controller._active_mining_market_request={'id':'request','background':True}
+        controller._consume_mining_regional_rings=Mock()
+        controller._finish_mining_market_sync(self.result(markets=[],background=True))
+        self.assertEqual(controller._mining_market_revision,0)
+        controller.miningChanged.emit.assert_called()
+        controller._active_mining_market_request={'id':'request','background':True}
+        controller._finish_mining_market_sync(self.result(markets=[],background=True,originUpdated=True))
+        self.assertEqual(controller._mining_market_revision,1)
+
+    def test_merit_search_context_reaches_background_worker_and_cache_is_profile_scoped(self):
+        controller = self.controller()
+        controller._start_network_worker = Mock(return_value=True)
+        controller._remember_mining_warm_targets = Mock()
+        controller.refreshMiningMarkets('Shanteneri', 'Platinum', 250, 5000, 48, 'L',
+                                       'Aisling Duval', 'REINFORCE', 'ANY', 'LASER')
+        first_cache = controller._mining_merit_market_cache
+        worker = controller._start_network_worker.call_args.args[0]
+        with patch('ed_companion.phase14.controller_navigation.fetch_mining_refresh',
+                   return_value={'success': True, 'markets': []}) as refresh:
+            worker()
+        self.assertEqual(refresh.call_args.kwargs['merit_context'],
+                         {'power': 'Aisling Duval', 'goal': 'REINFORCE',
+                          'opposingPower': 'ANY', 'method': 'LASER'})
+        self.assertIs(refresh.call_args.kwargs['merit_market_cache'], first_cache)
+        controller._mining_market_busy = False
+        controller._profile_generation += 1
+        controller._start_mining_market_refresh(QUERY, background=False)
+        self.assertIsNot(controller._mining_merit_market_cache, first_cache)
 
     def test_user_search_preempts_warming_without_marking_target_failed(self):
         controller = self.controller()

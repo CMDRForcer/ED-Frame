@@ -2,7 +2,7 @@
 from datetime import datetime, timedelta, timezone
 import unittest
 from pathlib import Path
-from unittest.mock import Mock
+from unittest.mock import Mock, patch
 
 from ed_companion.navigation.mining_finder import (
     fetch_edframe_mining_candidates, merge_mining_candidates,
@@ -26,6 +26,57 @@ class Response:
 
 
 class MiningServerIntegrationTests(unittest.TestCase):
+    def test_changed_snapshot_fallback_never_claims_complete_coverage(self):
+        from ed_companion.navigation.mining_finder import _MiningSnapshotChanged
+        calls=0
+        def snapshot(*args,**kwargs):
+            nonlocal calls
+            calls+=1
+            if calls<=2:
+                raise _MiningSnapshotChanged()
+            kwargs['diagnostics'].update(complete=True,bounded=False)
+            return [{'system':'Mine','ring':'Mine A Ring'}]
+        coverage={}
+        with patch('ed_companion.navigation.mining_finder._fetch_edframe_mining_snapshot',side_effect=snapshot):
+            rows=fetch_edframe_mining_candidates('Origin',Mock(),diagnostics=coverage)
+        self.assertEqual(len(rows),1)
+        self.assertTrue(coverage['bounded'])
+        self.assertFalse(coverage['complete'])
+        self.assertFalse(coverage['consistent'])
+
+    def test_legacy_cursor_traverses_numeric_offset_limit_with_true_row_budget(self):
+        calls=[]
+        def get(_url,**kwargs):
+            params=kwargs['params']
+            offset=int(params.get('cursor','0'))
+            calls.append(params)
+            self.assertLessEqual(params['offset'],100000)
+            return Response({'results':[{'system':'Mine','ring':f'Mine {offset} A Ring'}],
+                'hasMore':offset<115000,'nextOffset':params['offset']+5000,
+                'nextCursor':str(offset+5000)})
+        coverage={}
+        rows=fetch_edframe_mining_candidates('Origin',get,origin=[0,0,0],max_distance=500,
+            diagnostics=coverage,max_rows=200000)
+        self.assertTrue(coverage['complete'])
+        self.assertEqual(len(rows),24)
+        self.assertEqual(calls[-1]['cursor'],'115000')
+
+    def test_all_ring_budget_can_continue_past_concrete_limit_without_false_completeness(self):
+        def get(_url, **kwargs):
+            offset=kwargs['params']['offset']
+            return Response({'results':[{'system':'Mine','ring':f'Mine {offset} A Ring'}],
+                'hasMore':offset<55000,'nextOffset':offset+5000})
+        limited, complete={},{}
+        fetch_edframe_mining_candidates('Origin',get,origin=[0,0,0],max_distance=500,diagnostics=limited)
+        rows=fetch_edframe_mining_candidates('Origin',get,origin=[0,0,0],max_distance=500,
+                                           diagnostics=complete,max_rows=200000)
+        self.assertTrue(limited['bounded'])
+        self.assertFalse(limited['complete'])
+        self.assertFalse(complete['bounded'])
+        self.assertTrue(complete['complete'])
+        self.assertEqual(complete['pages'],12)
+        self.assertEqual(len(rows),12)
+
     def test_undated_overlap_provenance_survives_projection_and_merge(self):
         report = {"commodity": "platinum", "sourceUrl": "https://example.test/data",
                   "sourceRevision": "abc", "sourceRow": 2, "verifiedAt": None,
@@ -135,7 +186,7 @@ class MiningServerIntegrationTests(unittest.TestCase):
                 "observedAt": now.isoformat(), "commander": "PRIVATE"}
         def get(url, **kwargs):
             return Response({"results": [base, {**base,
-                "system": "Stale", "observedAt": (now - timedelta(days=2)).isoformat()}]})
+                "system": "Stale", "observedAt": (now - timedelta(days=15)).isoformat()}]})
         rows = fetch_edframe_powerplay(origin=[1, 2, 3], max_distance=100, get=get)
         self.assertEqual(len(rows), 1)
         self.assertFalse(rows[0]["controlKnown"])

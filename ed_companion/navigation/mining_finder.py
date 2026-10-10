@@ -122,6 +122,7 @@ def fetch_edframe_mining_candidates(
     timeout: int = 20, max_distance: float | None = None,
     diagnostics: dict | None = None,
     snapshot_store: Any = None,
+    max_rows: int = 50_000,
 ) -> list[dict[str, Any]]:
     """Fetch a complete regional snapshot, retrying one changing-page race.
 
@@ -132,6 +133,7 @@ def fetch_edframe_mining_candidates(
         for name in ("_snapshot", "revision", "notModified", "consistent", "snapshotStatus", "complete"):
             diagnostics.pop(name, None)
     use_cached_revision = True
+    row_budget = {"max_rows": max(1000, min(250_000, int(max_rows)))}
     for attempt in range(2):
         try:
             return _fetch_edframe_mining_snapshot(
@@ -140,6 +142,7 @@ def fetch_edframe_mining_candidates(
                 diagnostics=diagnostics, snapshot_store=snapshot_store,
                 use_snapshot=max_distance is None or float(max_distance) <= 500,
                 use_cached_revision=use_cached_revision,
+                **row_budget,
             )
         except _MiningSnapshotCacheMissing:
             # A header is a hint, never evidence for row reuse. The cache may
@@ -150,7 +153,7 @@ def fetch_edframe_mining_candidates(
                 return _fetch_edframe_mining_snapshot(
                     system, get, commodity=commodity, origin=origin,
                     timeout=timeout, max_distance=max_distance,
-                    diagnostics=diagnostics, snapshot_store=None, use_snapshot=False,
+                    diagnostics=diagnostics, snapshot_store=None, use_snapshot=False, **row_budget,
                 )
         except _MiningSnapshotUnavailable:
             # Versioning is an optimization, not a dependency for coverage.
@@ -158,17 +161,17 @@ def fetch_edframe_mining_candidates(
             return _fetch_edframe_mining_snapshot(
                 system, get, commodity=commodity, origin=origin,
                 timeout=timeout, max_distance=max_distance,
-                diagnostics=diagnostics, snapshot_store=None, use_snapshot=False,
+                diagnostics=diagnostics, snapshot_store=None, use_snapshot=False, **row_budget,
             )
         except _MiningSnapshotChanged:
             if attempt:
                 rows = _fetch_edframe_mining_snapshot(
                     system, get, commodity=commodity, origin=origin,
                     timeout=timeout, max_distance=max_distance,
-                    diagnostics=diagnostics, snapshot_store=None, use_snapshot=False,
+                    diagnostics=diagnostics, snapshot_store=None, use_snapshot=False, **row_budget,
                 )
                 if diagnostics is not None:
-                    diagnostics.update(bounded=True, consistent=False,
+                    diagnostics.update(bounded=True, complete=False, consistent=False,
                                        snapshotStatus="Changed while paging; provisional results")
                 return rows
 
@@ -188,6 +191,7 @@ class _MiningSnapshotCacheMissing(Exception):
 def _fetch_edframe_mining_snapshot(
     system, get, *, commodity, origin, timeout, max_distance,
     diagnostics, snapshot_store, use_snapshot, use_cached_revision=True,
+    max_rows=50_000,
 ):
     requested = _text(system)
     if not requested:
@@ -223,9 +227,15 @@ def _fetch_edframe_mining_snapshot(
     bounded = False
     seen_cursors = set()
     revision = None
-    for page in range(50):
+    for page in range((max_rows + 999) // 1000):
+        request_params = dict(params)
+        # Legacy cursor pages do not use SQL OFFSET, but the deployed API
+        # still validates its numeric field at 100k. Keep the transport field
+        # valid while advancing the real consumed-row budget separately.
+        if not revision and request_params.get("cursor"):
+            request_params["offset"] = min(100_000, request_params["offset"])
         try:
-            response = get(EDFRAME_CATALOG_SITES_URL, params=dict(params),
+            response = get(EDFRAME_CATALOG_SITES_URL, params=request_params,
                            timeout=max(30, timeout) if use_snapshot else timeout)
         except requests.Timeout:
             if use_snapshot:
@@ -287,17 +297,21 @@ def _fetch_edframe_mining_snapshot(
             bounded = "hasMore" not in payload and len(payload["results"]) >= params["limit"]
             break
         next_offset = payload.get("nextOffset")
-        if not isinstance(next_offset, int) or isinstance(next_offset, bool) or next_offset <= params["offset"]:
+        if not isinstance(next_offset, int) or isinstance(next_offset, bool) or next_offset <= request_params["offset"]:
             raise ValueError("ED-Frame mining catalog returned an invalid page cursor")
+        next_offset += params["offset"] - request_params["offset"]
         params["offset"] = next_offset
-        # Preserve the original 50 x 1,000 regional-row budget, even when a
-        # server supports the larger page opt-in. Never silently claim full
-        # coverage after reaching that budget.
-        if max_distance is not None and next_offset >= 50_000:
+        # ALL searches need a larger, still bounded regional snapshot than
+        # a concrete commodity. Keep partial coverage explicit at the limit.
+        if max_distance is not None and next_offset >= max_rows:
+            bounded = True
+            break
+        if next_offset > 100_000 and (revision or not payload.get("nextCursor")):
+            # Offset-only/older frozen protocols cannot traverse this bound.
             bounded = True
             break
         if max_distance is not None:
-            params["regional_page_size"] = min(5000, 50_000 - next_offset)
+            params["regional_page_size"] = min(5000, max_rows - next_offset)
         next_cursor = payload.get("nextCursor")
         if next_cursor is not None:
             if not isinstance(next_cursor, str) or not next_cursor or next_cursor in seen_cursors:

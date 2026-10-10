@@ -44,7 +44,7 @@ def plan(facts, **fields):
 class PowerplayEvidenceTests(unittest.TestCase):
     def test_fresh_ring_cannot_refresh_older_powerplay_snapshot(self):
         base = {"system": "Mine", "ring": "Mine A Ring", "coordinates": [0, 0, 0]}
-        old = (NOW - timedelta(hours=25)).isoformat()
+        old = (NOW - timedelta(hours=49)).isoformat()
         merged = merge_mining_candidates([
             {**base, "evidence": "LOCAL_CONFIRMED", "observedAt": NOW.isoformat()},
             {**base, "evidence": "CATALOG_CANDIDATE", "observedAt": old,
@@ -55,8 +55,9 @@ class PowerplayEvidenceTests(unittest.TestCase):
         self.assertEqual(merged["powerplayObservedAt"], old)
         row = plan_mining_routes([merged], "Platinum", OPTIMIZE_MERITS,
             power="Aisling Duval", power_goal="REINFORCE", markets=[market()], now=NOW)[0]
-        self.assertEqual(row["powerplayEvidenceState"], "STALE")
-        self.assertIsNone(row["meritScore"])
+        self.assertEqual(row["powerplayEvidenceState"], "LAST_KNOWN")
+        self.assertEqual(row["meritScore"], 3)
+        self.assertFalse(row['meritVerified'])
 
     def test_merged_powerplay_is_one_snapshot_even_when_newest_ring_is_stronger(self):
         base = {"system": "Mine", "ring": "Mine A Ring"}
@@ -88,7 +89,7 @@ class PowerplayEvidenceTests(unittest.TestCase):
         self.assertEqual(source["controlObservedAt"], old)
 
     def test_spansh_quote_and_ring_times_cannot_refresh_system_control(self):
-        old = (NOW - timedelta(hours=25)).isoformat()
+        old = (NOW - timedelta(hours=49)).isoformat()
         projected = project_spansh_mining_candidates({"system": {
             "name": "Mine", "date": old, "coords": {"x": 0, "y": 0, "z": 0},
             "controllingPower": "Aisling Duval", "powerState": "Stronghold",
@@ -104,7 +105,7 @@ class PowerplayEvidenceTests(unittest.TestCase):
         self.assertEqual(sale["controllingPower"], "Aisling Duval")
         row = plan_mining_routes([projected], "Platinum", OPTIMIZE_MERITS,
             power="Aisling Duval", power_goal="REINFORCE", now=NOW)[0]
-        self.assertEqual(row["powerplayEvidenceState"], "STALE")
+        self.assertEqual(row["powerplayEvidenceState"], "LAST_KNOWN")
 
     def test_legacy_metadata_without_powerplay_time_remains_unknown(self):
         legacy = {**market(), "ring": "Mine A Ring", "controllingPower": "Aisling Duval",
@@ -179,14 +180,14 @@ class PowerplayEvidenceTests(unittest.TestCase):
             self.assertIn("UNOCCUPIED", row["meritStatus"])
 
     def test_old_control_is_not_freshened_by_new_presence(self):
-        old = fact(observedAt=(NOW - timedelta(hours=25)).isoformat())
+        old = fact(observedAt=(NOW - timedelta(hours=49)).isoformat())
         presence = fact(controllingPower="", source="EDSM daily PowerPlay catalog",
                         powerRelationship="PRESENCE", controlKnown=False)
         row = plan([old, presence])
-        self.assertEqual(row["powerplayStatus"], "POWERPLAY_DATA_MISSING")
-        self.assertEqual(row["powerplayEvidenceState"], "STALE")
-        self.assertEqual(row["powerplayVerificationLabel"], "POWERPLAY DATA TOO OLD")
-        self.assertIn("25 h", row["pendingReason"])
+        self.assertEqual(row["powerplayStatus"], "POWERPLAY_PROVISIONAL")
+        self.assertEqual(row["powerplayEvidenceState"], "LAST_KNOWN")
+        self.assertEqual(row["powerplayVerificationLabel"], "LAST KNOWN · CHECK IN GAME")
+        self.assertIn("49 h", row["pendingReason"])
 
     def test_same_cached_index_becomes_stale_without_any_source_write(self):
         index = _powerplay_index([fact()])
@@ -195,8 +196,8 @@ class PowerplayEvidenceTests(unittest.TestCase):
         status, score, _ = _merit_status(candidate, sale, "Aisling Duval", "REINFORCE", "ANY", index, now=NOW)
         self.assertEqual(score, 5)
         status, score, _ = _merit_status(candidate, sale, "Aisling Duval", "REINFORCE", "ANY", index,
-                                        now=NOW + timedelta(hours=24, seconds=1))
-        self.assertIsNone(score)
+                                        now=NOW + timedelta(hours=48, seconds=1))
+        self.assertEqual(score, 3)
         self.assertIn("TOO OLD", status)
 
     def test_missing_or_future_source_time_is_never_confirmed(self):
@@ -208,10 +209,10 @@ class PowerplayEvidenceTests(unittest.TestCase):
     def test_old_acquire_target_remains_pending_and_is_looked_up(self):
         target = fact("Sale", power="", controllingPower="", powers=[],
                       powerState="Unoccupied", coordinates=[15, 0, 0],
-                      observedAt=(NOW - timedelta(hours=25)).isoformat())
+                      observedAt=(NOW - timedelta(hours=49)).isoformat())
         row = plan([fact(), target], power_goal="ACQUIRE",
                    markets=[market("Sale", coordinates=[15, 0, 0])])
-        self.assertEqual(row["powerplayEvidenceState"], "STALE")
+        self.assertEqual(row["powerplayEvidenceState"], "LAST_KNOWN")
         self.assertEqual(missing_powerplay_targets([row], [fact(), target], now=NOW)[0]["system"], "Sale")
 
     def test_replaced_participants_cannot_prove_old_contesting_membership(self):

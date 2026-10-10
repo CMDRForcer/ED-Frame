@@ -1467,7 +1467,7 @@ class MiningFinderUiContractTests(unittest.TestCase):
         self.assertIn('secondaryCommodityNames', qml)
         self.assertIn('"ALSO AT THIS STATION"', qml)
         self.assertIn('"SYSTEM STATE"', qml)
-        self.assertIn("Layout.maximumHeight: 280", qml)
+        self.assertIn('Layout.maximumHeight: powerplaySourceDetails(bestRoute) !== "" ? 360 : 280', qml)
         self.assertIn("width: routesList.width; height: 88", qml)
         self.assertIn('"MEASURED PLATINUM"', qml)
         self.assertIn("INCLUDING ZEROS", qml)

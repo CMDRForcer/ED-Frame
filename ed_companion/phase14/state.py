@@ -551,7 +551,7 @@ def pending_power_plan_targets(tasks: object) -> dict[str, dict[str, Any]]:
 
 def build_state(
     package_root, selected_ship="", preferred_plan_id="",
-    trader_preference="confirmed",
+    trader_preference="confirmed", *, compute=None,
 ):
     profile_context = resolve_profile_context()
     data_dir = runtime_data_dir(profile_context)
@@ -563,6 +563,17 @@ def build_state(
     # events-derived projections below skip recomputing their full
     # career-wide history on refresh ticks that touched nothing they use.
     _projection_key = journal_projection_cache_key()
+    projected = None
+    # Keep timely Journal refreshes on their own thread when the only child
+    # could be occupied by a long search. Cached small-PC projections retain
+    # their existing behavior without waiting for Mining to finish.
+    if (compute is not None and len(profile_events) >= 20000
+            and compute.resources.sample()["cpuWorkerLimit"] > 1):
+        from ed_companion.cpu_tasks import journal_projection
+        projected = memoize_projection("worker_journal_projection", _projection_key,
+            lambda: compute.compute("journal-projection", journal_projection, profile_events,
+                memory_mb=max(256, len(profile_events) / 500), priority=3,
+                fallback=lambda: journal_projection(profile_events)))
     commander_name = next((
         str(event.get("Commander") or "")
         for event in reversed(profile_events)
@@ -571,14 +582,15 @@ def build_state(
     commander_overview = commander_journal_overview(
         profile_events, read_json(journal_dir() / "Status.json", {})
     )
-    powerplay_overview = memoize_projection(
+    powerplay_overview = projected["powerplay"] if projected is not None else memoize_projection(
         "powerplay_journal_overview", _projection_key,
         lambda: powerplay_journal_overview(profile_events),
     )
-    vehicle_state = project_vehicle_state(profile_events)
-    vehicle_state["latestMiningSession"] = project_latest_srv_mining_session(
-        profile_events
-    )
+    if projected is not None:
+        vehicle_state = deepcopy(projected["vehicle"])
+    else:
+        vehicle_state = project_vehicle_state(profile_events)
+        vehicle_state["latestMiningSession"] = project_latest_srv_mining_session(profile_events)
     blueprint_learning = learn_blueprint_id_catalog(
         profile_events, data_dir / "blueprint_id_catalog_learned.json"
     )
@@ -1266,16 +1278,16 @@ def build_state(
     )
     exobiology_status_snapshot = read_json(journal_dir() / "Status.json", {})
 
-    raw_mission_rows = memoize_projection(
+    raw_mission_rows = projected["missions"] if projected is not None else memoize_projection(
         "active_missions", _projection_key,
         lambda: active_missions(profile_events),
     )
     mission_rows = prioritized_missions(raw_mission_rows)
-    community_goal_rows = memoize_projection(
+    community_goal_rows = projected["communityGoals"] if projected is not None else memoize_projection(
         "community_goals_overview", _projection_key,
         lambda: community_goals_overview(profile_events),
     )
-    exploration_state = memoize_projection(
+    exploration_state = projected["exploration"] if projected is not None else memoize_projection(
         "exploration_ledger", _projection_key,
         lambda: exploration_ledger(profile_events),
     )

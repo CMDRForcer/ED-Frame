@@ -12,6 +12,11 @@ import threading
 import time
 import uuid
 import requests
+import queue
+from ed_companion.background_work import BackgroundWork, Responsiveness
+from ed_companion.compute_work import ComputeWork
+from ed_companion.network_activity import snapshot as network_activity_snapshot
+from ed_companion.navigation.mining_process import MiningProcess
 from copy import deepcopy
 from datetime import datetime, timezone
 from pathlib import Path
@@ -348,6 +353,7 @@ class CockpitController(
     historyExportFinished = Signal(object)
     refreshStateReady = Signal(object)
     refreshStateFailed = Signal(object)
+    localCatalogSummaryReady = Signal(object)
     exitRequested = Signal()
 
     def _bind_profile_paths(self, context: ProfileContext) -> None:
@@ -592,6 +598,12 @@ class CockpitController(
         self._shutdown_complete = False
         self._network_threads = set()
         self._network_threads_lock = threading.Lock()
+        self._compute_work = ComputeWork()
+        self._background_work = BackgroundWork(self._track_worker_thread, resources=self._compute_work.resources)
+        self._mining_process = MiningProcess(self._compute_work)
+        self._responsiveness = Responsiveness()
+        self._background_activity = {}
+        self._mining_market_public_revision = 0
         self._last_page = max(0, min(17, int(ui_config.get("last_page", 0) or 0)))
         configured_cards = ui_config.get("commander_card_order", [])
         configured_cards = configured_cards if isinstance(configured_cards, list) else []
@@ -718,6 +730,7 @@ class CockpitController(
         self._mining_verification_cache = {}
         self._mining_powerplay_lookup_cache = {}
         self._mining_powerplay_source_pending = []
+        self._mining_powerplay_lookup_states = {}
         self._mining_powerplay_market_verification_cache = {}
         self._active_mining_verification_request = None
         self._pending_mining_verification = None
@@ -733,18 +746,8 @@ class CockpitController(
         if not isinstance(self._mining_market_cache, dict):
             self._mining_market_cache = {}
         self._mining_market_store = self._open_mining_market_store()
-        local_offer_summary = self._mining_market_store.station_offer_summary()
-        if not isinstance(getattr(self, "_edframe_catalog_stats", None), dict):
-            self._edframe_catalog_stats = {}
-        self._edframe_catalog_stats.update({
-            "localOfferStations": int(local_offer_summary.get("stations", 0)),
-            "localOutfittingStations": int(
-                local_offer_summary.get("outfittingStations", 0)
-            ),
-            "localShipyardStations": int(
-                local_offer_summary.get("shipyardStations", 0)
-            ),
-        })
+        self.localCatalogSummaryReady.connect(self._finish_local_catalog_summary)
+        QTimer.singleShot(0, self._request_local_catalog_summary)
         self._mining_market_busy = False
         self._mining_market_background = False
         self._mining_market_status = self._mining_market_cache_status()
@@ -851,6 +854,7 @@ class CockpitController(
         self._tech_broker_sync_busy = False
         self._tech_broker_sync_status = self._load_tech_broker_sync_status()
         self._eddn_stop = threading.Event()
+        self._eddn_relay_batches = queue.SimpleQueue()
         self._eddn_thread = None
         self._pending_bgs_snapshots = []
         self._pending_hge_observations = []
@@ -961,11 +965,23 @@ class CockpitController(
         )
         self.miningMarketAutoRefreshTimer.start()
         self.edFrameCatalogStatusTimer = QTimer(self)
-        self.edFrameCatalogStatusTimer.setInterval(5 * 60 * 1000)
+        self.edFrameCatalogStatusTimer.setInterval(15 * 60 * 1000)
         self.edFrameCatalogStatusTimer.timeout.connect(
-            self.refreshEdFrameCatalogStatus
+            lambda: self.refreshEdFrameCatalogStatus(background=True)
         )
         self.edFrameCatalogStatusTimer.start()
+        self.catalogSyncTimer = QTimer(self)
+        self.catalogSyncTimer.setInterval(10 * 60 * 1000)
+        self.catalogSyncTimer.timeout.connect(self._queue_background_catalog_sync)
+        self.catalogSyncTimer.start()
+        self.uiHeartbeatTimer = QTimer(self)
+        self.uiHeartbeatTimer.setInterval(100)
+        self.uiHeartbeatTimer.timeout.connect(self._responsiveness.tick)
+        self.uiHeartbeatTimer.start()
+        self.backgroundPublishTimer = QTimer(self)
+        self.backgroundPublishTimer.setInterval(2000)
+        self.backgroundPublishTimer.timeout.connect(self._publish_background_activity)
+        self.backgroundPublishTimer.start()
         self._mining_market_retry_timer = QTimer(self)
         self._mining_market_retry_timer.setSingleShot(True)
         self._mining_market_retry_timer.timeout.connect(
@@ -973,7 +989,8 @@ class CockpitController(
         )
         QTimer.singleShot(30_000, self._maybe_auto_refresh_spansh)
         QTimer.singleShot(60_000, self._maybe_auto_refresh_mining_markets)
-        QTimer.singleShot(5_000, self.refreshEdFrameCatalogStatus)
+        QTimer.singleShot(5_000, lambda: self.refreshEdFrameCatalogStatus(background=True))
+        QTimer.singleShot(8_000, self._queue_background_catalog_sync)
         QTimer.singleShot(20_000, self._schedule_mining_market_backup)
         self._ensure_eddn_listener()
         if self._last_page == 12:
@@ -998,12 +1015,12 @@ class CockpitController(
         # only the locals captured above, never live ``self._*`` mutable state.
         def worker():
             try:
-                state = build_state(
+                state = self._build_journal_state(
                     package_root, selected_ship,
                     trader_preference=trader_preference,
                 )
                 if _wishlist_unexpectedly_empty(state):
-                    retried = build_state(
+                    retried = self._build_journal_state(
                         package_root, str(state.get("ship") or ""),
                         trader_preference=trader_preference,
                     )
@@ -1230,11 +1247,92 @@ class CockpitController(
                 with self._network_threads_lock:
                     self._network_threads.discard(threading.current_thread())
 
+        scheduler = getattr(self, "_background_work", None)
+        if scheduler is not None:
+            lane = None
+            if name == "mining-market-sync" and not (
+                    getattr(self, "_active_mining_market_request", {}) or {}).get("background"):
+                lane = "interactive"
+            if name == "edframe-catalog-status" and not (
+                    getattr(self, "_active_edframe_catalog_request", {}) or {}).get("background"):
+                lane = "interactive"
+            return scheduler.submit(guarded, name, lane=lane)
         thread = threading.Thread(target=guarded, daemon=True, name=name)
         with self._network_threads_lock:
             self._network_threads.add(thread)
         thread.start()
         return True
+
+    def _track_worker_thread(self, thread):
+        with self._network_threads_lock:
+            self._network_threads.add(thread)
+
+    def _request_local_catalog_summary(self):
+        # COUNT over station inventories can scan large JSON columns; Qt only
+        # publishes the four final integers. A profile switch fences old reads.
+        if not hasattr(self, "_background_work"):
+            return
+        store = self._mining_market_store
+        generation = self._profile_generation
+        token = (id(store), generation)
+        if getattr(self, "_local_catalog_summary_request", None) == token:
+            return
+        self._local_catalog_summary_request = token
+        base = {key: self._edframe_catalog_stats.get(key) for key in
+                ("localMarkets", "localOfferStations", "localOutfittingStations", "localShipyardStations")}
+        def worker():
+            result = None
+            try:
+                summary = store.station_offer_summary()
+                result = {"localMarkets": store.count(),
+                    "localOfferStations": int(summary.get("stations", 0)),
+                    "localOutfittingStations": int(summary.get("outfittingStations", 0)),
+                    "localShipyardStations": int(summary.get("shipyardStations", 0))}
+            except (OSError, sqlite3.DatabaseError):
+                LOGGER.exception("Local catalog summary unavailable")
+            finally:
+                self.localCatalogSummaryReady.emit((store, generation, base, result))
+        if not self._start_network_worker(worker, "catalog-local-summary"):
+            self._local_catalog_summary_request = None
+
+    @Slot(object)
+    def _finish_local_catalog_summary(self, payload):
+        store, generation, base, result = payload
+        if getattr(self, "_local_catalog_summary_request", None) == (id(store), generation):
+            self._local_catalog_summary_request = None
+        if (getattr(self, "_shutdown_complete", False) or store is not self._mining_market_store
+                or generation != self._profile_generation or result is None):
+            return
+        if any(self._edframe_catalog_stats.get(key) != value for key, value in base.items()):
+            return  # A newer import already published counts for this profile.
+        self._edframe_catalog_stats.update(result)
+        self.connectionChanged.emit()
+
+    @Slot()
+    def _publish_background_activity(self):
+        compute = getattr(self, "_compute_work", None)
+        if compute:
+            compute.trim_idle()
+        market_revision = getattr(self, "_mining_market_revision", 0)
+        if market_revision != getattr(self, "_mining_market_public_revision", 0):
+            self._mining_market_public_revision = market_revision
+            self.miningChanged.emit()
+        activity = {**self._background_work.snapshot(), **self._responsiveness.snapshot(),
+                    **(compute.snapshot() if compute else {}),
+                    **network_activity_snapshot(),
+                    **getattr(self, "_mining_process_stats", {}),
+                    "syncIntervalMinutes": 10, "statusIntervalMinutes": 15,
+                    "catalogEnabled": getattr(self, "_edframe_catalog_enabled", True),
+                    "nextCatalogSync": datetime.fromtimestamp(
+                        time.time() + max(0, self.catalogSyncTimer.remainingTime()) / 1000,
+                        timezone.utc).isoformat(timespec="seconds")
+                        if getattr(self, "_edframe_catalog_enabled", True) else ""}
+        if activity != self._background_activity:
+            self._background_activity = activity
+            self.backgroundActivityChanged.emit()
+
+    backgroundActivity = Property("QVariantMap", lambda self: self._background_activity,
+                                  notify=NavigationMixin.backgroundActivityChanged)
 
 
     def _get(self, key, default=None):
@@ -2033,6 +2131,12 @@ class CockpitController(
         if not self._refresh_in_flight:
             self.refreshDebounceTimer.start()
 
+    def _build_journal_state(self, *args, **kwargs):
+        compute = getattr(self, "_compute_work", None)
+        if compute is not None:
+            kwargs["compute"] = compute
+        return build_state(*args, **kwargs)
+
     @Slot()
     def _launch_state_refresh(self) -> None:
         if self._refresh_in_flight or not self._refresh_dirty:
@@ -2056,7 +2160,7 @@ class CockpitController(
         # only the locals captured above, never live ``self._*`` mutable state.
         def worker():
             try:
-                state = build_state(
+                state = self._build_journal_state(
                     package_root, selected_ship, preferred_plan_id,
                     trader_preference,
                 )
@@ -2066,13 +2170,13 @@ class CockpitController(
                     follow_active_ship and state.get("activeShipKnown")
                     and active_ship != state.get("ship")
                 ):
-                    state = build_state(
+                    state = self._build_journal_state(
                         package_root, active_ship, preferred_plan_id,
                         trader_preference,
                     )
                     state["_craftBatch"] = craft_batch
                 if _wishlist_unexpectedly_empty(state):
-                    retried = build_state(
+                    retried = self._build_journal_state(
                         package_root, str(state.get("ship") or ""),
                         preferred_plan_id, trader_preference,
                     )
@@ -2670,6 +2774,7 @@ class CockpitController(
         self._mining_verification_cache = {}
         self._mining_powerplay_lookup_cache = {}
         self._mining_powerplay_source_pending = []
+        self._mining_powerplay_lookup_states = {}
         self._mining_powerplay_market_verification_cache = {}
         self._active_edframe_catalog_sync_request = None
         self._edframe_catalog_sync_busy = False
@@ -2751,18 +2856,12 @@ class CockpitController(
         if not isinstance(self._mining_market_cache, dict):
             self._mining_market_cache = {}
         self._mining_market_store = self._open_mining_market_store()
-        local_offer_summary = self._mining_market_store.station_offer_summary()
         if not isinstance(getattr(self, "_edframe_catalog_stats", None), dict):
             self._edframe_catalog_stats = {}
-        self._edframe_catalog_stats.update({
-            "localOfferStations": int(local_offer_summary.get("stations", 0)),
-            "localOutfittingStations": int(
-                local_offer_summary.get("outfittingStations", 0)
-            ),
-            "localShipyardStations": int(
-                local_offer_summary.get("shipyardStations", 0)
-            ),
-        })
+        for key in list(self._edframe_catalog_stats):
+            if key.startswith("local"):
+                self._edframe_catalog_stats.pop(key)
+        self._request_local_catalog_summary()
         self._mining_market_status = self._mining_market_cache_status()
         self._mining_powerplay_catalog = {}
         self._mining_powerplay_observations = []
@@ -3061,11 +3160,21 @@ class CockpitController(
             "miningMarketAutoRefreshTimer", "edFrameCatalogStatusTimer",
             "_mining_market_retry_timer",
             "_frontier_watchdog",
+            "catalogSyncTimer", "uiHeartbeatTimer", "backgroundPublishTimer",
         ):
             timer = getattr(self, timer_name, None)
             if timer is not None:
                 timer.stop()
         deadline = time.monotonic() + SHUTDOWN_GRACE_SECONDS
+        scheduler = getattr(self, "_background_work", None)
+        if scheduler is not None:
+            scheduler.close()
+        mining_process = getattr(self, "_mining_process", None)
+        if mining_process is not None:
+            mining_process.close()
+        compute = getattr(self, "_compute_work", None)
+        if compute is not None:
+            compute.close()
         self._eddn_stop.set()
         thread = self._eddn_thread
         if (
@@ -3095,6 +3204,13 @@ class CockpitController(
             self._save_inara_journal_cache()
             self._save_inara_receipts()
             self._save_ui_config()
+            # A queued JSON writer may have been cancelled by the bounded
+            # scheduler. Ring SQLite facts are durable already; preserve the
+            # latest replacement-published Powerplay snapshot on normal exit.
+            powerplay_path = getattr(self, "mining_powerplay_observations_file", None)
+            if powerplay_path is not None:
+                self._save_mining_json(powerplay_path,
+                    getattr(self, "_mining_powerplay_observations", []))
             store = getattr(self, "_mining_market_store", None)
             # The primary SQLite database is already durable (WAL + FULL).
             # Copying a multi-gigabyte recovery snapshot synchronously here

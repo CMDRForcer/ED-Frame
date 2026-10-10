@@ -200,6 +200,9 @@ def run(args):
                   "qml/pages/MiningFinderPage.qml")}}
     started = time.perf_counter()
     trace, beats, tabs, searches, planner_timings, index_timings = [], [], [], [], [], []
+    mixed_jobs, mixed_done = [], threading.Event()
+    if not args.mixed_workload:
+        mixed_done.set()
     verification_events, busy_events = [], []
     method_timings, gc_timings = [], []
     stall_stacks = []
@@ -246,6 +249,7 @@ def run(args):
 
     def controller_factory():
         previous = [time.perf_counter()]
+        last_heartbeat[0] = previous[0]
         heartbeat = QTimer()
         heartbeat.setTimerType(Qt.TimerType.PreciseTimer)
         def tick():
@@ -453,6 +457,7 @@ def run(args):
         def busy_snapshot(self):
             c = self.controller
             return {"sync": bool(c.miningMarketSyncBusy), "plan": bool(c.miningPlanBusy),
+                    "mixedWork": not mixed_done.is_set(),
                     "verification": bool(c.miningVerificationBusy),
                     "merge": bool(getattr(c, "_active_mining_observation_batch", None)),
                     "projection": bool(getattr(c, "_mining_rows_build_in_flight", False)),
@@ -471,8 +476,34 @@ def run(args):
                            "verificationSignalsAtStart": self.verification_signals}
             # Keep the benchmark query explicit, independently of QML's
             # current-Journal binding and state notifications.
-            self.evaluate("startSystem = 'Shanteneri'")
+            self.page.setProperty('startSystem', args.start_system)
             self.evaluate("executeSearch()")
+            if args.mixed_workload and not self.search_number:
+                # Only the isolated synthetic Journal changes. No new facts or
+                # timestamps are published into the frozen mining catalogs.
+                journal_file = next((destination / "journal").glob("Journal.*.log"))
+                with journal_file.open("a", encoding="utf-8") as handle:
+                    handle.write(json.dumps({"event": "Music", "MusicTrack": "Supercruise",
+                                             "timestamp": manifest["clock"]}) + "\n")
+                self.controller.refresh()
+                base = self.controller._mining_powerplay_observations
+                rows = [dict(base[0])]
+                def mixed_powerplay():
+                    stamp = time.perf_counter()
+                    result = {}
+                    try:
+                        self.controller._prepare_mining_powerplay_publication(result, rows)
+                        prepared = result["preparedPowerplay"]
+                        expected = navigation.merge_powerplay_observations(base, rows,
+                            limit=max(20000, len(base) + len(rows)))
+                        mixed_jobs.append({"name": "powerplay-publication", "rows": len(prepared["merged"]),
+                            "equal": prepared["merged"] == expected,
+                            "seconds": round(time.perf_counter() - stamp, 3)})
+                    except Exception as exc:
+                        mixed_jobs.append({"name": "powerplay-publication", "error": repr(exc)})
+                    finally:
+                        mixed_done.set()
+                self.controller._background_work.submit(mixed_powerplay, "mixed-powerplay-check", lane="interactive")
             # A warm unchanged result is deliberately reused, not re-emitted.
             if self.search_number:
                 self.row_change(reused=True)
@@ -514,12 +545,14 @@ def run(args):
                 self.page = self._find("qa-page-mining-finder")
                 if self.page is None:
                     return
-                self.page.setProperty("startSystem", "Shanteneri")
+                self.page.setProperty("startSystem", args.start_system)
                 self.page.setProperty("powerOverride", "Aisling Duval")
                 self.page.setProperty("commodityFilter", args.commodity)
                 self.page.setProperty("nearbyLy", args.radius)
                 self.page.setProperty("resultLimit", args.results)
                 self.page.setProperty("optimization", "POWERPLAY MERITS")
+                self.page.setProperty('maxMarketAgeHours', args.max_market_age_hours)
+                self.page.setProperty('maxDemand', args.max_demand)
                 self.page.resultRowsChanged.connect(self.row_change)
                 self.ready_at = round(now - started, 3)
                 self.dataset = {"rings": len(c._mining_catalog.get("candidates", [])),
@@ -574,6 +607,10 @@ def run(args):
                 elif self.idle_since is None:
                     self.idle_since = now
                 if self.tab_pending is None:
+                    if args.tab_cycles and self.tab_index >= len(self.tab_plan) * args.tab_cycles:
+                        if self.idle_since is not None and now - self.idle_since >= 3:
+                            self.finish()
+                        return
                     if (self.tab_index >= len(self.tab_plan) and self.tab_index % len(self.tab_plan) == 0
                             and self.idle_since is not None and now - self.idle_since >= 3):
                         self.finish()
@@ -629,7 +666,8 @@ def run(args):
                 self.flush_pending_qt_diagnostics()
             report = {"version": APP_VERSION, "resultsRequested": args.results,
                       "label": args.label, "source": source,
-                      "journalAuto": args.journal_auto,
+                      "journalAuto": args.journal_auto, "mixedWorkload": args.mixed_workload,
+                      "mixedJobs": mixed_jobs,
                       "python": sys.version, "pyside": pyside_version,
                       "radiusLy": args.radius, "commodity": args.commodity,
                       "mode": "source/offscreen/software/frozen-local-providers" if args.fixture else "source/offscreen/software/GET-only",
@@ -643,6 +681,8 @@ def run(args):
                       "stallStacks": stall_stacks,
                       "heartbeatGaps": [beat for beat in beats if beat["gapMs"] > 100],
                       "http": trace, "memoryAtFinish": memory(), "error": error,
+                      "backgroundActivity": getattr(self.controller, "_background_activity", {}),
+                      "miningProcess": getattr(self.controller, "_mining_process_stats", {}),
                       "qmlMessages": self.qml_messages,
                       "elapsedSeconds": round(time.perf_counter() - started, 3)}
             (destination / "result.json").write_text(json.dumps(report, indent=2, ensure_ascii=False), encoding="utf-8")
@@ -663,16 +703,24 @@ def main():
     parser.add_argument("--prepare", type=Path, metavar="SOURCE_PUBLIC_PROFILE")
     parser.add_argument("--results", type=int, choices=(30, 100), default=30)
     parser.add_argument("--radius", type=int, default=250)
+    parser.add_argument('--start-system', default='Shanteneri')
+    parser.add_argument('--max-market-age-hours', type=int, default=1)
+    parser.add_argument('--max-demand', type=int, default=500000)
     parser.add_argument("--commodity", choices=("Platinum", "ALL COMMODITIES"), default="Platinum")
     parser.add_argument("--fixture", type=Path, help="Clone a frozen public fixture; block HTTP and replay retained facts")
     parser.add_argument("--baseline-navigation", type=Path, help="Replay a saved pre-optimization navigation module")
     parser.add_argument("--deadline", type=int, default=300)
     parser.add_argument("--tabs", action="store_true")
+    parser.add_argument('--tab-cycles', type=int, default=0,
+                        help='Stop issuing new tab requests after this many complete cycles; then drain work')
     parser.add_argument("--tabs-only", action="store_true")
     parser.add_argument("--journal-auto", action="store_true")
+    parser.add_argument("--mixed-workload", action="store_true", help="Replay a large synthetic Journal refresh and Powerplay preparation during search; fixture only")
     parser.add_argument("--label", default="baseline")
     parser.add_argument("--profile-ui", action="store_true")
     args = parser.parse_args()
+    if args.mixed_workload and not args.fixture:
+        parser.error("--mixed-workload requires a frozen isolated --fixture")
     args.output = args.output.resolve()
     if not args.output.is_relative_to(ROOT / ".test-tmp") or args.output == ROOT / ".test-tmp":
         parser.error("--output must be a distinct new directory inside repository .test-tmp")
@@ -684,6 +732,11 @@ def main():
         if not args.fixture.is_relative_to(ROOT / ".test-tmp") or args.output.exists():
             parser.error("Frozen replay requires a .test-tmp fixture and a new output")
         shutil.copytree(args.fixture, args.output)
+        if args.mixed_workload:
+            journal_file = next((args.output / "journal").glob("Journal.*.log"))
+            with journal_file.open("a", encoding="utf-8") as handle:
+                event = {"event": "Music", "MusicTrack": "Supercruise", "timestamp": "2026-10-09T00:00:04Z"}
+                handle.write((json.dumps(event) + "\n") * 20000)
     return run(args)
 
 

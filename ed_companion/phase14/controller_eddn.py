@@ -1640,6 +1640,21 @@ class EddnMixin:
             )
         )
 
+    def _drain_eddn_batches(self, force=False):
+        import queue
+        batches = getattr(self, "_eddn_relay_batches", None)
+        if batches is None:
+            return
+        for _ in range(100000 if force else 16):
+            try:
+                snapshots, signals, rings, powerplay = batches.get_nowait()
+            except queue.Empty:
+                break
+            self._pending_bgs_snapshots.extend(snapshots)
+            self._pending_hge_observations.extend(signals)
+            self._pending_mining_candidates.extend(rings)
+            self._pending_mining_powerplay_observations.extend(powerplay)
+
 
     def _ensure_eddn_listener(self):
         enabled = bool(
@@ -1656,6 +1671,15 @@ class EddnMixin:
         self._eddn_listener_status = "Connecting…"
 
         def listener():
+            batches = self._eddn_relay_batches
+            batch = [[], [], [], []]
+            last_publish = time.monotonic()
+            def publish():
+                nonlocal batch, last_publish
+                if any(batch):
+                    batches.put(batch)
+                    batch = [[], [], [], []]
+                last_publish = time.monotonic()
             try:
                 import zmq
                 context = zmq.Context()
@@ -1669,15 +1693,23 @@ class EddnMixin:
                     try:
                         payload = decode_relay_frame(socket.recv())
                         if _eddn_relay_relevant(payload):
-                            self.eddnRelay.emit(payload)
+                            snapshot = extract_system_bgs_snapshot(payload)
+                            if snapshot:
+                                batch[0].append(snapshot)
+                            batch[1].extend(extract_signal_finds(payload))
+                            stamp = datetime.now(timezone.utc).isoformat(timespec="seconds")
+                            batch[2].extend(project_eddn_mining_candidates(payload, stamp))
+                            batch[3].extend(project_powerplay_observations(payload, stamp))
                     except zmq.Again:
-                        continue
+                        pass
                     except EddnRelayDecodeError:
                         self._eddn_listener_status = (
                             "Connected · ignored malformed relay frame"
                         )
                         self.connectionChanged.emit()
                         continue
+                    if time.monotonic() - last_publish >= 2:
+                        publish()
                 socket.close(0)
                 context.term()
             except ImportError:
@@ -1688,6 +1720,8 @@ class EddnMixin:
                     f"Disconnected: {type(exc).__name__}"
                 )
                 self.connectionChanged.emit()
+            finally:
+                publish()
 
         self._eddn_thread = threading.Thread(
             target=listener, daemon=True, name="eddn-hge-listener"

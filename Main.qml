@@ -7973,6 +7973,7 @@ ApplicationWindow {
                                     marketSync: cockpit.edFrameCatalogSyncStatus
                                     offerSync: cockpit.edFrameStationOfferSyncStatus
                                     stateSync: cockpit.edFrameStateFindSyncStatus
+                                    activity: cockpit.backgroundActivity
                                     surface: panel
                                     foreground: textPrimary
                                     secondary: textSecondary

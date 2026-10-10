@@ -78,6 +78,8 @@ jobs:
           "ED_FRAME_SINGLE_INSTANCE_NAME=ED-Frame-release-source-${{ github.run_id }}-${{ github.run_attempt }}" >> $env:GITHUB_ENV
           "PHASE14_PREVIEW_SKIP_ONBOARDING=1" >> $env:GITHUB_ENV
           "PHASE14_SMOKE_TEST=1" >> $env:GITHUB_ENV
+          "PHASE14_SMOKE_MINING_PROCESS=1" >> $env:GITHUB_ENV
+          "PHASE14_SMOKE_COMPUTE_WORK=1" >> $env:GITHUB_ENV
           "QT_QPA_PLATFORM=offscreen" >> $env:GITHUB_ENV
 
       - name: Run honest source smoke test
@@ -127,11 +129,24 @@ jobs:
           $env:ED_FRAME_SINGLE_INSTANCE_NAME = "ED-Frame-release-package-${{ github.run_id }}-${{ github.run_attempt }}"
           $env:PHASE14_PREVIEW_SKIP_ONBOARDING = "1"
           $env:PHASE14_SMOKE_TEST = "1"
+          $env:PHASE14_SMOKE_MINING_PROCESS = "1"
+          $env:PHASE14_SMOKE_COMPUTE_WORK = "1"
+          $smokeReport = Join-Path $env:RUNNER_TEMP "edec-package-smoke-report.json"
+          $env:PHASE14_SMOKE_REPORT_PATH = $smokeReport
           $env:QT_QPA_PLATFORM = "offscreen"
           $process = Start-Process -FilePath "dist/ED-Frame/ED-Frame.exe" -WindowStyle Hidden -PassThru -Wait
           if ($process.ExitCode -ne 0) {
             Write-Error "Packaged smoke test failed with exit code $($process.ExitCode)."
             exit $process.ExitCode
+          }
+          if (-not (Test-Path -LiteralPath $smokeReport)) {
+            Write-Error "Packaged smoke test produced no report."
+            exit 1
+          }
+          $report = Get-Content -LiteralPath $smokeReport -Raw | ConvertFrom-Json
+          if ($report.status -ne "PASS") {
+            Write-Error "Packaged smoke report did not confirm PASS."
+            exit 1
           }
 
       - name: Create release archives and checksums

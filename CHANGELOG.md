@@ -1,5 +1,32 @@
 # Changelog
 
+## 1.0.8 — 2026-10-10
+
+- Add exact grouped Mining market queries, filtered by the selected method and
+  explicit Powerplay evidence, retaining unknown evidence as unknown. Regional
+  price top lists no longer decide which eligible systems receive market data.
+- Recover exact rings omitted by bounded regional reads alongside the grouped
+  market response, preserving source times and visible ring coverage bounds.
+- Filter regional Powerplay pages by selected Power and goal before their page
+  limit. Cache entries are scoped to this selection. Existing exact lookups
+  retain their full source coverage.
+- Use a 48-hour current Powerplay window and explicitly dated last-known
+  suggestions up to 14 days; last-known proposals do not count as verified.
+- Preserve ALL COMMODITIES ring scope during concrete market warm-up. Return
+  the best merit route per system first, then additional rings, using actual
+  sell value within the same verification group.
+- Distribute Mining, Journal and Powerplay work through bounded background
+  processes, adapting CPU and I/O concurrency to available resources. Batch
+  notifications and slow automatic polling; empty background market answers
+  no longer trigger a complete route recalculation.
+- Resume deferred planners after inputs finish even if the Mining page was
+  recreated; stale cache keys no longer leave a workerless busy state.
+- Show original control/state source dates on Mining routes. Fix narrow-window
+  route-card layout and replace the permanently empty active-signal statistic
+  with useful catalog and local synchronization information.
+- Pair app 1.0.8 with catalog server 0.9.3. Large cold catalog reads and route
+  calculations still take time; partial source coverage remains visible.
+
 ## 1.0.7 — 2026-10-09
 
 - Prepare ALL COMMODITIES method/ring compatibility and commodity names once

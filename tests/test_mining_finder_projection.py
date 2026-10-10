@@ -1366,6 +1366,7 @@ class MiningFinderProjectionTests(unittest.TestCase):
 
             request = controller._start_mining_market_refresh.call_args.args[0]
             self.assertNotEqual(request["commodity"], "allcommodities")
+            self.assertEqual(request["siteCommodity"], "allcommodities")
             self.assertIn(
                 request["commodity"], {
                     "platinum", "painite", "osmium", "monazite",
@@ -1395,6 +1396,7 @@ class MiningFinderProjectionTests(unittest.TestCase):
             request = controller._start_mining_market_refresh.call_args.args[0]
             self.assertEqual(request["startSystem"], "cubeo")
             self.assertEqual(request["commodity"], "platinum")
+            self.assertEqual(request["siteCommodity"], "allcommodities")
             controller._start_mining_market_refresh.assert_called_once_with(
                 request, background=False,
             )
@@ -1520,7 +1522,7 @@ class MiningFinderProjectionTests(unittest.TestCase):
                 ]
             )
             controller._persist_json.assert_not_called()
-            controller._mining_market_retry_timer.start.assert_called_with(60000)
+            controller._mining_market_retry_timer.start.assert_called_with(300000)
             self.assertIn(
                 "ED-Frame OK (1 rows)", controller._mining_market_status,
             )

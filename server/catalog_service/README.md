@@ -1,8 +1,29 @@
 # ED-Frame central catalog service
 
-Version **0.9.2**, paired with app **1.0.7**. The targeted Spansh Powerplay
+Version **0.9.3**, paired with app **1.0.8**. The targeted Spansh Powerplay
 extension supplements missing explicit control from identity-checked public
 snapshots, preserving original source times and newer/equal-time EDDN facts.
+
+`POST /v1/mining/merit-markets` is a public read-only batch lookup. Its JSON body
+contains `targets` (1–200 unique exact systems with concrete commodity IDs),
+`power`, `goal`, `method`, optional `opposingPower`, `minDemand`, `maxAgeHours`
+and `landingPad`. Only catalogued commodities compatible with the requested
+method are queried. Powerplay eligibility uses the shared route rules; missing
+facts retain an UNKNOWN label, while known ineligible same-system routes are
+excluded. Acquisition still requires client verification of both route ends.
+Each pair returns its best positive current sell offer at a compatible pad,
+excluding known fleet carriers, with original observation dates. Explicit
+per-system coverage prevents missing responses being cached as empty markets.
+Responses also contain retained Powerplay facts and up to 5,000 original-dated
+ring records for the requested systems; `ringHasMore` marks a bounded ring read.
+This recovers exact sites omitted by regional pagination without inferring
+ring types, hotspots or system control.
+Queries use existing system-name indexes, a read-only transaction, 10-second
+statement timeout and a 16-request/minute budget per API worker/client.
+
+Regional `/v1/mining/powerplay` requests accept optional `power` and
+`goal=REINFORCE|UNDERMINE|ACQUIRE`. Filtering precedes pagination; exact system
+lookups remain unfiltered. This extension adds no schema changes or deletion.
 
 This service continuously consumes the public EDDN relay and stores the
 anonymous public catalog facts ED-Frame can reuse:
@@ -246,7 +267,7 @@ files per service. Mining evidence and system geography are retained.
   transfer old facts into `results` or extend freshness. Regional queries never
   perform a historical galaxy-wide lookup for this option.
 - `GET /v1/mining/powerplay/lookup?system=Cubeo&system=...` supplements at most
-  six exact systems from public Spansh dumps (local implementation, not deployed).
+  six exact systems from public Spansh dumps.
   Fresh explicit retained control skips HTTP; otherwise the server resolves a
   known public system address, retrieves only the fixed Spansh URL, validates
   identity/control/state/coordinates and preserves the original system `date`.
@@ -254,8 +275,14 @@ files per service. Mining evidence and system geography are retained.
   `mining_powerplay` table; no migration is required. Updates must be strictly
   newer, so simultaneous newer or equally dated EDDN observations win.
   The response re-reads canonical storage before publishing facts.
+- The prepared address resolver also checks indexed mining-site and station
+  catalogs. Bulk-imported ring systems need not already have a `systems` row.
+  Conflicting addresses across catalogs remain unresolved. This resolver change
+  requires an API rollout; it needs no schema migration. The app can meanwhile
+  use a unique public mining id64 for a bounded direct Spansh fallback after
+  `NO_ADDRESS`, within the same six selected source checks.
 - Supplementation never infers `Unoccupied` from missing fields. Only explicit
-  observations within 24 hours (five-minute future tolerance) can enter `results`.
+  observations within 48 hours (five-minute future tolerance) can enter `results`.
   `lookup` diagnostics distinguish `CURRENT`, `FETCHED`, `MISSING`, `STALE`,
   `ERROR`, `BUSY` and `NO_ADDRESS`; validated stale source times remain diagnostic
   only. Missing/ambiguous system addresses do not trigger an upstream request.

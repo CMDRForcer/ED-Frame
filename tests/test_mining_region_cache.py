@@ -49,14 +49,14 @@ class MiningRegionCacheTests(unittest.TestCase):
         self.assertIsNone(self.cache.get("powerplay", QUERY, ORIGIN))
 
         self.clock.return_value = 1000.0
-        almost_old = [{**self.powers[0], "observedAt": (NOW - timedelta(hours=24, seconds=-2)).isoformat()}]
+        almost_old = [{**self.powers[0], "observedAt": (NOW - timedelta(days=14, seconds=-2)).isoformat()}]
         self.assertTrue(self.put("powerplay", rows=almost_old))
         self.clock.return_value = 1003.0
         self.assertIsNone(self.cache.get("powerplay", QUERY, ORIGIN))
 
     def test_wall_clock_jump_cannot_make_newly_stale_powerplay_look_current(self):
         self.put("powerplay", rows=self.powers)
-        self.cache._wall_clock = lambda: (NOW + timedelta(days=2)).timestamp()
+        self.cache._wall_clock = lambda: (NOW + timedelta(days=15)).timestamp()
         self.assertIsNone(self.cache.get("powerplay", QUERY, ORIGIN))
 
     def test_scope_covers_coordinates_radius_commodity_but_not_market_filters(self):

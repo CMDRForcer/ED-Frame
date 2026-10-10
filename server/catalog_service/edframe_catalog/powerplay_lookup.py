@@ -12,6 +12,7 @@ import requests
 from ed_companion.navigation.mining_powerplay import (
     POWERPLAY_STATES, SPANSH_POWERPLAY_SOURCE, project_spansh_powerplay,
 )
+from ed_companion.navigation.mining_powerplay_policy import POWERPLAY_CURRENT_HOURS
 from .database import connection, upsert_powerplay_snapshot
 
 
@@ -31,7 +32,7 @@ def current_control(rows, now):
             age = (now - stamp).total_seconds()
         except (TypeError, ValueError):
             continue
-        if (-300 <= age <= 86400 and state in POWERPLAY_STATES
+        if (-300 <= age <= POWERPLAY_CURRENT_HOURS * 3600 and state in POWERPLAY_STATES
                 and (controller.strip() or state == 'Unoccupied')
                 and not (controller.strip() and state == 'Unoccupied')
                 and len(coordinates) == 3
@@ -89,10 +90,12 @@ class SpanshPowerplayLookup:
             stamp = data.get('date') if isinstance(data, dict) else None
             state = 'FETCHED' if rows else 'MISSING'
             observed_at = rows[0]['observedAt'] if rows else None
+            if rows and not current_control(rows, now):
+                rows, state = [], 'STALE'
             if not rows and isinstance(stamp, str):
                 try:
                     observed = datetime.fromisoformat(str(stamp).replace('Z', '+00:00'))
-                    if ((now - observed).total_seconds() > 86400
+                    if ((now - observed).total_seconds() > POWERPLAY_CURRENT_HOURS * 3600
                             and project_spansh_powerplay(payload, name, address, now=observed)):
                         state = 'STALE'
                         observed_at = stamp
@@ -131,18 +134,32 @@ def lookup_powerplay_systems(names, *, lookup=None, now=None):
     with connection() as conn:
         conn.execute("SET LOCAL statement_timeout='5s'")
         stored = _stored(conn, names)
-        addresses = conn.execute('''SELECT name, system_address FROM systems
-            WHERE LOWER(name) = ANY(%s) AND system_address IS NOT NULL''', (names,)).fetchall()
+        # Bulk mining imports can know an id64 before a Location/FSDJump has
+        # populated systems. All three name lookups use existing indexes.
+        addresses = conn.execute('''
+            SELECT name, system_address FROM systems
+            WHERE LOWER(name) = ANY(%s) AND system_address IS NOT NULL
+            UNION ALL
+            SELECT system_name AS name, system_address FROM mining_sites
+            WHERE LOWER(system_name) = ANY(%s) AND system_address IS NOT NULL
+            UNION ALL
+            SELECT system_name AS name, system_address FROM stations
+            WHERE LOWER(system_name) = ANY(%s) AND system_address IS NOT NULL
+        ''', (names, names, names)).fetchall()
     resolved = {}
     for row in addresses:
-        resolved.setdefault(row['name'].casefold(), set()).add(row['system_address'])
+        address = row['system_address']
+        if type(address) is int and 0 < address < 2**64:
+            resolved.setdefault(row['name'].casefold(), set()).add(address)
+    for name, row in stored.items():
+        address = row.get('system_address')
+        if type(address) is int and 0 < address < 2**64:
+            resolved.setdefault(name, set()).add(address)
     missing = [name for name in names if not current_control(stored.get(name, {}).get('facts'), now)]
 
     def fetch(name):
-        address = stored.get(name, {}).get('system_address')
-        if not address:
-            options = resolved.get(name) or set()
-            address = next(iter(options)) if len(options) == 1 else None
+        options = resolved.get(name) or set()
+        address = next(iter(options)) if len(options) == 1 else None
         return lookup.lookup(name, address, now=now)
 
     with ThreadPoolExecutor(max_workers=2, thread_name_prefix='powerplay-spansh') as pool:

@@ -12,6 +12,19 @@ from ed_companion.phase14.controller import CockpitController
 
 
 class VerificationJobsTests(unittest.TestCase):
+    def test_small_pc_uses_one_connection_and_retains_every_result(self):
+        sessions = []
+        def factory():
+            session = Mock(get=Mock(side_effect=lambda url: url))
+            sessions.append(session)
+            return session
+        results = list(iter_verification_jobs([("market", i) for i in range(12)],
+            lambda kind, target, get: get(target), session_factory=factory, max_workers=1))
+        self.assertEqual(len(sessions), 1)
+        self.assertEqual({row[3] for row in results}, set(range(12)))
+        self.assertTrue(all(row[-1] is None for row in results))
+        sessions[0].close.assert_called_once()
+
     def test_two_lanes_reuse_owned_sessions_and_close_after_all_checks(self):
         sessions, active, maximum = [], 0, 0
         lock = threading.Lock()

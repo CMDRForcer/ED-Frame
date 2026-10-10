@@ -2,6 +2,7 @@
 from copy import deepcopy
 from datetime import datetime, timedelta, timezone
 import unittest
+import time
 from unittest.mock import Mock, patch
 
 from ed_companion.navigation.mining_powerplay import (
@@ -51,7 +52,7 @@ class SpanshPowerplayTests(unittest.TestCase):
                        {'coords': {'x': float('nan'), 'y': 2, 'z': 3}},
                        {'coords': {'x': True, 'y': 2, 'z': 3}},
                        {'date': ''}, {'date': '2026-10-09T12:00:00'},
-                       {'date': (NOW - timedelta(hours=24, seconds=1)).isoformat()},
+                       {'date': (NOW - timedelta(days=14, seconds=1)).isoformat()},
                        {'date': (NOW + timedelta(minutes=6)).isoformat()}):
             with self.subTest(fields=fields):
                 self.assertEqual(project_spansh_powerplay(dump(**fields), 'Mine', 42, now=NOW), [])
@@ -129,6 +130,7 @@ class SpanshPowerplayTests(unittest.TestCase):
         controller = PowerplayLookupTests().controller()
         controller.verifyMiningRoutes([route()], 'Origin')
         request = dict(controller._active_mining_verification_request)
+        epoch = time.time()
         controller._finish_mining_verification({**request, 'powerplayLookup': {
             'rows': [fact('Mine', source=SPANSH_POWERPLAY_SOURCE)],
             'checked': ['Mine', 'Sale', 'Deferred', 'Missing'], 'failed': [],
@@ -138,13 +140,50 @@ class SpanshPowerplayTests(unittest.TestCase):
             'enrichmentDeferred': ['Deferred'],
         }})
         cache = controller._mining_powerplay_lookup_cache
-        self.assertGreater(cache['mine'], NOW.timestamp() + 3500)
-        self.assertGreater(cache['missing'], NOW.timestamp() + 500)
-        self.assertLess(cache['sale'], NOW.timestamp() + 200)
-        self.assertLess(cache['deferred'], NOW.timestamp() + 200)
+        self.assertGreater(cache['mine'], epoch + 3500)
+        self.assertGreater(cache['missing'], epoch + 500)
+        self.assertLess(cache['sale'], epoch + 200)
+        self.assertLess(cache['deferred'], epoch + 30)
         self.assertIn('Spansh 2 checked, 1 supplemented', controller._mining_verification_status)
         self.assertIn('1 source checks temporarily unavailable', controller._mining_verification_status)
         self.assertIn('1 further source checks deferred', controller._mining_verification_status)
+        self.assertEqual(len(controller._mining_powerplay_source_pending), 1)
+        self.assertEqual(controller._mining_powerplay_lookup_states['deferred']['state'], 'QUEUED')
+
+    def test_deferred_batch_continues_after_pause_without_rechecking_completed_sources(self):
+        from tests.test_mining_powerplay_lookup import PowerplayLookupTests
+        controller = PowerplayLookupTests().controller()
+        routes = [route(f'Mine {i}', 'Sale') for i in range(9)]
+        controller.verifyMiningRoutes(routes, 'Origin')
+        request = dict(controller._active_mining_verification_request)
+        epoch = time.time()
+        controller._finish_mining_verification({**request, 'powerplayLookup': {
+            'rows': [], 'checked': [f'Mine {i}' for i in range(9)] + ['Sale'],
+            'failed': [], 'enrichment': [{'system': f'Mine {i}', 'state': 'MISSING'} for i in range(6)],
+            'enrichmentDeferred': ['Sale', 'Mine 6', 'Mine 7', 'Mine 8'],
+        }})
+        self.assertEqual(len(controller._mining_powerplay_source_pending), 4)
+        with patch('ed_companion.phase14.controller_navigation.time.time', return_value=epoch+31):
+            controller.verifyMiningRoutes(routes, 'Origin')
+        next_request = dict(controller._active_mining_verification_request)
+        self.assertEqual([item['system'] for item in next_request['powerplayLookupTargets']],
+                         ['Sale', 'Mine 6', 'Mine 7', 'Mine 8'])
+        controller._finish_mining_verification({**next_request, 'powerplayLookup': {
+            'rows': [], 'checked': ['Sale', 'Mine 6', 'Mine 7', 'Mine 8'], 'failed': [],
+            'enrichment': [{'system': 'Sale', 'state': 'STALE',
+                            'observedAt': '2020-01-01T00:00:00Z'}],
+            'enrichmentDeferred': [],
+        }})
+        self.assertEqual(len(controller._mining_powerplay_source_pending), 0)
+        self.assertEqual(controller._mining_powerplay_lookup_states['sale']['observedAt'], '2020-01-01T00:00:00Z')
+        self.assertEqual(getattr(controller, '_mining_powerplay_observations', []), [])
+
+    def test_new_search_prunes_deferred_systems_from_previous_search(self):
+        from tests.test_mining_powerplay_lookup import PowerplayLookupTests
+        controller = PowerplayLookupTests().controller()
+        controller._mining_powerplay_source_pending = ['Old mine']
+        controller.verifyMiningRoutes([route()], 'Origin')
+        self.assertEqual(len(controller._mining_powerplay_source_pending), 0)
 
     def test_disabling_community_connection_prevents_enrichment_requests(self):
         from tests.test_mining_powerplay_lookup import PowerplayLookupTests

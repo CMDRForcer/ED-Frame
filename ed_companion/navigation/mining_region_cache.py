@@ -16,6 +16,7 @@ import zlib
 from .mining_commodities import mining_commodity_id
 from .mining_finder import EDFRAME_CATALOG_SITES_URL
 from .mining_powerplay import EDFRAME_POWERPLAY_URL
+from .mining_powerplay_policy import POWERPLAY_LAST_KNOWN_HOURS
 
 
 MAX_STORED_BYTES = 8 * 1024 * 1024
@@ -58,7 +59,9 @@ class MiningRegionCache:
             raise ValueError("Invalid regional scope")
         url = EDFRAME_CATALOG_SITES_URL if kind == "sites" else EDFRAME_POWERPLAY_URL
         return (url, coordinates, radius,
-                mining_commodity_id(query["commodity"]) if kind == "sites" else "")
+                mining_commodity_id(query["commodity"]) if kind == "sites" else "",
+                str(query.get('_powerplayPower') or '').casefold() if kind == 'powerplay' else '',
+                query.get('_powerplayGoal', '') if kind == 'powerplay' else '')
 
     def get(self, kind, query, origin):
         try:
@@ -107,8 +110,8 @@ class MiningRegionCache:
             now = self.now()
             expires = started_at + REUSE_SECONDS[kind]
             if kind == "powerplay":
-                # A fact near its 24-hour limit must expire even within the
-                # short reuse window; never return newly stale control facts.
+                # Retain dated history; the planner re-evaluates current versus
+                # last-known status at its own clock on every query.
                 expires = min(expires, now + self._powerplay_lifetime(rows))
             if not started_at <= now < expires or (is_current is not None and not is_current()):
                 return False
@@ -156,9 +159,10 @@ class MiningRegionCache:
             stamp = datetime.fromisoformat(str(row["observedAt"]).replace("Z", "+00:00"))
             stamp = stamp.replace(tzinfo=timezone.utc) if stamp.tzinfo is None else stamp
             age = now - stamp.timestamp()
-            if not -300 <= age < 86400:
+            limit = POWERPLAY_LAST_KNOWN_HOURS * 3600
+            if not -300 <= age < limit:
                 return 0
-            remaining = min(remaining, 86400 - age)
+            remaining = min(remaining, limit - age)
         return remaining
 
     @property

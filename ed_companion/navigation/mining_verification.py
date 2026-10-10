@@ -29,7 +29,8 @@ def verification_market_origin(route):
     return {"system": system, "coordinates": coordinates}
 
 
-def iter_verification_jobs(jobs, execute, *, is_current=None, session_factory=None):
+def iter_verification_jobs(jobs, execute, *, is_current=None, session_factory=None,
+                           max_workers=MAX_VERIFICATION_WORKERS):
     """Run at most two independent checks, yielding each completion once.
 
     Each lane owns and reuses its Session; no Session is used by two threads.
@@ -65,7 +66,7 @@ def iter_verification_jobs(jobs, execute, *, is_current=None, session_factory=No
 
     try:
         with ThreadPoolExecutor(
-            max_workers=min(MAX_VERIFICATION_WORKERS, len(jobs)),
+            max_workers=max(1, min(MAX_VERIFICATION_WORKERS, int(max_workers), len(jobs))),
             thread_name_prefix="mining-verify",
         ) as pool:
             futures = {pool.submit(run, job): (index, *job)

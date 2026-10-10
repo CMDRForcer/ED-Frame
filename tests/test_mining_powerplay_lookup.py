@@ -36,6 +36,15 @@ def route(system="Mine", sale="Sale", **fields):
 
 
 class PowerplayLookupTests(unittest.TestCase):
+    def test_recent_controller_without_state_still_gets_targeted_enrichment(self):
+        get=Mock(side_effect=[response(results=[fact('Mine',powerState='')],hasMore=False,selection='systems'),
+            response(results=[fact('Mine')],selection='systems',lookup=[{'system':'Mine','state':'FETCHED'}])])
+        result=fetch_powerplay_targets([{'system':'Mine','coordinates':[1,2,3]}],
+                                      origin=[0,0,0],get=get,enrich=True)
+        self.assertEqual(get.call_count,2)
+        self.assertTrue(get.call_args.args[0].endswith('/powerplay/lookup'))
+        self.assertTrue(any(row.get('powerState')=='Stronghold' for row in result['rows']))
+
     def test_regional_lookup_follows_pages_and_deduplicates_overlapping_facts(self):
         get = Mock(side_effect=[
             response(results=[fact("One")], hasMore=True, nextCursor="next"),
@@ -80,7 +89,7 @@ class PowerplayLookupTests(unittest.TestCase):
         self.assertEqual(missing_powerplay_targets([route()], known, now=NOW), [])
         presence = [fact("Mine", controllingPower="", controlKnown=False)]
         self.assertEqual(len(missing_powerplay_targets([route()], presence, now=NOW)), 2)
-        stale = [fact("Mine", observedAt=(NOW - timedelta(days=2)).isoformat())]
+        stale = [fact("Mine", observedAt=(NOW - timedelta(hours=49)).isoformat())]
         self.assertEqual(len(missing_powerplay_targets([route()], stale, now=NOW)), 2)
         self.assertEqual(missing_powerplay_targets([route()], now=NOW, retry_after={
             "mine": NOW.timestamp() + 600, "sale": NOW.timestamp() + 600,

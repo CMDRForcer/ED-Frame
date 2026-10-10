@@ -110,6 +110,9 @@ MINING_COMMODITIES = {row["id"]: row for row in _ROWS}
 MINING_COMMODITIES["platinum"]["ringTypesByMethod"] = {
     LASER: ("Metallic",), SUBSURFACE: ("Metallic",), CORE: ("Metal Rich",),
 }
+MINING_COMMODITIES["painite"]["ringTypesByMethod"] = {
+    LASER: ("Metallic",),
+}
 
 
 def mining_ring_types_for_method(commodity: Any, method: str) -> tuple[str, ...]:

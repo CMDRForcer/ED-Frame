@@ -10,6 +10,7 @@ ColumnLayout {
     property string marketSync: ""
     property string offerSync: ""
     property string stateSync: ""
+    property var activity: ({})
     property color surface: "#202c3a"
     property color foreground: "#e1ebf4"
     property color secondary: "#a5b7ca"
@@ -54,9 +55,13 @@ ColumnLayout {
         {title: window.t("signals.sightings", "FSS SIGHTINGS"), value: number("stateSightings"),
          detail: window.t("signals.sightings_detail", "Supported signal sightings · last 24 h · latest per system/type/faction"),
          hint: window.t("signals.sightings_hint", "Seen, but lifetime unknown. Not all sightings are HGEs.")},
-        {title: window.t("signals.active", "REPORTED ACTIVE SIGNALS"), value: number("stateSignals"),
-         detail: window.t("signals.active_detail", "Journal reports with an unexpired reported lifetime"),
-         hint: window.t("signals.active_hint", "Not a guarantee of the same signal instance for every Commander.")}
+        {title: window.t("connections.fresh_markets", "MARKET FRESHNESS"), value: percent("freshMarketPercent24h"),
+         detail: window.t("connections.fresh_markets_detail", "Observed within the last 24 h"),
+         hint: number("olderMarkets24h") + window.t("connections.older_markets", " older commodity records retained")},
+        {title: window.t("connections.source_activity", "SOURCE ACTIVITY"), value: number("collector24hProjectedRows"),
+         detail: window.t("connections.source_activity_detail", "Projected data rows · last 24 h"),
+         hint: number("collector24hUsedMessages") + window.t("connections.used_messages", " messages used · ")
+               + number("collector24hIgnoredMessages") + window.t("connections.ignored_messages", " ignored")}
     ]
     GridLayout {
         Layout.fillWidth: true
@@ -67,6 +72,7 @@ ColumnLayout {
             Rectangle {
                 required property var modelData
                 Layout.fillWidth: true
+                Layout.fillHeight: true
                 Layout.minimumWidth: 0
                 Layout.preferredHeight: tileColumn.implicitHeight + 28
                 radius: 8; color: overview.surface
@@ -94,6 +100,43 @@ ColumnLayout {
     Label {
         Layout.fillWidth: true; wrapMode: Text.WordWrap
         text: window.t("connections.catalog_overview_28", "Last successful server check: ") + overview.date(overview.lastSuccess)
+        color: overview.secondary; font.pixelSize: 12
+    }
+    Label {
+        Layout.fillWidth: true; wrapMode: Text.WordWrap
+        text: window.t("connections.statistics_timestamp", "Statistics snapshot: ") + overview.date(overview.stats.generatedAt)
+        color: overview.secondary; font.pixelSize: 12
+    }
+    Label {
+        Layout.fillWidth: true; wrapMode: Text.WordWrap
+        text: window.t("connections.background_cadence", "Local data stays available. Catalog sync every 10 min; server statistics every 15 min.")
+        color: overview.secondary; font.pixelSize: 12
+    }
+    Label {
+        Layout.fillWidth: true; wrapMode: Text.WordWrap
+        text: window.t("connections.background_activity", "Background activity: ")
+              + Number(overview.activity.active || 0).toLocaleString(Qt.locale(), "f", 0)
+              + window.t("connections.jobs_active", " running · ")
+              + Number(overview.activity.queued || 0).toLocaleString(Qt.locale(), "f", 0)
+              + window.t("connections.jobs_queued", " queued · ")
+              + Number(overview.activity.catalogRequests60s || 0).toLocaleString(Qt.locale(), "f", 0)
+              + window.t("connections.catalog_requests", " catalog requests / last 60 s")
+        color: overview.foreground; font.pixelSize: 12
+    }
+    Label {
+        Layout.fillWidth: true; wrapMode: Text.WordWrap
+        text: overview.activity.catalogEnabled === false
+              ? window.t("connections.catalog_paused", "Catalog sync paused · retained local data available")
+              : window.t("connections.next_catalog_sync", "Next catalog sync: ") + overview.date(overview.activity.nextCatalogSync)
+        color: overview.secondary; font.pixelSize: 12
+    }
+    Label {
+        Layout.fillWidth: true; wrapMode: Text.WordWrap
+        visible: overview.activity.cpuWorkerLimit !== undefined
+        text: window.t("connections.compute_activity", "Compute tasks: ")
+              + Number(overview.activity.computeActive || 0) + " / " + Number(overview.activity.cpuWorkerLimit || 1)
+              + window.t("connections.compute_active", " active · ")
+              + Number(overview.activity.computeQueued || 0) + window.t("connections.compute_queued", " waiting")
         color: overview.secondary; font.pixelSize: 12
     }
     ToolButton {
@@ -127,7 +170,9 @@ ColumnLayout {
                     {label: window.t("connections.catalog_overview_32", "Complete commodity fields"), key: "marketDetailPercent"},
                     {label: window.t("connections.catalog_overview_33", "Station type known"), key: "stationTypePercent"},
                     {label: window.t("connections.catalog_overview_34", "Landing pad known"), key: "stationLandingPadPercent"},
-                    {label: window.t("connections.catalog_overview_35", "Station services known"), key: "stationServicesPercent"}
+                    {label: window.t("connections.catalog_overview_35", "Station services known"), key: "stationServicesPercent"},
+                    {label: window.t("connections.market_coordinates", "Market coordinates known"), key: "marketCoordinatePercent"},
+                    {label: window.t("connections.site_coordinates", "Mining coordinates known"), key: "siteCoordinatePercent"}
                 ]
                 ColumnLayout {
                     required property var modelData
@@ -155,6 +200,12 @@ ColumnLayout {
             Layout.fillWidth: true; wrapMode: Text.WordWrap
             text: window.t("connections.catalog_overview_37", "Coverage describes stored records, not the entire galaxy. Known fields do not guarantee fresh data.")
             color: overview.warning; font.pixelSize: 12
+        }
+        Label {
+            Layout.fillWidth: true; wrapMode: Text.WordWrap
+            text: window.t("connections.local_market_count", "Local commodity records: ") + overview.number("localMarkets")
+                  + window.t("connections.local_offer_count", " · local station inventories: ") + overview.number("localOfferStations")
+            color: overview.foreground; font.pixelSize: 13
         }
         Repeater {
             model: [

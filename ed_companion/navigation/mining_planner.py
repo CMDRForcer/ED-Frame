@@ -15,6 +15,7 @@ from typing import Any, Iterable
 
 from .mining_commodities import mining_commodity_id, mining_commodity_name
 from .mining_finder import is_belt_candidate
+from .mining_powerplay_policy import POWERPLAY_CURRENT_HOURS, POWERPLAY_LAST_KNOWN_HOURS
 
 
 OPTIMIZE_MERITS = "POWERPLAY MERITS"
@@ -38,6 +39,7 @@ MARKET_OUTSIDE_FILTERS = "MARKET_OUTSIDE_FILTERS"
 NO_MARKET_DATA = "NO_MARKET_DATA"
 
 POWERPLAY_VERIFIED = "POWERPLAY_VERIFIED"
+POWERPLAY_PROVISIONAL = "POWERPLAY_PROVISIONAL"
 POWERPLAY_DATA_MISSING = "POWERPLAY_DATA_MISSING"
 NOT_ELIGIBLE = "NOT_ELIGIBLE"
 
@@ -292,6 +294,14 @@ def _verification_status(
             "group": "NOT ELIGIBLE",
             "rank": 5,
             "reason": powerplay_reason or "Powerplay route is not eligible",
+        }
+    if powerplay_status == POWERPLAY_PROVISIONAL:
+        return {
+            "state": "PROVISIONAL",
+            "label": "LAST KNOWN · CHECK IN GAME",
+            "group": "POWERPLAY LAST KNOWN · UNCONFIRMED",
+            "rank": 1 if market_status == MARKET_VERIFIED else 3,
+            "reason": powerplay_reason + (" · " + market_reason if market_reason else ""),
         }
     if powerplay_status == POWERPLAY_VERIFIED:
         if market_status == MARKET_VERIFIED:
@@ -940,7 +950,8 @@ def _route_system_state(
 
 
 def _powerplay_age_issue(fact: dict[str, Any], role: str, now: datetime,
-                        *, participants: bool = False) -> str:
+                        *, participants: bool = False,
+                        max_age_hours: int = POWERPLAY_CURRENT_HOURS) -> str:
     """Assess each supporting field at its own observation time, not cache time."""
     stamps = [("STATE", fact.get("controlStateObservedAt")
                if fact.get("controlPowerState") else fact.get("powerStateObservedAt"))]
@@ -955,7 +966,7 @@ def _powerplay_age_issue(fact: dict[str, Any], role: str, now: datetime,
         age = (now - observed).total_seconds()
         if age < -300:
             return f"UNKNOWN · {role} POWERPLAY {field} TIME INVALID"
-        if age > 86400:
+        if age > max_age_hours * 3600:
             return (f"UNKNOWN · {role} POWERPLAY {field} TOO OLD "
                     f"({_readable_age(age)} · {observed.isoformat()})")
     return ""
@@ -966,6 +977,27 @@ def _merit_status(
     power_goal: str, opposing_power: str,
     catalog: dict[str, dict[Any, dict[str, Any]]],
     *, now: datetime | None = None,
+) -> tuple[str, float | None, float | None]:
+    """Prefer current evidence; retain compatible historical routes separately."""
+    current = _merit_status_at_age(candidate, market, power, power_goal,
+                                  opposing_power, catalog, now=now)
+    if current[1] is not None or "POWERPLAY" not in current[0] or " TOO OLD" not in current[0]:
+        return current
+    historical = _merit_status_at_age(candidate, market, power, power_goal,
+        opposing_power, catalog, now=now, max_age_hours=POWERPLAY_LAST_KNOWN_HOURS)
+    if historical[1] is not None and historical[1] > 0:
+        return ("PROVISIONAL · " + historical[0].removeprefix("CONFIRMED · ")
+                + " · LAST KNOWN · " + current[0].removeprefix("UNKNOWN · "),
+                3.0, historical[2])
+    return current
+
+
+def _merit_status_at_age(
+    candidate: dict[str, Any], market: dict[str, Any], power: str,
+    power_goal: str, opposing_power: str,
+    catalog: dict[str, dict[Any, dict[str, Any]]],
+    *, now: datetime | None = None,
+    max_age_hours: int = POWERPLAY_CURRENT_HOURS,
 ) -> tuple[str, float | None, float | None]:
     """Apply the same route relationships explained by MeritMiner.
 
@@ -1003,11 +1035,11 @@ def _merit_status(
         if not source_state:
             return "UNKNOWN · SOURCE POWER STATE MISSING", None, None
         if source.get("controlPowerState") == "Unoccupied":
-            issue = _powerplay_age_issue(source, "SOURCE", now)
+            issue = _powerplay_age_issue(source, "SOURCE", now, max_age_hours=max_age_hours)
             return (issue, None, None) if issue else ("NOT ELIGIBLE · UNOCCUPIED", 0.0, None)
         if not source_controller:
             return "UNKNOWN · CONTROLLING POWER MISSING", None, None
-        issue = _powerplay_age_issue(source, "SOURCE", now)
+        issue = _powerplay_age_issue(source, "SOURCE", now, max_age_hours=max_age_hours)
         if issue:
             return issue, None, None
         if not controls_source:
@@ -1022,11 +1054,11 @@ def _merit_status(
         if source_system != target_system:
             return "NOT ELIGIBLE · MINE AND SELL IN THE SAME SYSTEM", 0.0, None
         if source.get("controlPowerState") == "Unoccupied":
-            issue = _powerplay_age_issue(source, "SOURCE", now)
+            issue = _powerplay_age_issue(source, "SOURCE", now, max_age_hours=max_age_hours)
             return (issue, None, None) if issue else ("NOT ELIGIBLE · UNOCCUPIED", 0.0, None)
         if not source_state or not source_controller:
             return "UNKNOWN · OPPOSING POWER STATE MISSING", None, None
-        issue = _powerplay_age_issue(source, "SOURCE", now)
+        issue = _powerplay_age_issue(source, "SOURCE", now, max_age_hours=max_age_hours)
         if issue:
             return issue, None, None
         if source_state.casefold() == "headquarters":
@@ -1043,7 +1075,7 @@ def _merit_status(
             return "NOT ELIGIBLE · YOUR POWER IS NOT CONTESTING", 0.0, None
         if not powers:
             return "UNKNOWN · CONTESTING POWERS MISSING", None, None
-        issue = _powerplay_age_issue(source, "SOURCE", now, participants=True)
+        issue = _powerplay_age_issue(source, "SOURCE", now, participants=True, max_age_hours=max_age_hours)
         if issue:
             return issue, None, None
         return (
@@ -1057,7 +1089,7 @@ def _merit_status(
             return "UNKNOWN · SOURCE POWER STATE MISSING", None, None
         if not source_controller:
             return "UNKNOWN · CONTROLLING POWER MISSING", None, None
-        issue = _powerplay_age_issue(source, "SOURCE", now)
+        issue = _powerplay_age_issue(source, "SOURCE", now, max_age_hours=max_age_hours)
         if issue:
             return issue, None, None
         if not controls_source:
@@ -1073,7 +1105,7 @@ def _merit_status(
         ).strip()
         if not target_state:
             return "UNKNOWN · TARGET POWER STATE MISSING", None, None
-        issue = _powerplay_age_issue(target, "TARGET", now)
+        issue = _powerplay_age_issue(target, "TARGET", now, max_age_hours=max_age_hours)
         if issue:
             return issue, None, None
         if target_state.casefold() != "unoccupied":
@@ -1255,7 +1287,8 @@ def plan_mining_routes(
             explicit = shared_market.get("meritEligible")
             target_state = str(target.get("controlPowerState")
                                or target.get("powerState") or "").casefold()
-            if target_state and _powerplay_age_issue(target, "TARGET", now):
+            if target_state and _powerplay_age_issue(target, "TARGET", now,
+                                                     max_age_hours=POWERPLAY_LAST_KNOWN_HOURS):
                 target_state = ""  # Retained old targets remain explicitly pending.
             if explicit is None and (
                 not target_state
@@ -1446,7 +1479,8 @@ def plan_mining_routes(
             # status; the previous full fallback scan made ACQUIRE O(rings ×
             # markets) and could block the GUI for more than a minute.
             if (not source_state or not controls_source or not radius
-                    or _powerplay_age_issue(source, "SOURCE", now)):
+                    or _powerplay_age_issue(source, "SOURCE", now,
+                                             max_age_hours=POWERPLAY_LAST_KNOWN_HOURS)):
                 return first_indexed_market(row, fallback_indexes)
             if controls_source and radius and cell is not None:
                 for dx in (-1, 0, 1):
@@ -1684,6 +1718,8 @@ def plan_mining_routes(
             "mineToSellLy": market.get("mineToSellLy"),
         })
         yield_score = _yield_score(row)
+        if optimization == OPTIMIZE_MERITS:
+            row['_powerplayTargetMetadata'] = market or diagnostic_market
         data_score = _data_score(row)
         station_key = _market_station_key(market)
         secondary_route_markets = list(
@@ -1820,9 +1856,10 @@ def plan_mining_routes(
             1.0, 5.0 * (1.0 - _number(distance) / (max_distance * 1.25))
         )
         merit_score = row.pop("_meritScore")
+        historical_powerplay = str(row.get("meritStatus") or "").startswith("PROVISIONAL · ")
         if optimization == OPTIMIZE_MERITS:
             powerplay_status = (
-                POWERPLAY_VERIFIED
+                POWERPLAY_PROVISIONAL if historical_powerplay else POWERPLAY_VERIFIED
                 if _number(merit_score, -1.0) > 0
                 else POWERPLAY_DATA_MISSING
                 if merit_score is None
@@ -1857,7 +1894,7 @@ def plan_mining_routes(
                 verification_label = "POWERPLAY DATA TOO OLD"
         else:
             powerplay_status = (
-                POWERPLAY_VERIFIED
+                POWERPLAY_PROVISIONAL if historical_powerplay else POWERPLAY_VERIFIED
                 if _number(merit_score, -1.0) > 0
                 else POWERPLAY_DATA_MISSING
                 if merit_score is None
@@ -1891,6 +1928,7 @@ def plan_mining_routes(
         ) / known_weight if known_weight else 0.0
         row.update({
             "profitScore": round(profit_score, 2) if profit_score is not None else None,
+            "meritVerified": powerplay_status == POWERPLAY_VERIFIED and _number(merit_score) > 0,
             "meritScore": round(merit_score, 2) if merit_score is not None else None,
             "distanceScore": round(distance_score, 2),
             "overallScore": round(overall, 2),
@@ -1905,7 +1943,8 @@ def plan_mining_routes(
             "verificationGroupLabel": verification_group,
             "powerplayStatus": powerplay_status,
             "powerplayEvidenceState": (
-                "STALE" if "POWERPLAY" in str(row.get("meritStatus"))
+                "LAST_KNOWN" if historical_powerplay
+                else "STALE" if "POWERPLAY" in str(row.get("meritStatus"))
                 and " TOO OLD" in str(row.get("meritStatus"))
                 else "TIME_UNKNOWN" if "POWERPLAY" in str(row.get("meritStatus"))
                 and (" TIME MISSING" in str(row.get("meritStatus"))
@@ -1919,6 +1958,26 @@ def plan_mining_routes(
                 row.get("resType") or row.get("resourceExtractionSite")
             )),
         })
+        if optimization == OPTIMIZE_MERITS:
+            details = []
+            seen_systems = set()
+            for metadata in (row, row.pop('_powerplayTargetMetadata', {})):
+                key = _system_key(metadata.get('system'))
+                if not key or key in seen_systems:
+                    continue
+                seen_systems.add(key)
+                fact = _metadata_power_fact(metadata, power, powerplay_catalog)
+                stamps = [_timestamp(fact.get('controlObservedAt')),
+                          _timestamp(fact.get('controlStateObservedAt'))]
+                if goal == 'undermine':
+                    stamps.append(_timestamp(fact.get('powersObservedAt')))
+                stamps = [stamp for stamp in stamps if stamp is not None]
+                if stamps and ('controllingPower' in fact):
+                    details.append({'system': str(metadata.get('system')),
+                        'controllingPower': str(fact.get('controllingPower') or ''),
+                        'powerState': str(fact.get('controlPowerState') or ''),
+                        'observedAt': min(stamps).isoformat()})
+            row['powerplayObservations'] = details
 
     score_key = {
         OPTIMIZE_MERITS: "meritScore",
@@ -1946,6 +2005,9 @@ def plan_mining_routes(
         row.get(score_key) is None,
         -_number(row.get(score_key), -1.0),
         not bool(row.get("marketMatchesFilters")),
+        -_number(row.get("sellPrice"))
+        if all_commodities and optimization == OPTIMIZE_MERITS
+        and row.get("marketMatchesFilters") else 0.0,
         -_number(row.get("overallScore")),
         not bool(row.get("resPreferred")),
         not bool(row.get("secondaryPreferred")),
@@ -1958,4 +2020,16 @@ def plan_mining_routes(
         str(row.get("system") or "").casefold(),
     ))
     limit = max(1, min(100, int(result_limit or 30)))
+    if all_commodities and optimization == OPTIMIZE_MERITS:
+        # A wide search should expose other usable systems before filling
+        # its result limit with multiple rings of the same mining system.
+        distinct, alternatives, seen = [], [], set()
+        for row in prepared:
+            system = str(row.get("system") or "").strip().casefold()
+            if system in seen:
+                alternatives.append(row)
+            else:
+                seen.add(system)
+                distinct.append(row)
+        prepared = distinct + alternatives
     return prepared[:limit]

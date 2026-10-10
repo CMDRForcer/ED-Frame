@@ -11,11 +11,16 @@ from __future__ import annotations
 
 import gzip
 import json
+import time
 from math import isfinite
 from datetime import datetime, timezone
 from typing import Any, Iterable
 
 from ed_companion import APP_VERSION
+from .mining_powerplay_policy import (
+    POWERPLAY_CURRENT_HOURS, POWERPLAY_LAST_KNOWN_HOURS, POWERPLAY_SERVER_HISTORY_HOURS,
+    powerplay_observation_is_current,
+)
 
 
 POWERPLAY_DUMP_URL = "https://www.edsm.net/dump/powerPlay.json.gz"
@@ -35,7 +40,8 @@ class MiningPowerplayError(RuntimeError):
 
 def fetch_edframe_powerplay(*, origin: list, max_distance: float, get: Any,
                            timeout: int = 10, diagnostics: dict | None = None,
-                           systems: list[str] | None = None) -> list[dict[str, Any]]:
+                           systems: list[str] | None = None,
+                           merit_context: dict | None = None) -> list[dict[str, Any]]:
     """Read all advertised pages, retaining usable facts on continuation failure.
 
     ``systems`` requests exact systems (including sale systems outside the mine
@@ -59,7 +65,7 @@ def fetch_edframe_powerplay(*, origin: list, max_distance: float, get: Any,
     params = {
         **dict(zip(("x", "y", "z"), origin)),
         "max_distance": max(1, min(2000, float(max_distance))),
-        "max_age_hours": 24, "limit": 200,
+        "max_age_hours": POWERPLAY_SERVER_HISTORY_HOURS, "limit": 200,
     }
     wanted = list(dict.fromkeys(str(name).strip().casefold() for name in systems or []
                                if str(name).strip()))
@@ -71,6 +77,9 @@ def fetch_edframe_powerplay(*, origin: list, max_distance: float, get: Any,
     else:
         # Backward compatible: older servers ignore the larger-page opt-in.
         params["regional_page_size"] = 1000
+        if (merit_context and merit_context.get('power')
+                and merit_context.get('goal') in {'REINFORCE','UNDERMINE','ACQUIRE'}):
+            params.update(power=merit_context['power'], goal=merit_context['goal'])
     rows = []
     cursors = set()
     system_count = 0
@@ -106,6 +115,9 @@ def fetch_edframe_powerplay(*, origin: list, max_distance: float, get: Any,
                     and str(item.get("system") or "").casefold() in wanted
                     and item.get("state") in {"CURRENT", "STALE", "MISSING"}
                 ]
+                for item in diagnostics['coverage']:
+                    if item['state'] == 'CURRENT' and not powerplay_observation_is_current(item.get('observedAt')):
+                        item['state'] = 'STALE'
         if not has_more:
             break
         if not wanted and system_count >= 20_000:
@@ -147,7 +159,7 @@ def _public_powerplay_rows(sources: list) -> list[dict[str, Any]]:
             age = (now - stamp).total_seconds()
         except ValueError:
             continue
-        if not -300 <= age <= 24 * 3600 or source.get("powerState") not in POWERPLAY_STATES:
+        if not -300 <= age <= POWERPLAY_LAST_KNOWN_HOURS * 3600 or source.get("powerState") not in POWERPLAY_STATES:
             continue
         row = {key: source[key] for key in (
             "system", "systemAddress", "coordinates", "power", "powerState",
@@ -178,14 +190,17 @@ def missing_powerplay_targets(routes, observations=(), *, retry_after=None,
     now = now or datetime.now(timezone.utc)
     retry_after = retry_after or {}
     targets = {}
+    addresses = {}
     for row in routes:
         if (row.get("optimization") != "POWERPLAY MERITS"
-                or row.get("powerplayStatus") != "POWERPLAY_DATA_MISSING"):
+                or row.get("powerplayStatus") not in {"POWERPLAY_DATA_MISSING", "POWERPLAY_PROVISIONAL"}):
             continue
         if "selectedPower" in row and str(row["selectedPower"] or "").strip().casefold() in {"", "any", "unconfirmed"}:
             continue  # Selecting a Power is user input, not missing server data.
-        for name, coordinates in ((row.get("system"), row.get("coordinates")),
-                                  (row.get("sellSystem"), row.get("sellCoordinates"))):
+        for name, coordinates, address in (
+            (row.get("system"), row.get("coordinates"), row.get("systemAddress")),
+            (row.get("sellSystem"), row.get("sellCoordinates"), row.get("sellSystemAddress")),
+        ):
             name = str(name or "").strip()
             key = name.casefold()
             if not key or float(retry_after.get(key, 0) or 0) > now.timestamp():
@@ -193,6 +208,11 @@ def missing_powerplay_targets(routes, observations=(), *, retry_after=None,
             target = targets.setdefault(key, {"system": name, "coordinates": []})
             if isinstance(coordinates, (list, tuple)) and len(coordinates) == 3:
                 target["coordinates"] = list(coordinates)
+            # QML represents id64 values below 2**53 as exact JS numbers.
+            if (type(address) is int and 0 < address < 2**64
+                    or type(address) is float and isfinite(address)
+                    and address.is_integer() and 0 < address < 2**53):
+                addresses.setdefault(key, set()).add(int(address))
     for fact in observations or ():
         if not isinstance(fact, dict):
             continue
@@ -202,7 +222,7 @@ def missing_powerplay_targets(routes, observations=(), *, retry_after=None,
         try:
             stamp = datetime.fromisoformat(str(fact.get("observedAt") or "").replace("Z", "+00:00"))
             stamp = stamp.replace(tzinfo=timezone.utc) if stamp.tzinfo is None else stamp
-            fresh = -300 <= (now - stamp).total_seconds() <= 86400
+            fresh = -300 <= (now - stamp).total_seconds() <= POWERPLAY_CURRENT_HOURS * 3600
         except ValueError:
             continue
         coordinates = fact.get("coordinates") or targets[key].get("coordinates")
@@ -210,6 +230,10 @@ def missing_powerplay_targets(routes, observations=(), *, retry_after=None,
                 and fact.get("powerState") in POWERPLAY_STATES and (
                 fact.get("controllingPower") or fact.get("powerState") == "Unoccupied")):
             targets.pop(key)
+    for key, target in targets.items():
+        options = addresses.get(key) or set()
+        if len(options) == 1:
+            target["systemAddress"] = next(iter(options))
     return list(targets.values())
 
 
@@ -267,7 +291,9 @@ def fetch_powerplay_targets(targets, *, origin, get, diagnostics=None, enrich=Fa
         result["coverage"] = coverage
     if enrich:
         known = {str(row.get("system") or "").casefold() for row in rows
-                 if row.get("controllingPower") or row.get("powerState") == "Unoccupied"}
+                 if (row.get("controllingPower") or row.get("powerState") == "Unoccupied")
+                 and row.get('powerState') in POWERPLAY_STATES
+                 and powerplay_observation_is_current(row.get("observedAt"))}
         missing = list({target["system"].casefold(): target["system"] for target in targets
             if target["system"].casefold() not in known}.values())
         selected = missing[:6]
@@ -294,10 +320,29 @@ def fetch_powerplay_targets(targets, *, origin, get, diagnostics=None, enrich=Fa
                     and item.get("state") in {
                         "CURRENT", "FETCHED", "MISSING", "STALE", "ERROR", "BUSY", "NO_ADDRESS"
                     }]
+                # Older catalogs may lack the address in their systems table
+                # even though this route has a validated public mining id64.
+                # Reuse only these same six selected systems; never guess an
+                # address or expand the source budget on this fallback.
+                identities = {target["system"].casefold(): target for target in targets}
+                for index, item in enumerate(result["enrichment"]):
+                    target = identities.get(item["system"].casefold(), {})
+                    if item.get("state") in {"NO_ADDRESS", "STALE"} and target.get("systemAddress"):
+                        extra = fetch_spansh_powerplay_target(
+                            target["system"], target["systemAddress"], get=get,
+                        )
+                        additions.extend(extra.pop("rows"))
+                        result["enrichment"][index] = {"system": target["system"], **extra}
+                result["rows"] = merge_powerplay_observations(rows, additions,
+                    limit=max(20_000, len(rows) + len(additions)))
                 refreshed = {row["system"].casefold(): row for row in additions}
                 for item in result.get("coverage", []):
                     if item["system"].casefold() in refreshed:
-                        item.update(state="CURRENT", observedAt=refreshed[item["system"].casefold()]["observedAt"])
+                        stamp = refreshed[item["system"].casefold()]["observedAt"]
+                        age = (datetime.now(timezone.utc) - datetime.fromisoformat(
+                            str(stamp).replace("Z", "+00:00"))).total_seconds()
+                        item.update(state="CURRENT" if age <= POWERPLAY_CURRENT_HOURS * 3600 else "STALE",
+                                    observedAt=stamp)
             except Exception as exc:
                 # Existing servers remain usable while the additive endpoint
                 # rolls out; a failed fallback never discards the first lookup.
@@ -306,8 +351,55 @@ def fetch_powerplay_targets(targets, *, origin, get, diagnostics=None, enrich=Fa
     return result
 
 
+def fetch_spansh_powerplay_target(system, address, *, get, now=None, clock=time.monotonic):
+    """Bounded, identity-checked fallback when a server cannot resolve an id64."""
+    if type(address) is not int or not 0 < address < 2**64:
+        return {"state": "NO_ADDRESS", "rows": []}
+    now = now or datetime.now(timezone.utc)
+    response = None
+    try:
+        started = clock()
+        response = get(f"https://spansh.co.uk/api/dump/{address}",
+            headers={"User-Agent": f"ED-Frame/{APP_VERSION} Powerplay lookup"},
+            timeout=(3, 5), stream=True, allow_redirects=False)
+        response.raise_for_status()
+        if response.status_code != 200:
+            raise ValueError("Unexpected source status")
+        chunks, size = [], 0
+        for chunk in response.iter_content(65536):
+            size += len(chunk)
+            if size > 2 * 1024**2 or clock() - started > 8:
+                raise ValueError("Powerplay response budget exceeded")
+            chunks.append(chunk)
+        payload = json.loads(b"".join(chunks))
+        rows = project_spansh_powerplay(payload, system, address, now=now)
+        result = {"state": "FETCHED" if rows else "MISSING", "rows": rows,
+                  "source": SPANSH_POWERPLAY_SOURCE, "observedAt": None}
+        if rows:
+            result["observedAt"] = rows[0]["observedAt"]
+            stamp = datetime.fromisoformat(str(rows[0]["observedAt"]).replace("Z", "+00:00"))
+            if (now - stamp).total_seconds() > POWERPLAY_CURRENT_HOURS * 3600:
+                result["state"] = "STALE"
+        else:
+            data = payload.get("system") if isinstance(payload, dict) else None
+            stamp = data.get("date") if isinstance(data, dict) else None
+            try:
+                observed = datetime.fromisoformat(str(stamp).replace("Z", "+00:00"))
+                if ((now - observed).total_seconds() > POWERPLAY_CURRENT_HOURS * 3600
+                        and project_spansh_powerplay(payload, system, address, now=observed)):
+                    result.update(state="STALE", observedAt=stamp)
+            except (TypeError, ValueError):
+                pass
+        return result
+    except Exception:
+        return {"state": "ERROR", "rows": [], "source": SPANSH_POWERPLAY_SOURCE}
+    finally:
+        if response is not None:
+            response.close()
+
+
 def project_spansh_powerplay(payload, system, system_address, *, now=None):
-    """Keep only explicit, recent, identity-matched Spansh system snapshots."""
+    """Keep explicit identity-matched snapshots, including dated last-known control."""
     data = payload.get("system") if isinstance(payload, dict) else None
     if (not isinstance(data, dict) or not isinstance(data.get("name"), str)
             or data["name"].strip().casefold() != system.strip().casefold()):
@@ -324,7 +416,7 @@ def project_spansh_powerplay(payload, system, system_address, *, now=None):
         age = ((now or datetime.now(timezone.utc)) - stamp).total_seconds()
     except (ValueError, TypeError, OverflowError):
         return []
-    if not -300 <= age <= 86400:
+    if not -300 <= age <= POWERPLAY_LAST_KNOWN_HOURS * 3600:
         return []
     state = data.get("powerState")
     controller = data.get("controllingPower", "")

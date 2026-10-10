@@ -70,6 +70,7 @@ def run_qml():
         "selectedCommodity": "platinum", "sameSystemSaleRequired": True,
         "marketMatchesFilters": False,
     } for index in range(100)]
+    routes[0]['systemAddress'] = 1384900446587
     current = controller()
     changed = QSignalSpy(current.miningVerificationChanged)
     invoke(current, routes)
@@ -78,6 +79,15 @@ def run_qml():
     request = current._active_mining_verification_request
     assert current._mining_verification_busy and changed.count() == 1
     assert len(request["powerplayLookupTargets"]) == 101, "mine/sale coverage was lost"
+    assert request["powerplayLookupTargets"][0]["systemAddress"] == 1384900446587, "QML id64 was lost"
+    current._mining_powerplay_source_pending = ['Mine 99']
+    current._mining_powerplay_lookup_states = {'mine 0': {'state': 'STALE', 'observedAt': '2020-01-01T00:00:00Z'}}
+    state_expression = QQmlExpression(engine.rootContext(), None,
+        "verifier.miningPowerplayPendingSourceCount === 1 && "
+        "verifier.miningPowerplayLookupStates['mine 0'].state === 'STALE'")
+    ready, _undefined = state_expression.evaluate()
+    assert not state_expression.hasError(), state_expression.error().toString()
+    assert ready, 'Powerplay source state did not reach QML'
     assert len(request["marketTargets"]) == 6, "existing network budget changed"
     assert request["targets"] == [], "Powerplay checks unexpectedly caused ring downloads"
     assert request["commodity"] == "platinum" and request["minDemand"] == 5000

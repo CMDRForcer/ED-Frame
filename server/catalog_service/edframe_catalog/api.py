@@ -16,6 +16,7 @@ from psycopg.errors import UndefinedTable, QueryCanceled
 from ed_companion.navigation.mining_commodities import MINING_COMMODITIES, mining_commodity_id
 
 from . import __version__
+from .merit_markets import MeritMarketQuery, search_merit_markets
 from .mining_metadata import enrich_ring_metadata
 from .mining_revision import mining_revision, static_revision
 from .mining_region import regional_page_limit, regional_box_clause
@@ -83,6 +84,8 @@ _station_offer_rate_lock = threading.Lock()
 _station_offer_rate_buckets: dict[str, list[float]] = {}
 _powerplay_rate_lock = threading.Lock()
 _powerplay_rate_buckets: dict[str, list[float]] = {}
+_merit_rate_lock = threading.Lock()
+_merit_rate_buckets: dict[str, list[float]] = {}
 
 
 def _percent(part: int, whole: int) -> float:
@@ -261,6 +264,7 @@ def root() -> dict:
         "marketSync": "/v1/sync/markets",
         "stationOfferSync": "/v1/sync/station-offers",
         "stationOfferObservations": "/v1/station-offers/observations",
+        "miningMeritMarkets": "/v1/mining/merit-markets",
         "stateFindSync": "/v1/sync/state-finds",
         "yieldObservations": "/v1/yields/observations",
     }
@@ -1143,6 +1147,24 @@ def search_markets(
     return {"generatedAt": _now(), "results": rows}
 
 
+@app.post('/v1/mining/merit-markets')
+def mining_merit_markets(request: Request, query: MeritMarketQuery) -> dict:
+    remote = (request.headers.get('x-forwarded-for', '').split(',', 1)[0].strip()
+              or (request.client.host if request.client else 'unknown'))
+    now = time.monotonic()
+    with _merit_rate_lock:
+        if len(_merit_rate_buckets) > 4096:
+            _merit_rate_buckets.clear()
+        recent = [stamp for stamp in _merit_rate_buckets.get(remote, []) if now - stamp < 60]
+        if len(recent) >= 16:
+            raise HTTPException(status_code=429, detail='Mining market batch budget exceeded')
+        _merit_rate_buckets[remote] = [*recent, now]
+    try:
+        return {'generatedAt': _now(), **search_merit_markets(query)}
+    except QueryCanceled as exc:
+        raise HTTPException(status_code=503, detail='Mining market batch timed out') from exc
+
+
 @app.get("/v1/catalog/commodities")
 def catalog_commodities() -> dict:
     # Loose index scan: one indexed step per symbol, not DISTINCT over millions
@@ -1367,6 +1389,8 @@ def search_mining_powerplay(
     system: Annotated[list[str] | None, Query()] = None,
     regional_page_size: Annotated[int | None, Query(ge=1, le=1000)] = None,
     include_coverage: bool = False,
+    power: Annotated[str | None, Query(min_length=3, max_length=100)] = None,
+    goal: Annotated[str | None, Query(pattern='^(REINFORCE|UNDERMINE|ACQUIRE)$')] = None,
 ) -> dict:
     limit = regional_page_limit(limit, regional_page_size,
                                 regional=system is None, maximum=1000)
@@ -1381,6 +1405,18 @@ def search_mining_powerplay(
     else:
         clauses.append("POWER(x - %s, 2) + POWER(y - %s, 2) + POWER(z - %s, 2) <= POWER(%s, 2)")
         values.extend((x, y, z, max_distance))
+        if power and goal:
+            # Filter before pagination so unrelated Powers cannot exhaust the
+            # regional budget and hide older, still current observations.
+            if goal == 'UNDERMINE':
+                condition = "LOWER(f->>'controllingPower') <> LOWER(%s) AND EXISTS (SELECT 1 FROM jsonb_array_elements_text(COALESCE(f->'powers', '[]'::jsonb)) p WHERE LOWER(p) = LOWER(%s))"
+                values.extend((power.strip(), power.strip()))
+            else:
+                condition = "LOWER(f->>'controllingPower') = LOWER(%s)"
+                values.append(power.strip())
+                if goal == 'ACQUIRE':
+                    condition = '(' + condition + " OR f->>'powerState' = 'Unoccupied')"
+            clauses.append('EXISTS (SELECT 1 FROM jsonb_array_elements(facts) f WHERE ' + condition + ')')
     if cursor:
         stamp, kind, identity = _decode_state_cursor(cursor)
         if kind != "mining-powerplay" or not identity:
