@@ -1,6 +1,6 @@
 # ED-Frame 1.0 — getting started and features
 
-Updated for the 1.0.7 mining/Powerplay maintenance release.
+Updated for app **1.0.8** and live catalog server **0.9.4**.
 
 ED-Frame is a free, open-source Windows companion for Elite Dangerous. Your local Journal drives your Commander workspace; ED-Frame's own community server supplements it with shared public galaxy observations.
 
@@ -43,9 +43,11 @@ The server continuously processes supported public EDDN observations. It supplie
 
 **Freshness is based on the source observation.** A newly downloaded old quote is still old. Mining Finder separates market confirmation from Powerplay suitability. A missing controller, price, demand or pad observation stays visibly missing. A verified market/Powerplay route does not prove a measured yield or promise the merits you will receive in-game.
 
-Powerplay confirmation requires observations within 24 hours, assessed separately from the market-age filter. Older control/state facts remain stored and show as outdated. Explicit unoccupied systems can support Acquire targets without a selected-Power presence row. Exact server checks distinguish systems not yet observed from systems whose last observation is too old; another refresh cannot create an unreported observation.
+Powerplay confirmation uses observations up to 48 hours old, assessed separately from the market-age filter. Eligible older facts up to 14 days appear with their original date as **last known / check in game**; they do not count as verified merits. Explicit unoccupied systems can support Acquire targets without a selected-Power presence row. Missing evidence stays unknown.
 
-Version **1.0.7** with matching server **0.9.2** supplements missing explicit Powerplay control through up to six public Spansh system checks per verification pass. Existing current control is reused first. Identity, source and original observation time are validated; absent fields remain unknown. The community connection switch also controls this lookup. Broad 500-LY searches still have substantial latency/RAM cost; further optimization follows separately.
+App **1.0.8** uses grouped system/commodity queries to recover suitable markets and rings missed by regional top lists. Powerplay pages filter by your chosen Power and goal before pagination. Targeted public Spansh checks can supplement missing explicit control, preserving system identity, original source times and newer EDDN evidence. The community connection switch controls these lookups. Heavy Mining, Journal and Powerplay preparation runs in bounded background processes; concurrency adapts to available CPU and memory. Large cold searches can still take time.
+
+The live **0.9.4** server refreshes its shared statistics in the background approximately every five minutes. Collector status remains live. Existing app 1.0.8 installations benefit from this server update without reinstalling.
 
 Retained observations remain available locally when a service is unavailable or disabled. The ring store reads the relevant region from SQLite and preserves original observations and their history. Offline data cannot provide unseen live updates.
 

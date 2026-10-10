@@ -1,6 +1,6 @@
 # ED-Frame 1.0 — Einstieg und Funktionen
 
-Aktualisiert für das Mining-/Powerplay-Wartungsupdate 1.0.7.
+Aktualisiert für App **1.0.8** und den laufenden Katalogserver **0.9.4**.
 
 ED-Frame ist eine kostenlose Windows-Begleitapp für Elite Dangerous mit offenem Quellcode. Dein lokales Journal liefert die Commander-Daten. Unser eigener Community-Server ergänzt sie um gemeinsam gesammelte öffentliche Beobachtungen der Galaxie.
 
@@ -43,9 +43,11 @@ Der Server verarbeitet laufend unterstützte öffentliche EDDN-Beobachtungen. Er
 
 **Aktualität richtet sich nach dem Zeitpunkt der Beobachtung.** Ein frisch heruntergeladener alter Preis bleibt alt. MiningFinder prüft Marktbelege und Powerplay-Eignung getrennt. Fehlende Kontrolle, Preise, Nachfrage oder Landeplatzdaten bleiben erkennbar. Eine bestätigte Markt-/Powerplayroute beweist keinen gemessenen Ertrag und garantiert keine im Spiel erhaltenen Merits.
 
-Powerplay-Bestätigungen benötigen höchstens 24 Stunden alte Beobachtungen, unabhängig vom Marktalter-Filter. Ältere Kontroll- und Statusangaben bleiben gespeichert und werden als veraltet angezeigt. Ausdrücklich unbesetzte Systeme können als Acquire-Ziel dienen, auch ohne Präsenzzeile der gewählten Macht. Gezielte Serverprüfungen unterscheiden noch nie beobachtete Systeme von zu alten Beobachtungen; erneutes Laden kann eine nicht gemeldete Beobachtung nicht erzeugen.
+Powerplay-Bestätigungen verwenden bis zu 48 Stunden alte Beobachtungen, unabhängig vom Marktalter-Filter. Geeignete ältere Angaben bis 14 Tage erscheinen mit Originaldatum als **zuletzt bekannt / im Spiel prüfen**; sie zählen nicht als bestätigte Merits. Ausdrücklich unbesetzte Systeme können als Acquire-Ziel dienen, auch ohne Präsenzzeile der gewählten Macht. Fehlende Belege bleiben unbekannt.
 
-Version **1.0.7** mit dem passenden Server **0.9.2** ergänzt fehlende Powerplay-Kontrolle über höchstens sechs öffentliche Spansh-Systemabfragen je Prüfpass. Vorhandene frische Kontrolle wird zuerst wiederverwendet. Systemidentität, Quelle und ursprüngliche Beobachtungszeit werden geprüft; fehlende Angaben bleiben unbekannt. Der Community-Schalter steuert auch diese Zusatzabfrage. Breite 500-LY-Suchen benötigen weiterhin viel Rechenzeit und RAM; weitere Optimierung folgt separat.
+App **1.0.8** ergänzt passende Märkte und Ringe, die regionale Toplisten übergehen, mit gebündelten System-/Rohstoffabfragen. Powerplay-Seiten filtern vor der Seitengrenze nach deiner Macht und deinem Ziel. Gezielte öffentliche Spansh-Prüfungen können fehlende Kontrolle ergänzen; Systemidentität, ursprüngliche Quellenzeiten und neuere EDDN-Belege behalten Vorrang. Der Community-Schalter steuert diese Abfragen. Schwere Mining-, Journal- und Powerplay-Vorbereitung läuft in begrenzten Hintergrundprozessen; die Parallelität richtet sich nach verfügbarer CPU und RAM. Große kalte Suchen können weiterhin Zeit benötigen.
+
+Der laufende Server **0.9.4** aktualisiert die gemeinsame Bestandsstatistik ungefähr alle fünf Minuten im Hintergrund. Der Collector-Status bleibt live. Vorhandene App-Installationen 1.0.8 profitieren ohne Neuinstallation.
 
 Bereits gespeicherte Beobachtungen bleiben bei Ausfall oder Abschaltung eines Dienstes lokal nutzbar. Der SQLite-Ringspeicher liest die relevante Region und erhält ursprüngliche Beobachtungen sowie deren Historie. Offline kommen keine bislang unbekannten Live-Meldungen hinzu.
 

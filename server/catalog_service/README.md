@@ -1,6 +1,8 @@
 # ED-Frame central catalog service
 
-Version **0.9.3**, paired with app **1.0.8**. The targeted Spansh Powerplay
+Version **0.9.4**, compatible with app **1.0.8**. Public statistics are cached
+and refreshed in the background; see [API](#api) for freshness and retry behavior.
+The targeted Spansh Powerplay
 extension supplements missing explicit control from identity-checked public
 snapshots, preserving original source times and newer/equal-time EDDN facts.
 
