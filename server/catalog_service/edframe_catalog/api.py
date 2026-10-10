@@ -17,6 +17,7 @@ from ed_companion.navigation.mining_commodities import MINING_COMMODITIES, minin
 
 from . import __version__
 from .merit_markets import MeritMarketQuery, search_merit_markets
+from .status_cache import StatusCache, StatusUnavailable
 from .mining_metadata import enrich_ring_metadata
 from .mining_revision import mining_revision, static_revision
 from .mining_region import regional_page_limit, regional_box_clause
@@ -64,7 +65,11 @@ def _now() -> str:
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
     ensure_schema()
-    yield
+    _status_cache.start()
+    try:
+        yield
+    finally:
+        _status_cache.stop()
 
 
 app = FastAPI(
@@ -279,7 +284,23 @@ def health() -> dict:
 
 @app.get("/v1/status")
 def status() -> dict:
+    try:
+        return _status_cache.get()
+    except StatusUnavailable as exc:
+        raise HTTPException(
+            status_code=503, detail=str(exc), headers={"Retry-After": "5"},
+        ) from exc
+
+
+def _load_status() -> dict:
     with connection() as conn:
+        # All counters describe the same committed snapshot. Bound background
+        # work and avoid parallel hash joins exhausting container shared memory.
+        conn.execute("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY")
+        conn.execute("SET LOCAL statement_timeout = '60s'")
+        conn.execute("SET LOCAL transaction_timeout = '120s'")
+        conn.execute("SET LOCAL max_parallel_workers_per_gather = 0")
+        snapshot_at = conn.execute("SELECT transaction_timestamp() AS snapshot_at").fetchone()["snapshot_at"]
         counts = conn.execute(
             """
             SELECT
@@ -410,7 +431,7 @@ def status() -> dict:
         )
     }
     return {
-        "generatedAt": _now(),
+        "generatedAt": snapshot_at.astimezone(timezone.utc).isoformat().replace("+00:00", "Z"),
         "counts": {
             **dict(counts),
             "commodities": int(commodities["value"]),
@@ -464,6 +485,9 @@ def status() -> dict:
             "schemas": schema_rows,
         },
     }
+
+
+_status_cache = StatusCache(lambda: connection(), _load_status)
 
 
 @app.get("/v1/sync/station-offers")

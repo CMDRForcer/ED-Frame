@@ -10,6 +10,9 @@ services:
   db:
     image: postgres:17-alpine
     restart: unless-stopped
+    # Parallel PostgreSQL queries can exceed Docker's default 64 MiB /dev/shm.
+    # This is an on-demand tmpfs ceiling inside the existing 1200 MiB RAM cap.
+    shm_size: 256m
     environment:
       POSTGRES_DB: ${POSTGRES_DB}
       POSTGRES_USER: ${POSTGRES_USER}

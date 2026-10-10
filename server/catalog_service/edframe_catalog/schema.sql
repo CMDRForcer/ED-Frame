@@ -1,3 +1,10 @@
+-- One shared, replaceable public statistics snapshot for all API workers.
+CREATE TABLE IF NOT EXISTS catalog_status_snapshot (
+    singleton SMALLINT PRIMARY KEY CHECK (singleton = 1),
+    payload JSONB NOT NULL,
+    generated_at TIMESTAMPTZ NOT NULL
+);
+
 -- One latest snapshot per system, not an indefinitely growing event archive.
 CREATE TABLE IF NOT EXISTS mining_powerplay (
     identity TEXT PRIMARY KEY,
@@ -110,6 +117,15 @@ CREATE INDEX IF NOT EXISTS station_module_offers_price_idx
     ON station_module_offers (module_symbol, price_observed_at DESC)
     WHERE buy_price IS NOT NULL;
 
+-- EDDN repeatedly replaces indexed observation times. The default 20% vacuum
+-- threshold permits millions of dead versions in this large projection before
+-- cleanup starts. Trigger cleanup earlier while retaining the server's existing
+-- autovacuum worker and I/O cost limits; no catalog facts are removed.
+ALTER TABLE station_module_offers SET (
+    autovacuum_vacuum_scale_factor = 0.05,
+    autovacuum_vacuum_threshold = 5000
+);
+
 CREATE TABLE IF NOT EXISTS station_ship_offers (
     market_id BIGINT NOT NULL,
     ship_symbol TEXT NOT NULL,
@@ -204,6 +220,11 @@ CREATE INDEX IF NOT EXISTS markets_search_idx
 CREATE INDEX IF NOT EXISTS markets_system_idx ON markets (LOWER(system_name));
 CREATE INDEX IF NOT EXISTS markets_received_idx
     ON markets (received_at, market_id, commodity);
+
+ALTER TABLE markets SET (
+    autovacuum_vacuum_scale_factor = 0.05,
+    autovacuum_vacuum_threshold = 5000
+);
 
 -- Installations created before the station catalog already contain reliable
 -- market-to-station mappings. Make those stations immediately available and

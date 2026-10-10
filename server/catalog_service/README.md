@@ -243,7 +243,43 @@ maintenance unit reports warnings at 70% disk use and a critical failure at
 85%, without deleting durable data. Container logs are bounded to three 20 MB
 files per service. Mining evidence and system geography are retained.
 
+The frequently updated `markets` and `station_module_offers` tables trigger
+autovacuum after approximately 5% dead row versions plus 5,000, rather than the
+PostgreSQL default of 20% plus 50. Existing worker and I/O cost limits still
+apply. This reuses obsolete row/index space; it does not expire catalog facts
+or guarantee that existing index bloat shrinks on disk.
+
+If search indexes become disproportionately large, inspect their sizes and
+verify a current backup before a manual `REINDEX INDEX CONCURRENTLY`. Rebuild
+one index at a time, budget space for the replacement, sort files and WAL,
+and monitor free disk and API health. Do not use `VACUUM FULL` or remove data
+volumes as a disk-cleanup shortcut. The measured production cleanup and
+remaining capacity are documented in
+`reports/server_storage_cleanup_2026-10-10.md` in the repository root.
+
+PostgreSQL has a 256 MiB `/dev/shm` ceiling for parallel-query shared memory,
+within its existing 1,200 MiB container memory cap. Docker's default 64 MiB
+can make large statistics joins fail with `could not resize shared memory
+segment ... No space left on device` even when the root disk has free space.
+The tmpfs ceiling does not preallocate 256 MiB of RAM.
+
 ## API
+
+`GET /v1/status` reads one shared PostgreSQL statistics snapshot. A background
+worker refreshes it every five minutes; a PostgreSQL advisory lock prevents
+duplicate calculations across API workers. HTTP requests never run the full
+catalog scans. Collector state remains live through a small indexed lookup.
+`generatedAt` is the actual statistics snapshot time, and `cache.ageSeconds`,
+`cache.refreshSeconds` and `cache.stale` describe its age. Failed refreshes keep
+the last successful snapshot for up to 30 minutes; beyond that, or during an
+unprimed cold start, the endpoint returns 503 with `Retry-After: 5`. Health and
+all search/sync endpoints remain independent of the statistics cache.
+
+The refresh uses one read-only repeatable-read transaction, a 60-second
+statement timeout and a 120-second total transaction timeout. It does not
+use parallel query workers. The replaceable cache is one row, persists through
+API restarts and contains only public catalog projections. Prime it before
+switching the API image during a deployment.
 
 - `GET /healthz`
 - `GET /v1/status`
