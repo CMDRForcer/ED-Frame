@@ -1,6 +1,7 @@
 """Complete conditional snapshots, bounded storage and race/fallback safety."""
 
 from contextlib import closing
+from datetime import datetime, timezone
 from pathlib import Path
 import sqlite3
 import requests
@@ -50,6 +51,14 @@ class Getter:
         return Mock(status_code=200, json=Mock(return_value=data))
 
 
+class SnapshotClock(datetime):
+    @classmethod
+    def now(cls, tz=None):
+        fixed = cls(2026, 10, 10, 12, tzinfo=timezone.utc)
+        return fixed.astimezone(tz) if tz else fixed.replace(tzinfo=None)
+
+
+@patch('ed_companion.navigation.mining_finder.datetime', SnapshotClock)
 class MiningSnapshotTests(unittest.TestCase):
     def fetch(self, get, **kwargs):
         return fetch_edframe_mining_candidates("Test", get, commodity="platinum",
