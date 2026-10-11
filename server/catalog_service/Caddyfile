@@ -9,6 +9,14 @@
         -Server
     }
 
+    # Public, read-only statistics for the ED-Frame project website.
+    # No credentials, upload endpoints or other API paths are exposed by CORS.
+    @website_statistics {
+        method GET
+        path /v1/status
+    }
+    header @website_statistics Access-Control-Allow-Origin "https://cmdrforcer.github.io"
+
     reverse_proxy api:8000
 }
 

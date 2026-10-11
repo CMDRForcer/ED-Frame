@@ -1,6 +1,6 @@
 # ED-Frame central catalog service
 
-Version **0.9.4**, compatible with app **1.0.8**. Public statistics are cached
+Version **0.9.4**, compatible with app **1.0.9**. Public statistics are cached
 and refreshed in the background; see [API](#api) for freshness and retry behavior.
 The targeted Spansh Powerplay
 extension supplements missing explicit control from identity-checked public
@@ -276,6 +276,19 @@ catalog scans. Collector state remains live through a small indexed lookup.
 the last successful snapshot for up to 30 minutes; beyond that, or during an
 unprimed cold start, the endpoint returns 503 with `Retry-After: 5`. Health and
 all search/sync endpoints remain independent of the statistics cache.
+
+The [project website](https://cmdrforcer.github.io/#server-statistics) displays
+these public counts and the latest 24 hourly EDDN telemetry buckets. Its browser
+refresh runs every five minutes while the page is visible; failed checks retain
+the previous figures with their original snapshot date. Caddy permits
+credential-free browser reads only for `GET /v1/status` from
+`https://cmdrforcer.github.io`. Other paths and methods receive no CORS allowance.
+
+For configuration-only deployments, validate the candidate Caddyfile before
+reloading it. A file bind mount can retain an old inode after a host-side atomic
+replacement; verify the container's file content and reload the validated
+candidate directly when necessary. Keep the host Caddyfile synchronized for
+future container starts.
 
 The refresh uses one read-only repeatable-read transaction, a 60-second
 statement timeout and a 120-second total transaction timeout. It does not
