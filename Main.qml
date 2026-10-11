@@ -12,11 +12,12 @@ ApplicationWindow {
     height: 900
     minimumWidth: 1120
     minimumHeight: 700
-    visible: true
+    // The startup runtime shows the window after asynchronous construction.
+    visible: false
     // Windows appends applicationDisplayName ("ED-Frame") to the taskbar
     // tooltip on its own - putting it in the title too just doubles it up.
     title: cockpit.appVersion
-    font.family: "Segoe UI Variable Text"
+    font.family: "Segoe UI"
     property int previewEngineersMode: 0
 
     // The single app-wide source of color truth. Every palette defines the
@@ -35,14 +36,14 @@ ApplicationWindow {
             overlay: "#ba171f22", shadow: "#80000000"
         },
         "navy": {
-            backgroundPrimary: "#07111d", backgroundSecondary: "#071827",
-            backgroundTertiary: "#101a2b", card: "#102033", cardRaised: "#172b42",
-            inputBackground: "#0d1b2b", textPrimary: "#f4f8ff",
-            textSecondary: "#d5e3f2", textMuted: "#8fa4ba", textDisabled: "#587086",
-            accent: "#3bdcff", accentSecondary: "#769cc2",
-            success: "#4de2ac", warning: "#ffb65c", error: "#ff6c82",
-            border: "#294560", divider: "#233c55", hover: "#1c3650",
-            active: "#214563", successBackground: "#15392f",
+            backgroundPrimary: "#081620", backgroundSecondary: "#0c1c29",
+            backgroundTertiary: "#0b1824", card: "#132938", cardRaised: "#1a3244",
+            inputBackground: "#0d202e", textPrimary: "#f1f6fc",
+            textSecondary: "#ccdeed", textMuted: "#9db4c8", textDisabled: "#6d8497",
+            accent: "#4ad7ed", accentSecondary: "#88b9ce",
+            success: "#4de2b5", warning: "#ffbf69", error: "#ff7d91",
+            border: "#2b4a5e", divider: "#243e50", hover: "#203e51",
+            active: "#1b3b4e", successBackground: "#15392f",
             warningBackground: "#3a2c1b", errorBackground: "#3a202a",
             overlay: "#b0050b14", shadow: "#70000000"
         },
@@ -148,6 +149,14 @@ ApplicationWindow {
     property int currentPage: cockpit.lastPage
     property bool navStationServicesOpen: false
     property bool navCommoditiesOpen: false
+    property bool navTradeRoutesOpen: false
+    property string tradeRouteCommodity: "ALL"
+    property string tradeRouteOrigin: ""
+    property int tradeRouteSeedRevision: 0
+    // Session-only drafts survive unloading NAV; restoring them never searches.
+    property var commodityFinderState: ({})
+    property var tradeRouteFinderState: ({})
+    property var stationServiceFinderState: ({})
     // CMDR is a comparatively rich workspace.  Once opened, keep its QML
     // object tree alive so repeated navigation does not synchronously rebuild
     // charts, cards and Fleet image delegates on the GUI thread.
@@ -396,6 +405,14 @@ ApplicationWindow {
         {"id": "settings", "label": t("nav.settings", "SETTINGS"), "icon": "\uE713", "page": 5}
     ]
     property var navigationOrder: cockpit.navigationOrder || []
+    function workspaceIcon(page) {
+        if (page === 6) return "connections"
+        if (page === 7) return "diagnostics"
+        if (page === 15) return navTradeRoutesOpen ? "trade" : navCommoditiesOpen ? "goods"
+                           : navStationServicesOpen ? "station" : "nav"
+        var entry = primaryNavigation.find(function(row) { return row.page === page })
+        return entry ? entry.id : "operations"
+    }
     function orderedNavigation() {
         let byId = ({})
         primaryNavigation.forEach(function(item) { byId[item.id] = item })
@@ -596,13 +613,6 @@ ApplicationWindow {
                 GradientStop { position: 0.52; color: cyan }
                 GradientStop { position: 1.0; color: "transparent" }
             }
-            SequentialAnimation on opacity {
-                running: window.visible && window.currentPage === 0
-                         && window.enhancedVisuals && !window.reducedMotion
-                loops: Animation.Infinite
-                NumberAnimation { to: 0.08; duration: 3600; easing.type: Easing.InOutSine }
-                NumberAnimation { to: 0.16; duration: 3600; easing.type: Easing.InOutSine }
-            }
         }
         Rectangle {
             width: 640; height: 220
@@ -618,46 +628,8 @@ ApplicationWindow {
         }
     }
 
-    component CockpitButton: Button {
-        id: control
-        property color accentColor: accent
-        property bool selected: false
-        property string helpText: ""
-        property real horizontalContentPadding: 10
-        implicitHeight: UiMetrics.controlHeight
-        focusPolicy: Qt.StrongFocus
-        Accessible.name: text
-        Accessible.description: helpText
-        ToolTip.visible: hovered && helpText.length > 0
-        ToolTip.text: helpText
-        scale: down ? 0.985 : 1.0
-        Behavior on scale {
-            enabled: !window.reducedMotion
-            NumberAnimation { duration: 100; easing.type: Easing.OutCubic }
-        }
-        font.pixelSize: UiMetrics.body
-        font.weight: Font.DemiBold
-        contentItem: Label {
-            text: control.text
-            color: control.selected ? backgroundPrimary : (control.hovered ? textPrimary : textSecondary)
-            horizontalAlignment: Text.AlignHCenter
-            verticalAlignment: Text.AlignVCenter
-            leftPadding: control.horizontalContentPadding
-            rightPadding: control.horizontalContentPadding
-            elide: Text.ElideRight
-            maximumLineCount: 1
-            font: control.font
-        }
-        background: Rectangle {
-            radius: 8
-            color: control.selected
-                   ? control.accentColor
-                   : (control.hovered ? hover : inputBackground)
-            border.width: control.activeFocus ? 2 : (control.selected ? 0 : 1)
-            border.color: control.activeFocus || control.hovered ? control.accentColor : borderTone
-            Behavior on color { enabled: !window.reducedMotion; ColorAnimation { duration: 130 } }
-            Behavior on border.color { enabled: !window.reducedMotion; ColorAnimation { duration: 130 } }
-        }
+    component CockpitButton: CockpitAction {
+        appWindow: window
     }
 
     component SettingsNavigation: RowLayout {
@@ -736,10 +708,10 @@ ApplicationWindow {
                 color: accent
             }
         }
-        header: Rectangle {
+        header: CardSurface {
             implicitHeight: 58
             color: panelRaised
-            radius: 14
+            radius: UiMetrics.cardRadius
             Rectangle {
                 anchors.left: parent.left
                 anchors.right: parent.right
@@ -903,7 +875,7 @@ ApplicationWindow {
             spacing: 10
             RowLayout {
                 Layout.fillWidth: true
-                Rectangle { width: 4; height: 24; radius: 2; color: materialColumn.categoryColor }
+                Pictogram { name: materialColumn.category === "Raw" ? "materials" : materialColumn.category === "Encoded" ? "diagnostics" : "engineering"; tint: materialColumn.categoryColor; Layout.preferredWidth: 22; Layout.preferredHeight: 22 }
                 Label {
                     text: materialColumn.category.toUpperCase()
                     color: textPrimary; font.pixelSize: 15; font.bold: true
@@ -958,11 +930,11 @@ ApplicationWindow {
                 spacing: 8
                 model: materialColumn.visibleRows
                 ScrollBar.vertical: CockpitScrollBar {}
-                delegate: Rectangle {
+                delegate: CardSurface {
                     required property var modelData
                     width: categoryList.width - 10
                     height: modelData.warning ? 136 : (modelData.need > 0 ? 112 : 88)
-                    radius: 12
+                    radius: UiMetrics.cardRadius
                     color: materialHover.containsMouse ? hover : panelRaised
                     border.width: modelData.missing > 0 ? 1 : 0
                     border.color: error
@@ -1067,13 +1039,20 @@ ApplicationWindow {
             anchors.fill: parent
             anchors.margins: 18
             spacing: 8
-            Label {
-                text: window.compactSidebar ? "F" : "FRAME"
-                color: accent
-                font.pixelSize: 25
-                font.bold: true
-                Layout.leftMargin: 4
+            RowLayout {
                 Layout.bottomMargin: 10
+                spacing: 10
+                Rectangle {
+                    implicitWidth: 36; implicitHeight: 36; radius: 10
+                    color: Qt.rgba(window.accent.r, window.accent.g, window.accent.b, 0.08)
+                    border.color: window.accent
+                    Label { anchors.centerIn: parent; text: String("ED"); color: window.accent; font.pixelSize: 13; font.bold: true }
+                }
+                Label {
+                    visible: !window.compactSidebar
+                    text: String("FRAME"); color: window.textPrimary
+                    font.pixelSize: 22; font.bold: true; font.letterSpacing: 1.5
+                }
             }
             ListView {
                 id: navigationList
@@ -1118,20 +1097,12 @@ ApplicationWindow {
                             anchors.leftMargin: window.compactSidebar ? 0 : 16
                             anchors.horizontalCenter: window.compactSidebar ? parent.horizontalCenter : undefined
                             spacing: 13
-                            Label {
-                                visible: navTile.modelData.iconKind !== "dna"
-                                width: 24
-                                text: navTile.modelData.icon
-                                color: navTile.selectedNav ? accent : accentSecondary
-                                font.family: "Segoe Fluent Icons"
-                                font.pixelSize: 18
-                                horizontalAlignment: Text.AlignHCenter
-                            }
-                            DnaIcon {
-                                visible: navTile.modelData.iconKind === "dna"
+                            Pictogram {
+                                objectName: "nav-icon-" + navTile.modelData.id
+                                name: navTile.modelData.id
                                 anchors.verticalCenter: parent.verticalCenter
-                                width: 24; height: 20
-                                color: navTile.selectedNav ? accent : accentSecondary
+                                width: 22; height: 22
+                                tint: navTile.selectedNav ? accent : accentSecondary
                             }
                             Label {
                                 visible: !window.compactSidebar
@@ -1198,13 +1169,16 @@ ApplicationWindow {
                 MouseArea { id: trayModeMouse; anchors.fill: parent; hoverEnabled: true }
             }
             CockpitButton {
-                text: window.compactSidebar ? "⌕" : window.t("common.search_shortcut", "SEARCH  Ctrl+K")
+                pictogram: "search"
+                text: window.compactSidebar ? "" : window.t("common.search_shortcut", "SEARCH  Ctrl+K")
+                helpText: window.t("common.search_shortcut", "SEARCH  Ctrl+K")
                 Layout.fillWidth: true
                 onClicked: globalSearchDialog.open()
             }
             CockpitButton {
                 objectName: "qa-kofi-support-button"
-                text: window.compactSidebar ? "♥" : window.t("common.support", "SUPPORT ON KO-FI")
+                pictogram: "heart"
+                text: window.compactSidebar ? "" : window.t("common.support", "SUPPORT ON KO-FI")
                 Layout.fillWidth: true
                 ToolTip.visible: hovered
                 ToolTip.text: window.t("common.support_help", "Open ko-fi.com/cmdrforcer in your browser")
@@ -1212,7 +1186,9 @@ ApplicationWindow {
             }
             CockpitButton {
                 objectName: "qa-about-button"
-                text: window.compactSidebar ? "ⓘ" : window.t("common.about", "ABOUT")
+                pictogram: "info"
+                text: window.compactSidebar ? "" : window.t("common.about", "ABOUT")
+                helpText: window.t("common.about", "ABOUT")
                 Layout.fillWidth: true
                 ToolTip.visible: hovered
                 ToolTip.text: window.t("dialog.about.title", "About ED-Frame")
@@ -1268,6 +1244,7 @@ ApplicationWindow {
                         onClicked: {
                             window.navStationServicesOpen = true
                             window.navCommoditiesOpen = false
+                            window.navTradeRoutesOpen = false
                             window.currentPage = 15
                         }
                     }
@@ -1276,6 +1253,7 @@ ApplicationWindow {
                         onClicked: {
                             window.navStationServicesOpen = false
                             window.navCommoditiesOpen = true
+                            window.navTradeRoutesOpen = false
                             window.currentPage = 15
                         }
                     }
@@ -1417,10 +1395,10 @@ ApplicationWindow {
                         }
                     }
                 }
-                Rectangle {
+                CardSurface {
                     Layout.fillWidth: true
                     Layout.preferredHeight: 190
-                    radius: 10
+                    radius: UiMetrics.cardRadius
                     color: cardRaised
                     border.width: 1
                     border.color: borderTone
@@ -1757,9 +1735,9 @@ ApplicationWindow {
                             Item {
                                 width: 40; height: 40
                                 visible: !!(modelData.portraitUrl)
-                                Rectangle {
+                                CardSurface {
                                     anchors.fill: parent
-                                    radius: 8
+                                    radius: UiMetrics.cardRadius
                                     color: cardRaised
                                     clip: true
                                     Image {
@@ -2189,10 +2167,10 @@ ApplicationWindow {
                         clip: true; spacing: 10
                         model: cockpit.missingMaterials
                         ScrollBar.vertical: CockpitScrollBar {}
-                        delegate: Rectangle {
+                        delegate: CardSurface {
                             required property var modelData
                             width: missingMaterialList.width - 12
-                            height: 132; radius: 14
+                            height: 132; radius: UiMetrics.cardRadius
                             color: missingMouse.containsMouse ? hover : panelRaised
                             border.width: 1; border.color: orange
                             MouseArea {
@@ -2679,13 +2657,13 @@ ApplicationWindow {
                         }
                     }
                 }
-                Rectangle {
+                CardSurface {
                     visible: cockpit.unrelatedCraftTrackingIssues.length > 0
                     Layout.fillWidth: true
                     Layout.preferredHeight: visible
                                             ? 32 + Math.min(2, cockpit.unrelatedCraftTrackingIssues.length) * 28
                                             : 0
-                    radius: 8; color: panelRaised
+                    radius: UiMetrics.cardRadius; color: panelRaised
                     border.width: 1; border.color: borderTone
                     ColumnLayout {
                         anchors.fill: parent; anchors.margins: 6; spacing: 3
@@ -2768,7 +2746,7 @@ ApplicationWindow {
                     spacing: 10
                     model: cockpit.activeBlueprints
                     ScrollBar.vertical: CockpitScrollBar {}
-                    delegate: Rectangle {
+                    delegate: CardSurface {
                         required property var modelData
                         required property int index
                         property bool materialsExpanded: window.wishlistMaterialsExpanded(modelData, index)
@@ -2777,7 +2755,7 @@ ApplicationWindow {
                                        ? (modelData.materialProgress || []).length * 66 : 0)
                                 + (modelData.hasSafetyReserve ? 34 : 0)
                                 + (modelData.calculationWarning ? 34 : 0)
-                        radius: 14
+                        radius: UiMetrics.cardRadius
                         color: wishHover.containsMouse ? hover : panelRaised
                         border.width: 1
                         border.color: modelData.priority ? orange
@@ -3349,14 +3327,14 @@ ApplicationWindow {
                     spacing: 8
                     model: materialsPage.farmMissingRows
                     ScrollBar.vertical: CockpitScrollBar {}
-                    delegate: Rectangle {
+                    delegate: CardSurface {
                         id: farmRow
                         required property var modelData
                         property var source: modelData.farmSource || ({})
                         width: farmMissingList.width - 10
                         height: modelData.variantCount > 1
                                 ? 104 + modelData.variantCount * 28 : 118
-                        radius: 12
+                        radius: UiMetrics.cardRadius
                         color: farmMissingMouse.containsMouse ? hover : panelRaised
                         border.width: modelData.grade === 4 ? 2 : 1
                         border.color: modelData.grade === 4 ? accentSecondary : borderTone
@@ -3703,10 +3681,10 @@ ApplicationWindow {
                                         ? cockpit.selectedShipStats.cargoCapacity + " t" : "—"},
                                     {label: window.t("engineering.engineerable", "ENGINEERABLE"), value: cockpit.engineeringInstalledModules.length}
                             ]
-                            delegate: Rectangle {
+                            delegate: CardSurface {
                                 required property var modelData
                                 Layout.fillWidth: true; Layout.preferredHeight: 64
-                                radius: 9; color: panelRaised
+                                radius: UiMetrics.cardRadius; color: panelRaised
                                 ColumnLayout {
                                     anchors.fill: parent; anchors.margins: 9; spacing: 2
                                     Label { text: modelData.value; color: textPrimary; font.pixelSize: 15; font.bold: true }
@@ -4212,9 +4190,9 @@ ApplicationWindow {
                         }
                         RowLayout {
                             Layout.fillWidth: true; spacing: 8
-                            Rectangle {
+                            CardSurface {
                                 Layout.fillWidth: true; Layout.preferredHeight: 32
-                                radius: 9
+                                radius: UiMetrics.cardRadius
                                 color: cockpit.selectedModuleSlot ? active : panelRaised
                                 border.width: 1
                                 border.color: cockpit.selectedModuleSlot ? cyan : orange
@@ -4678,9 +4656,9 @@ ApplicationWindow {
                     model: engineersPage.visibleRows
                     spacing: 9; clip: true
                     ScrollBar.vertical: CockpitScrollBar {}
-                    delegate: Rectangle {
+                    delegate: CardSurface {
                         required property var modelData
-                        width: engineerList.width - 12; height: 120; radius: 13
+                        width: engineerList.width - 12; height: 120; radius: UiMetrics.cardRadius
                         color: engineerMouse.containsMouse ? hover : panelRaised
                         border.width: 1
                         border.color: modelData.statusGroup === "invited" ? warning : borderTone
@@ -4698,9 +4676,9 @@ ApplicationWindow {
                             anchors.fill: parent; anchors.margins: 15; spacing: 16
                             Item {
                                 width: 64; height: 64
-                                Rectangle {
+                                CardSurface {
                                     anchors.fill: parent
-                                    radius: 10
+                                    radius: UiMetrics.cardRadius
                                     color: cardRaised
                                     border.width: 1
                                     border.color: borderTone
@@ -4778,9 +4756,9 @@ ApplicationWindow {
                     Item {
                         width: 88; height: 88
                         visible: !!(engineersPage.selectedRow && engineersPage.selectedRow.portraitUrl)
-                        Rectangle {
+                        CardSurface {
                             anchors.fill: parent
-                            radius: 12
+                            radius: UiMetrics.cardRadius
                             color: cardRaised
                             border.width: 1
                             border.color: borderTone
@@ -4937,10 +4915,10 @@ ApplicationWindow {
                     model: engineersPage.selectedRow.unlockGuide
                            ? engineersPage.selectedRow.unlockGuide.steps : []
                     ScrollBar.vertical: CockpitScrollBar {}
-                    delegate: Rectangle {
+                    delegate: CardSurface {
                         required property var modelData
                         width: unlockStepList.width - 12
-                        height: 86; radius: 12
+                        height: 86; radius: UiMetrics.cardRadius
                         color: modelData.state === "active" ? active : panelRaised
                         border.width: modelData.state === "active" ? 2 : 1
                         border.color: modelData.state === "complete" ? success
@@ -5049,9 +5027,9 @@ ApplicationWindow {
                         model: engineersPage.guardianRows
                         spacing: 8; clip: true
                         ScrollBar.vertical: CockpitScrollBar {}
-                        delegate: Rectangle {
+                        delegate: CardSurface {
                             required property var modelData
-                            width: guardianList.width - 12; height: 86; radius: 11
+                            width: guardianList.width - 12; height: 86; radius: UiMetrics.cardRadius
                             color: modelData.name === engineersPage.selectedGuardian.name ? active : panelRaised
                             border.width: modelData.name === engineersPage.selectedGuardian.name ? 2 : 1
                             border.color: modelData.status === "unlocked" ? success
@@ -5230,9 +5208,9 @@ ApplicationWindow {
                         spacing: 8; clip: true
                         model: engineersPage.selectedGuardian.brokerDestinations || []
                         ScrollBar.horizontal: CockpitScrollBar {}
-                        delegate: Rectangle {
+                        delegate: CardSurface {
                             required property var modelData
-                            width: 360; height: 66; radius: 9
+                            width: 360; height: 66; radius: UiMetrics.cardRadius
                             color: panelRaised; border.width: 1; border.color: borderTone
                             RowLayout {
                                 anchors.fill: parent; anchors.margins: 9; spacing: 8
@@ -5301,9 +5279,9 @@ ApplicationWindow {
                         model: engineersPage.selectedGuardian.materials || []
                         clip: true
                         ScrollBar.vertical: CockpitScrollBar {}
-                        delegate: Rectangle {
+                        delegate: CardSurface {
                             required property var modelData
-                            width: guardianMaterialGrid.cellWidth - 8; height: 64; radius: 9
+                            width: guardianMaterialGrid.cellWidth - 8; height: 64; radius: UiMetrics.cardRadius
                             color: panelRaised; border.width: 1
                             border.color: modelData.ready ? success : borderTone
                             RowLayout {
@@ -5330,9 +5308,9 @@ ApplicationWindow {
                         model: engineersPage.selectedGuardian.steps || []
                         spacing: 8; clip: true
                         ScrollBar.vertical: CockpitScrollBar {}
-                        delegate: Rectangle {
+                        delegate: CardSurface {
                             required property var modelData
-                            width: guardianStepList.width - 12; height: 86; radius: 11
+                            width: guardianStepList.width - 12; height: 86; radius: UiMetrics.cardRadius
                             color: modelData.state === "active" ? active : panelRaised
                             border.width: modelData.state === "active" ? 2 : 1
                             border.color: modelData.state === "complete" ? success
@@ -5731,11 +5709,11 @@ ApplicationWindow {
                         text: window.t("state.load_more", "LOAD 250 MORE FINDS")
                         onClicked: hgeFinderPage.visibleCandidateLimit += 250
                     }
-                    delegate: Rectangle {
+                    delegate: CardSurface {
                         required property var modelData
                         width: hgeFinderList.width
                         height: Math.max(118, stateFindCardContent.implicitHeight + 28)
-                        radius: 12
+                        radius: UiMetrics.cardRadius
                         color: panelRaised
                         border.width: 1
                         border.color: modelData.localNotConfirmed ? error
@@ -6121,6 +6099,7 @@ ApplicationWindow {
 
                 ShadowCard {
                     id: commanderCard
+                    accent: commanderTile.toneColor
                     x: 7; y: 7
                     width: commanderTile.width - 14
                     height: commanderTile.height - 14
@@ -6129,6 +6108,13 @@ ApplicationWindow {
                         anchors.fill: parent; anchors.margins: 16; spacing: 8
                         RowLayout {
                             Layout.fillWidth: true; Layout.preferredHeight: 26
+                            Pictogram {
+                                name: commanderTile.modelData === "ranks" ? "powerplay"
+                                    : commanderTile.modelData === "finances" ? "credits"
+                                    : commanderTile.modelData === "current-ship" ? "shipyard" : "cmdr"
+                                tint: commanderTile.toneColor
+                                Layout.preferredWidth: 20; Layout.preferredHeight: 20
+                            }
                             Label {
                                 Layout.fillWidth: true
                                 text: commanderTile.cardData.title || window.t("commander.data", "CMDR DATA")
@@ -6145,10 +6131,10 @@ ApplicationWindow {
                             visible: modelData === "ranks"
                             Repeater {
                                 model: commanderPage.rankRows
-                                delegate: Rectangle {
+                                delegate: CardSurface {
                                     required property var modelData
                                     Layout.fillWidth: true; Layout.preferredHeight: 80
-                                    radius: 8; color: panelRaised
+                                    radius: UiMetrics.cardRadius; color: panelRaised
                                     RowLayout {
                                         anchors.fill: parent; anchors.margins: 7; spacing: 6
                                         CommanderRankIcon {
@@ -6179,10 +6165,10 @@ ApplicationWindow {
                             visible: modelData === "major-reputation"
                             Repeater {
                                 model: commanderTile.cardRows
-                                delegate: Rectangle {
+                                delegate: CardSurface {
                                     required property var modelData
                                     Layout.fillWidth: true; Layout.preferredHeight: 72
-                                    radius: 8; color: panelRaised
+                                    radius: UiMetrics.cardRadius; color: panelRaised
                                     ColumnLayout {
                                         anchors.fill: parent; anchors.margins: 9; spacing: 5
                                         RowLayout {
@@ -6205,10 +6191,10 @@ ApplicationWindow {
                             visible: modelData === "finances"
                             Repeater {
                                 model: commanderTile.cardRows
-                                delegate: Rectangle {
+                                delegate: CardSurface {
                                     required property var modelData
                                     Layout.fillWidth: true; Layout.preferredHeight: 70
-                                    radius: 9; color: panelRaised
+                                    radius: UiMetrics.cardRadius; color: panelRaised
                                     ColumnLayout {
                                         anchors.fill: parent; anchors.margins: 10; spacing: 3
                                         Label { text: modelData.label || "SNAPSHOT"; color: textSecondary; font.pixelSize: UiMetrics.caption; font.bold: true }
@@ -6295,10 +6281,10 @@ ApplicationWindow {
                             [window.t("commander.credits.fleet_value", "KNOWN FLEET VALUE"),
                              commanderPage.formatCr(commanderPage.fleetValue(), true), cyan]
                         ]
-                        delegate: Rectangle {
+                        delegate: CardSurface {
                             required property var modelData
                             Layout.fillWidth: true; Layout.preferredHeight: 82
-                            radius: 10; color: panelRaised
+                            radius: UiMetrics.cardRadius; color: panelRaised
                             border.width: 1; border.color: borderTone
                             ColumnLayout {
                                 anchors.fill: parent; anchors.margins: 11; spacing: 4
@@ -6382,10 +6368,10 @@ ApplicationWindow {
                              window.t("commander.credits.wall_clock", "WALL-CLOCK · DISPLAYED PERIOD"),
                              commanderPage.financeSummary.averagePerHour >= 0 ? cyan : danger]
                         ]
-                        delegate: Rectangle {
+                        delegate: CardSurface {
                             required property var modelData
                             Layout.fillWidth: true; Layout.preferredHeight: 76
-                            radius: 9; color: panelRaised
+                            radius: UiMetrics.cardRadius; color: panelRaised
                             border.width: 1; border.color: borderTone
                             ColumnLayout {
                                 anchors.fill: parent; anchors.margins: 9; spacing: 2
@@ -7113,9 +7099,9 @@ ApplicationWindow {
                                     {"id": "crimson_dark", "label": "CRIMSON DARK"},
                                     {"id": "crimson_light", "label": "CRIMSON LIGHT"}
                                 ]
-                                delegate: Rectangle {
+                                delegate: CardSurface {
                                     required property var modelData
-                                    width: 158; height: 54; radius: 10
+                                    width: 158; height: 54; radius: UiMetrics.cardRadius
                                     color: cockpit.theme === modelData.id ? active : panelRaised
                                     border.width: cockpit.theme === modelData.id ? 2 : 1
                                     border.color: cockpit.theme === modelData.id ? cyan : borderTone
@@ -7514,11 +7500,11 @@ ApplicationWindow {
                         model: cockpit.inaraReceipts
                         spacing: 9
                         clip: true
-                        delegate: Rectangle {
+                        delegate: CardSurface {
                             required property var modelData
                             width: ListView.view.width
                             height: 88
-                            radius: 11
+                            radius: UiMetrics.cardRadius
                             color: panelRaised
                             border.width: 1
                             border.color: borderTone
@@ -7574,10 +7560,10 @@ ApplicationWindow {
                         color: textSecondary; wrapMode: Text.WordWrap
                         Layout.fillWidth: true
                     }
-                    Rectangle {
+                    CardSurface {
                         Layout.fillWidth: true
                         Layout.preferredHeight: capiStatusColumn.implicitHeight + 28
-                        radius: 10; color: panelRaised
+                        radius: UiMetrics.cardRadius; color: panelRaised
                         border.width: 1
                         border.color: cockpit.frontierConnected ? green : borderTone
                         ColumnLayout {
@@ -7692,11 +7678,11 @@ ApplicationWindow {
                         Layout.fillWidth: true
                         onClicked: connectionsPage.eddnDetailsExpanded = !connectionsPage.eddnDetailsExpanded
                     }
-                    Rectangle {
+                    CardSurface {
                         visible: connectionsPage.eddnDetailsExpanded
                         Layout.fillWidth: true
                         Layout.preferredHeight: technicalDetailsColumn.implicitHeight + 20
-                        radius: 9; color: panelRaised; border.width: 1; border.color: borderTone
+                        radius: UiMetrics.cardRadius; color: panelRaised; border.width: 1; border.color: borderTone
                         ColumnLayout {
                             id: technicalDetailsColumn
                             anchors.left: parent.left; anchors.right: parent.right
@@ -7845,9 +7831,9 @@ ApplicationWindow {
                         Layout.fillWidth: true; Layout.fillHeight: true
                         model: connectionsPage.eddnActivityRows; spacing: 6; clip: true
                         ScrollBar.vertical: CockpitScrollBar {}
-                        delegate: Rectangle {
+                        delegate: CardSurface {
                             required property var modelData
-                            width: eddnQueueList.width; height: 78; radius: 9
+                            width: eddnQueueList.width; height: 78; radius: UiMetrics.cardRadius
                             color: panelRaised
                             border.width: 1
                             border.color: modelData.status === "FAILED" || modelData.status === "INVALID" ? error
@@ -7934,11 +7920,11 @@ ApplicationWindow {
                                       : window.t("connections.local_data_help", "The offline catalog merges retained observations from enabled sources and remains usable when every network source is unavailable.")
                             color: textSecondary; wrapMode: Text.WordWrap; Layout.fillWidth: true
                         }
-                        Rectangle {
+                        CardSurface {
                             visible: connectionsPage.connectionMode === 3
                             Layout.fillWidth: true
                             Layout.preferredHeight: edFrameStatusColumn.implicitHeight + 28
-                            radius: 10; color: panelRaised
+                            radius: UiMetrics.cardRadius; color: panelRaised
                             border.width: 1
                             border.color: cockpit.edFrameCatalogOnline ? green
                                           : cockpit.edFrameCatalogBusy ? cyan : orange
@@ -8103,11 +8089,11 @@ ApplicationWindow {
                                 }
                             }
                         }
-                        Rectangle {
+                        CardSurface {
                             visible: connectionsPage.connectionMode === 4
                             Layout.fillWidth: true
                             Layout.preferredHeight: spanshStatusColumn.implicitHeight + 28
-                            radius: 10; color: panelRaised
+                            radius: UiMetrics.cardRadius; color: panelRaised
                             border.width: 1
                             border.color: cockpit.spanshCatalogSyncBusy ? cyan : borderTone
                             ColumnLayout {
@@ -8134,11 +8120,11 @@ ApplicationWindow {
                                 }
                             }
                         }
-                        Rectangle {
+                        CardSurface {
                             visible: connectionsPage.connectionMode === 5
                             Layout.fillWidth: true
                             Layout.preferredHeight: edsmStatusColumn.implicitHeight + 28
-                            radius: 10; color: panelRaised
+                            radius: UiMetrics.cardRadius; color: panelRaised
                             border.width: 1
                             border.color: cockpit.miningPowerplaySyncBusy ? cyan : borderTone
                             ColumnLayout {
@@ -8282,8 +8268,8 @@ ApplicationWindow {
 
         SettingsHeader {
             qaName: "qa-header-diagnostics"
-            heading: "DIAGNOSTICS & JOURNAL HEALTH"
-            subheading: "Local health checks, parser state, logs and crash recovery"
+            heading: window.t("diagnostics.title", "DIAGNOSTICS & JOURNAL HEALTH")
+            subheading: window.t("diagnostics.subtitle", "Local health checks, parser state, logs and crash recovery")
         }
         Item {
             Layout.fillWidth: true
@@ -8303,167 +8289,199 @@ ApplicationWindow {
             }
         }
 
-        RowLayout {
-            Layout.fillWidth: true
-            spacing: 12
-            Repeater {
-                model: [
-                            {"label": window.t("diagnostics.journal", "JOURNAL"), "value": window.localizedStatus(diagnosticsPage.health.status), "tone": diagnosticsPage.health.parserOk ? green : orange},
-                            {"label": window.t("diagnostics.watcher", "WATCHER"), "value": window.localizedStatus(diagnosticsPage.health.watcherActive ? "ACTIVE" : "STOPPED"), "tone": diagnosticsPage.health.watcherActive ? green : orange},
-                            {"label": window.t("diagnostics.last_event", "LAST EVENT"), "value": diagnosticsPage.health.lastEvent || window.t("status.value.none", "NONE"), "tone": cyan},
-                            {"label": window.t("status.renderer", "RENDERER"), "value": diagnosticsPage.health.renderer, "tone": cyan}
-                ]
-                delegate: ShadowCard {
-                    required property var modelData
-                    Layout.fillWidth: true; Layout.preferredHeight: 92
-                    ColumnLayout {
-                        anchors.fill: parent; anchors.margins: 15
-                        Label { text: modelData.label; color: muted; font.pixelSize: UiMetrics.caption; font.bold: true }
-                        Label { text: modelData.value; color: modelData.tone; font.pixelSize: 19; font.bold: true; elide: Text.ElideRight; Layout.fillWidth: true }
-                    }
-                }
-            }
-        }
+        ScrollView {
+            id: diagnosticsScroll
+            objectName: "qa-diagnostics-scroll"
+            Layout.fillWidth: true; Layout.fillHeight: true
+            clip: true
+            rightPadding: 8
+            contentWidth: availableWidth
+            ScrollBar.horizontal.policy: ScrollBar.AlwaysOff
+            ScrollBar.vertical: CockpitScrollBar { x: parent.width - width }
+            ColumnLayout {
+                width: diagnosticsScroll.availableWidth
+                spacing: 14
 
-        RowLayout {
-            Layout.fillWidth: true; Layout.fillHeight: true; spacing: 14
-            ShadowCard {
-                Layout.preferredWidth: window.compactSidebar ? 360 : 430; Layout.fillHeight: true
-                ColumnLayout {
-                    anchors.fill: parent; anchors.margins: 18; spacing: 10
-                            Label { text: window.t("diagnostics.journal_pipeline", "JOURNAL PIPELINE"); color: cyan; font.pixelSize: 13; font.bold: true }
+                GridLayout {
+                    Layout.fillWidth: true
+                    columns: window.narrowWorkspace ? 2 : 4
+                    columnSpacing: 12; rowSpacing: 12
                     Repeater {
                         model: [
-                            {"name": "Directory", "value": diagnosticsPage.health.directoryExists ? "Available" : "Missing"},
-                            {"name": "Journal files", "value": diagnosticsPage.health.fileCount},
-                            {"name": "Latest file", "value": diagnosticsPage.health.latestFile || "None"},
-                            {"name": "Age", "value": diagnosticsPage.health.ageSeconds >= 0 ? diagnosticsPage.health.ageSeconds + " seconds" : "Unknown"},
-                            {"name": "File size", "value": diagnosticsPage.health.sizeBytes + " bytes"},
-                            {"name": "JSON parser", "value": diagnosticsPage.health.parserOk ? "Last line valid" : "Needs attention"},
-                            {"name": "Poll interval", "value": diagnosticsPage.health.pollIntervalMs + " ms"}
+                                    {"label": window.t("diagnostics.journal", "JOURNAL"), "value": window.localizedStatus(diagnosticsPage.health.status), "tone": diagnosticsPage.health.parserOk ? green : orange},
+                                    {"label": window.t("diagnostics.watcher", "WATCHER"), "value": window.localizedStatus(diagnosticsPage.health.watcherActive ? "ACTIVE" : "STOPPED"), "tone": diagnosticsPage.health.watcherActive ? green : orange},
+                                    {"label": window.t("diagnostics.last_event", "LAST EVENT"), "value": diagnosticsPage.health.lastEvent || window.t("status.value.none", "NONE"), "tone": cyan},
+                                    {"label": window.t("diagnostics.renderer", "RENDERER"), "value": diagnosticsPage.health.renderer, "tone": cyan}
                         ]
-                        delegate: Rectangle {
+                        delegate: ShadowCard {
                             required property var modelData
-                            Layout.fillWidth: true; height: 48; radius: 9
-                            color: panelRaised
-                            RowLayout {
-                                anchors.fill: parent; anchors.margins: 11
-                                Label { text: modelData.name; color: muted; font.pixelSize: 11 }
-                                Item { Layout.fillWidth: true }
-                                Label { text: modelData.value; color: textPrimary; font.pixelSize: 11; font.bold: true; elide: Text.ElideLeft; Layout.maximumWidth: 250 }
+                            Layout.fillWidth: true; Layout.preferredHeight: 92
+                            ColumnLayout {
+                                anchors.fill: parent; anchors.margins: 15
+                                Label { text: modelData.label; color: muted; font.pixelSize: UiMetrics.caption; font.bold: true }
+                                Label { text: modelData.value; color: modelData.tone; font.pixelSize: 19; font.bold: true; elide: Text.ElideRight; Layout.fillWidth: true }
                             }
                         }
                     }
-                    Rectangle { Layout.fillWidth: true; height: 1; color: borderTone }
-                                    Label { text: window.t("diagnostics.service_pipeline", "SERVICE PIPELINE"); color: green; font.pixelSize: 11; font.bold: true }
-                    Repeater {
-                        model: cockpit.serviceStatus
-                        delegate: RowLayout {
-                            required property var modelData
-                            Layout.fillWidth: true
-                            Label { text: modelData.name; color: muted; font.pixelSize: UiMetrics.caption; font.bold: true; Layout.preferredWidth: 70 }
-                            Label { text: modelData.status; color: modelData.healthy ? green : orange; font.pixelSize: UiMetrics.caption; font.bold: true; Layout.preferredWidth: 70 }
-                            Label { text: modelData.detail; color: textSecondary; font.pixelSize: UiMetrics.caption; elide: Text.ElideRight; Layout.fillWidth: true }
-                        }
-                    }
-                    Label {
-                        visible: !!diagnosticsPage.health.error
-                        text: diagnosticsPage.health.error
-                        color: orange; wrapMode: Text.WordWrap; Layout.fillWidth: true
-                    }
-                    Item { Layout.fillHeight: true }
                 }
-            }
 
-            ShadowCard {
-                Layout.fillWidth: true; Layout.fillHeight: true
-                ColumnLayout {
-                    anchors.fill: parent; anchors.margins: 18; spacing: 10
-                    RowLayout {
-                        Layout.fillWidth: true
-                            Label { text: window.t("diagnostics.local_log", "LOCAL LOG"); color: textPrimary; font.pixelSize: 13; font.bold: true }
-                        Item { Layout.fillWidth: true }
-                            Label { text: window.tf("diagnostics.lines", "%1 LINES", [cockpit.diagnosticLogs.length]); color: muted; font.pixelSize: UiMetrics.caption }
-                                CockpitButton { text: window.t("diagnostics.clear_log", "CLEAR LOG"); helpText: window.t("diagnostics.clear_log_help", "Delete the local diagnostic log"); onClicked: cockpit.clearDiagnosticLog() }
-                    }
-                    ListView {
-                        id: diagnosticLogList
-                        Layout.fillWidth: true; Layout.fillHeight: true
-                        model: cockpit.diagnosticLogs
-                        clip: true; spacing: 3
-                        ScrollBar.vertical: CockpitScrollBar {}
-                        delegate: Label {
-                            required property string modelData
-                            width: diagnosticLogList.width
-                            text: modelData
-                            color: textSecondary; font.family: "Consolas"; font.pixelSize: UiMetrics.caption
-                            wrapMode: Text.WrapAnywhere
-                        }
-                        onCountChanged: positionViewAtEnd()
-                    }
-                    Rectangle { Layout.fillWidth: true; height: 1; color: borderTone }
-                                    Label { text: window.t("diagnostics.crash_reports", "CRASH REPORTS"); color: orange; font.pixelSize: 11; font.bold: true }
-                    Label {
-                        Layout.fillWidth: true
-                        text: cockpit.crashReports.length
-                              ? cockpit.crashReports.map(function(row) { return row.name }).join(" · ")
-                              : "No captured Python crash reports."
-                        color: cockpit.crashReports.length ? orange : green
-                        font.pixelSize: UiMetrics.caption; wrapMode: Text.WordWrap
-                    }
-                }
-            }
-        }
-
-        ShadowCard {
-            Layout.fillWidth: true
-            Layout.preferredHeight: 260
-            ColumnLayout {
-                anchors.fill: parent; anchors.margins: 18; spacing: 8
-                RowLayout {
+                GridLayout {
                     Layout.fillWidth: true
-                    Label { text: window.t("diagnostics.interface_activity", "INTERFACE ACTIVITY"); color: textPrimary; font.pixelSize: 13; font.bold: true }
-                    Item { Layout.fillWidth: true }
-                    Label { text: window.tf("diagnostics.interface_activity_count", "%1 EVENTS", [cockpit.interfaceActivity.length]); color: muted; font.pixelSize: UiMetrics.caption }
-                }
-                Label {
-                    text: window.t("diagnostics.interface_activity_help", "What was actually sent to or received from INARA, EDDN and the Frontier Companion API, and when.")
-                    color: textSecondary; font.pixelSize: UiMetrics.caption; wrapMode: Text.WordWrap; Layout.fillWidth: true
-                }
-                ListView {
-                    id: interfaceActivityList
-                    Layout.fillWidth: true; Layout.fillHeight: true
-                    model: cockpit.interfaceActivity
-                    clip: true; spacing: 4
-                    ScrollBar.vertical: CockpitScrollBar {}
-                    delegate: Rectangle {
-                        required property var modelData
-                        width: interfaceActivityList.width; height: 30; radius: 6
-                        color: panelRaised
-                        RowLayout {
-                            anchors.fill: parent; anchors.margins: 8; spacing: 10
-                            Label {
-                                text: modelData.service
-                                color: modelData.service === "INARA" ? cyan
-                                       : modelData.service === "EDDN" ? green : orange
-                                font.pixelSize: UiMetrics.caption; font.bold: true; Layout.preferredWidth: 100
+                    columns: window.narrowWorkspace ? 1 : 2
+                    columnSpacing: 14; rowSpacing: 14
+                    ShadowCard {
+                        objectName: "qa-journal-pipeline"
+                        Layout.preferredWidth: window.compactSidebar ? 360 : 430
+                        Layout.fillWidth: true; Layout.fillHeight: true
+                        implicitHeight: pipelineDetails.implicitHeight + 36
+                        ColumnLayout {
+                            id: pipelineDetails
+                            anchors.fill: parent; anchors.margins: 18; spacing: 10
+                                    Label { text: window.t("diagnostics.journal_pipeline", "JOURNAL PIPELINE"); color: cyan; font.pixelSize: 13; font.bold: true }
+                            Repeater {
+                                model: [
+                                    {"name": window.t("diagnostics.directory", "Directory"), "value": diagnosticsPage.health.directoryExists ? window.t("diagnostics.available", "Available") : window.localizedStatus("MISSING")},
+                                    {"name": window.t("diagnostics.file_count", "Journal files"), "value": diagnosticsPage.health.fileCount},
+                                    {"name": window.t("diagnostics.latest_file", "Latest file"), "value": diagnosticsPage.health.latestFile || window.localizedStatus("NONE")},
+                                    {"name": window.t("diagnostics.age", "Age"), "value": diagnosticsPage.health.ageSeconds >= 0 ? diagnosticsPage.health.ageSeconds + " s" : window.localizedStatus("UNKNOWN")},
+                                    {"name": window.t("diagnostics.file_size", "File size"), "value": Number(diagnosticsPage.health.sizeBytes).toLocaleString(Qt.locale(), "f", 0) + " B"},
+                                    {"name": window.t("diagnostics.parser", "JSON parser"), "value": diagnosticsPage.health.parserOk ? window.t("diagnostics.parser_valid", "Last line valid") : window.t("diagnostics.needs_attention", "Needs attention")},
+                                    {"name": window.t("diagnostics.poll_interval", "Poll interval"), "value": diagnosticsPage.health.pollIntervalMs + " ms"}
+                                ]
+                                delegate: CardSurface {
+                                    required property var modelData
+                                    Layout.fillWidth: true; height: 48; radius: UiMetrics.cardRadius
+                                    color: panelRaised
+                                    RowLayout {
+                                        anchors.fill: parent; anchors.margins: 11
+                                        Label { text: modelData.name; color: muted; font.pixelSize: 11; Layout.minimumWidth: 0; wrapMode: Text.WordWrap }
+                                        Item { Layout.fillWidth: true }
+                                        Label {
+                                            text: modelData.value; color: textPrimary; font.pixelSize: 11; font.bold: true
+                                            elide: Text.ElideLeft; Layout.maximumWidth: 250; Layout.minimumWidth: 0
+                                            ToolTip.visible: fieldHover.hovered && truncated
+                                            ToolTip.text: text
+                                            HoverHandler { id: fieldHover }
+                                        }
+                                    }
+                                }
                             }
-                            Label { text: modelData.direction; color: muted; font.pixelSize: UiMetrics.caption; Layout.preferredWidth: 60 }
-                            Label { text: modelData.summary; color: textPrimary; font.pixelSize: UiMetrics.caption; Layout.preferredWidth: 140; elide: Text.ElideRight }
-                            Label {
-                                text: Qt.formatDateTime(new Date(modelData.timestamp), "dd.MM.yyyy · HH:mm:ss")
-                                color: textSecondary; font.pixelSize: UiMetrics.caption; Layout.preferredWidth: 150
+                            Rectangle { Layout.fillWidth: true; height: 1; color: borderTone }
+                                            Label { text: window.t("diagnostics.service_pipeline", "SERVICE PIPELINE"); color: green; font.pixelSize: 11; font.bold: true }
+                            Repeater {
+                                model: cockpit.serviceStatus
+                                delegate: RowLayout {
+                                    required property var modelData
+                                    Layout.fillWidth: true
+                                    Label { text: modelData.name; color: muted; font.pixelSize: UiMetrics.caption; font.bold: true; Layout.preferredWidth: 110; Layout.minimumWidth: 0; wrapMode: Text.WordWrap }
+                                    Label { text: window.localizedStatus(modelData.status); color: modelData.healthy ? green : orange; font.pixelSize: UiMetrics.caption; font.bold: true; Layout.preferredWidth: 100; Layout.minimumWidth: 0; wrapMode: Text.WordWrap }
+                                    Label { text: modelData.detail; color: textSecondary; font.pixelSize: UiMetrics.caption; wrapMode: Text.WordWrap; Layout.fillWidth: true; Layout.minimumWidth: 0 }
+                                }
                             }
-                            Label { text: modelData.detail; color: muted; font.pixelSize: UiMetrics.caption; elide: Text.ElideRight; Layout.fillWidth: true }
+                            Label {
+                                visible: !!diagnosticsPage.health.error
+                                text: diagnosticsPage.health.error
+                                color: orange; wrapMode: Text.WordWrap; Layout.fillWidth: true
+                            }
+                            Item { Layout.fillHeight: true }
                         }
                     }
-                    EmptyState {
-                        anchors.centerIn: parent
-                        visible: interfaceActivityList.count === 0
-                        symbol: "○"
-                        title: window.t("diagnostics.no_activity", "NO INTERFACE ACTIVITY YET")
-                        detail: window.t("diagnostics.no_activity_help", "Sends and receives will appear here once a service completes one.")
-                        tone: muted
+
+                    ShadowCard {
+                        objectName: "qa-diagnostic-log"
+                        Layout.preferredWidth: window.compactSidebar ? 360 : 430
+                        Layout.fillWidth: true; Layout.fillHeight: true
+                        Layout.minimumHeight: 320
+                        ColumnLayout {
+                            anchors.fill: parent; anchors.margins: 18; spacing: 10
+                            RowLayout {
+                                Layout.fillWidth: true
+                                    Label { text: window.t("diagnostics.local_log", "LOCAL LOG"); color: textPrimary; font.pixelSize: 13; font.bold: true }
+                                Item { Layout.fillWidth: true }
+                                    Label { text: window.tf("diagnostics.lines", "%1 LINES", [cockpit.diagnosticLogs.length]); color: muted; font.pixelSize: UiMetrics.caption }
+                                        CockpitButton { text: window.t("diagnostics.clear_log", "CLEAR LOG"); helpText: window.t("diagnostics.clear_log_help", "Delete the local diagnostic log"); onClicked: cockpit.clearDiagnosticLog() }
+                            }
+                            ListView {
+                                id: diagnosticLogList
+                                Layout.fillWidth: true; Layout.fillHeight: true
+                                model: cockpit.diagnosticLogs
+                                clip: true; spacing: 3
+                                ScrollBar.vertical: CockpitScrollBar {}
+                                delegate: Label {
+                                    required property string modelData
+                                    width: diagnosticLogList.width
+                                    text: modelData
+                                    color: textSecondary; font.family: "Consolas"; font.pixelSize: UiMetrics.caption
+                                    wrapMode: Text.WrapAnywhere
+                                }
+                                onCountChanged: positionViewAtEnd()
+                            }
+                            Rectangle { Layout.fillWidth: true; height: 1; color: borderTone }
+                                            Label { text: window.t("diagnostics.crash_reports", "CRASH REPORTS"); color: orange; font.pixelSize: 11; font.bold: true }
+                            Label {
+                                Layout.fillWidth: true
+                                text: cockpit.crashReports.length
+                                      ? cockpit.crashReports.map(function(row) { return row.name }).join(" · ")
+                                      : window.t("diagnostics.no_crashes", "No captured Python crash reports.")
+                                color: cockpit.crashReports.length ? orange : green
+                                font.pixelSize: UiMetrics.caption; wrapMode: Text.WordWrap
+                            }
+                        }
+                    }
+                }
+
+                ShadowCard {
+                    objectName: "qa-interface-activity"
+                    Layout.fillWidth: true
+                    Layout.preferredHeight: 260
+                    ColumnLayout {
+                        anchors.fill: parent; anchors.margins: 18; spacing: 8
+                        RowLayout {
+                            Layout.fillWidth: true
+                            Label { text: window.t("diagnostics.interface_activity", "INTERFACE ACTIVITY"); color: textPrimary; font.pixelSize: 13; font.bold: true }
+                            Item { Layout.fillWidth: true }
+                            Label { text: window.tf("diagnostics.interface_activity_count", "%1 EVENTS", [cockpit.interfaceActivity.length]); color: muted; font.pixelSize: UiMetrics.caption }
+                        }
+                        Label {
+                            text: window.t("diagnostics.interface_activity_help", "What was actually sent to or received from INARA, EDDN and the Frontier Companion API, and when.")
+                            color: textSecondary; font.pixelSize: UiMetrics.caption; wrapMode: Text.WordWrap; Layout.fillWidth: true
+                        }
+                        ListView {
+                            id: interfaceActivityList
+                            Layout.fillWidth: true; Layout.fillHeight: true
+                            model: cockpit.interfaceActivity
+                            clip: true; spacing: 4
+                            ScrollBar.vertical: CockpitScrollBar {}
+                            delegate: Rectangle {
+                                required property var modelData
+                                width: interfaceActivityList.width; height: 30; radius: 6
+                                color: panelRaised
+                                RowLayout {
+                                    anchors.fill: parent; anchors.margins: 8; spacing: 10
+                                    Label {
+                                        text: modelData.service
+                                        color: modelData.service === "INARA" ? cyan
+                                               : modelData.service === "EDDN" ? green : orange
+                                        font.pixelSize: UiMetrics.caption; font.bold: true; Layout.preferredWidth: 100
+                                    }
+                                    Label { text: modelData.direction; color: muted; font.pixelSize: UiMetrics.caption; Layout.preferredWidth: 60 }
+                                    Label { text: modelData.summary; color: textPrimary; font.pixelSize: UiMetrics.caption; Layout.preferredWidth: 140; elide: Text.ElideRight }
+                                    Label {
+                                        text: Qt.formatDateTime(new Date(modelData.timestamp), "dd.MM.yyyy · HH:mm:ss")
+                                        color: textSecondary; font.pixelSize: UiMetrics.caption; Layout.preferredWidth: 150
+                                    }
+                                    Label { text: modelData.detail; color: muted; font.pixelSize: UiMetrics.caption; elide: Text.ElideRight; Layout.fillWidth: true }
+                                }
+                            }
+                            EmptyState {
+                                anchors.centerIn: parent
+                                visible: interfaceActivityList.count === 0
+                                symbol: "○"
+                                title: window.t("diagnostics.no_activity", "NO INTERFACE ACTIVITY YET")
+                                detail: window.t("diagnostics.no_activity_help", "Sends and receives will appear here once a service completes one.")
+                                tone: muted
+                            }
+                        }
                     }
                 }
             }
@@ -8509,7 +8527,7 @@ ApplicationWindow {
         z: 998
     }
 
-    Rectangle {
+    CardSurface {
         id: feedbackToast
         visible: window.feedbackVisible && cockpit.craftConfirmation.length === 0
         anchors.right: parent.right
@@ -8518,7 +8536,7 @@ ApplicationWindow {
         anchors.bottomMargin: 24
         width: Math.min(520, parent.width - 48)
         height: 66
-        radius: 13
+        radius: UiMetrics.cardRadius
         color: panelRaised
         border.width: 1
         border.color: cyan
@@ -8922,11 +8940,11 @@ ApplicationWindow {
                     ["Ctrl+Shift+J", "Pause or resume automatic Journal updates"],
                     ["F1", "Open this command overview"]
                 ]
-                delegate: Rectangle {
+                delegate: CardSurface {
                     required property var modelData
                     Layout.fillWidth: true
                     Layout.preferredHeight: 48
-                    radius: 9
+                    radius: UiMetrics.cardRadius
                     color: panelRaised
                     border.width: 1
                     border.color: borderTone
@@ -9229,9 +9247,9 @@ ApplicationWindow {
                             {"title": window.t("materials.protected", "PROTECTED"), "value": cockpit.selectedMaterial.protected || 0},
                             {"title": window.t("materials.safe_surplus", "SAFE SURPLUS"), "value": cockpit.selectedMaterial.surplus || 0}
                         ]
-                        delegate: Rectangle {
+                        delegate: CardSurface {
                             required property var modelData
-                            Layout.fillWidth: true; height: 92; radius: 14; color: panelRaised
+                            Layout.fillWidth: true; height: 92; radius: UiMetrics.cardRadius; color: panelRaised
                             ColumnLayout {
                                 anchors.fill: parent; anchors.margins: 16
                                 Label { text: modelData.title; color: muted; font.pixelSize: 12; font.bold: true }
@@ -9255,10 +9273,10 @@ ApplicationWindow {
                                 clip: true
                                 model: cockpit.selectedMaterial.sourceCards || []
                                 spacing: 11
-                                delegate: Rectangle {
+                                delegate: CardSurface {
                                     required property var modelData
                                     width: ListView.view.width; height: 138
-                                    radius: 12; color: panelRaised
+                                    radius: UiMetrics.cardRadius; color: panelRaised
                                     ColumnLayout {
                                         anchors.fill: parent; anchors.margins: 14
                                         spacing: 7
@@ -9341,9 +9359,9 @@ ApplicationWindow {
                                 clip: true
                                 model: cockpit.selectedMaterial.tradeOptions || []
                                 spacing: 11
-                                delegate: Rectangle {
+                                delegate: CardSurface {
                                     required property var modelData
-                                    width: ListView.view.width; height: 130; radius: 12; color: panelRaised
+                                    width: ListView.view.width; height: 130; radius: UiMetrics.cardRadius; color: panelRaised
                                     ColumnLayout {
                                         anchors.fill: parent; anchors.margins: 14
                                         spacing: 7
@@ -9390,9 +9408,9 @@ ApplicationWindow {
                                 clip: true
                                 model: cockpit.selectedMaterial.usedIn || []
                                 spacing: 11
-                                delegate: Rectangle {
+                                delegate: CardSurface {
                                     required property var modelData
-                                    width: ListView.view.width; height: 88; radius: 11; color: panelRaised
+                                    width: ListView.view.width; height: 88; radius: UiMetrics.cardRadius; color: panelRaised
                                     ColumnLayout {
                                         anchors.fill: parent; anchors.margins: 13
                                         Label {

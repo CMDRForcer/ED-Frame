@@ -1,6 +1,8 @@
 # -*- mode: python ; coding: utf-8 -*-
 
 from pathlib import Path
+import os
+import sys
 
 from PyInstaller.utils.win32.versioninfo import (
     FixedFileInfo,
@@ -16,6 +18,21 @@ from ed_companion import APP_VERSION
 
 
 project_root = Path(SPECPATH).resolve()
+# Dependency scanning must not pick up ICU/OpenSSL/CRT DLLs from other apps
+# (for example PDF tools or VR runtimes) in the host's PATH. Keep local and
+# release builds self-contained using the same Python/Windows search roots.
+if sys.platform == "win32":
+    system_root = Path(os.environ.get("SystemRoot", "C:/Windows"))
+    build_search_roots = (
+        Path(sys.executable).parent,
+        Path(sys.base_prefix),
+        Path(sys.base_prefix) / "DLLs",
+        system_root / "System32",
+        system_root,
+    )
+    os.environ["PATH"] = os.pathsep.join(dict.fromkeys(
+        str(path) for path in build_search_roots if path.is_dir()
+    ))
 version_parts = [int(value) for value in APP_VERSION.split(".")]
 version_tuple = tuple((version_parts + [0, 0, 0, 0])[:4])
 version_info = VSVersionInfo(

@@ -27,7 +27,7 @@ class BackgroundWork:
     def lane(name):
         if name.startswith(("journal-", "initial-journal", "surface-nav", "commander-")):
             return "journal"
-        if name.startswith(("mining-route-", "mining-rows-", "commodity-", "station-service",
+        if name.startswith(("mining-route-", "mining-rows-", "commodity-", "trade-routes", "station-service",
                             "shipyard-offer-search", "frontier-", "history-export")):
             return "interactive"
         return "background"

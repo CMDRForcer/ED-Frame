@@ -63,35 +63,55 @@ ColumnLayout {
     WorkspaceHeader {
         appWindow: navPage.appWindow
         eyebrow: appWindow.t("nav.workspace", "NAVIGATION")
-        title: appWindow.t("nav.title", "NAV")
-        subtitle: appWindow.t("nav.subtitle", "Surface navigation and saved coordinates")
-        statusText: appWindow.navCommoditiesOpen ? appWindow.t("commodities.title", "COMMODITIES")
+        title: appWindow.navTradeRoutesOpen ? appWindow.t("trade.title", "TRADE ROUTES")
+            : appWindow.navCommoditiesOpen ? appWindow.t("commodities.title", "COMMODITIES")
+            : appWindow.navStationServicesOpen ? appWindow.t("nav.services.title", "STATION SERVICES") : appWindow.t("nav.title", "NAV")
+        subtitle: appWindow.navTradeRoutesOpen ? appWindow.t("trade.subtitle", "Two stations · outbound and return cargo")
+            : appWindow.navCommoditiesOpen ? appWindow.t("commodities.subtitle", "Stations and carriers · buy or sell from your chosen system")
+            : appWindow.navStationServicesOpen ? appWindow.t("nav.services.subtitle", "Find station services around your current system")
+            : appWindow.t("nav.subtitle", "Surface navigation and saved coordinates")
+        statusText: appWindow.navTradeRoutesOpen ? appWindow.t("trade.title", "TRADE ROUTES") : appWindow.navCommoditiesOpen ? appWindow.t("commodities.title", "COMMODITIES")
                     : appWindow.navStationServicesOpen
                     ? appWindow.t("nav.services.title", "STATION SERVICES")
                     : Object.keys(navPage.position).length > 0
                     ? appWindow.t("nav.position_live", "SURFACE POSITION")
                     : appWindow.t("nav.position_missing", "POSITION UNAVAILABLE")
-        statusTone: appWindow.navStationServicesOpen ? appWindow.accentSecondary
+        statusTone: appWindow.navTradeRoutesOpen || appWindow.navCommoditiesOpen || appWindow.navStationServicesOpen ? appWindow.accent
                     : Object.keys(navPage.position).length > 0 ? appWindow.green : appWindow.orange
     }
 
     RowLayout {
         Layout.fillWidth: true
-        Button {
+        CockpitAction {
+            pictogram: "nav"
             text: appWindow.t("nav.surface", "SURFACE NAV")
-            highlighted: !appWindow.navStationServicesOpen && !appWindow.navCommoditiesOpen
-            onClicked: { appWindow.navStationServicesOpen = false; appWindow.navCommoditiesOpen = false }
+            highlighted: !appWindow.navStationServicesOpen && !appWindow.navCommoditiesOpen && !appWindow.navTradeRoutesOpen
+            onClicked: { appWindow.navStationServicesOpen = false; appWindow.navCommoditiesOpen = false; appWindow.navTradeRoutesOpen = false }
         }
-        Button {
+        CockpitAction {
+            pictogram: "station"
             text: appWindow.t("nav.services.title", "STATION SERVICES")
             highlighted: appWindow.navStationServicesOpen
-            onClicked: { appWindow.navStationServicesOpen = true; appWindow.navCommoditiesOpen = false }
+            onClicked: { appWindow.navStationServicesOpen = true; appWindow.navCommoditiesOpen = false; appWindow.navTradeRoutesOpen = false }
         }
-        Button {
+        CockpitAction {
+            pictogram: "goods"
             text: appWindow.t("commodities.title", "COMMODITIES")
             highlighted: appWindow.navCommoditiesOpen
-            onClicked: { appWindow.navStationServicesOpen = false; appWindow.navCommoditiesOpen = true }
+            onClicked: { appWindow.navStationServicesOpen = false; appWindow.navCommoditiesOpen = true; appWindow.navTradeRoutesOpen = false }
         }
+        CockpitAction {
+            pictogram: "trade"
+            objectName: "tradeRoutesTab"
+            text: appWindow.t("trade.title", "TRADE ROUTES")
+            highlighted: appWindow.navTradeRoutesOpen
+            onClicked: { appWindow.navStationServicesOpen = false; appWindow.navCommoditiesOpen = false; appWindow.navTradeRoutesOpen = true }
+        }
+    }
+    TradeRoutesSection {
+        Layout.fillWidth: true; Layout.fillHeight: true
+        appWindow: navPage.appWindow
+        visible: appWindow.navTradeRoutesOpen
     }
     StationServicesSection {
         Layout.fillWidth: true; Layout.fillHeight: true
@@ -105,21 +125,21 @@ ColumnLayout {
     }
 
     RowLayout {
-        visible: !appWindow.navStationServicesOpen && !appWindow.navCommoditiesOpen
+        visible: !appWindow.navStationServicesOpen && !appWindow.navCommoditiesOpen && !appWindow.navTradeRoutesOpen
         Layout.fillWidth: true
-        Button {
+        CockpitAction {
             text: navOverlaySettings.visible
                   ? appWindow.t("nav.overlay_hide", "HIDE NAV OVERLAY")
                   : appWindow.t("nav.overlay_show", "SHOW NAV OVERLAY")
             onClicked: navOverlaySettings.toggleVisible()
         }
-        Button {
+        CockpitAction {
             text: navOverlaySettings.locked
                   ? appWindow.t("nav.overlay_unlock", "UNLOCK")
                   : appWindow.t("nav.overlay_lock", "LOCK POSITION")
             onClicked: navOverlaySettings.toggleLocked()
         }
-        Button {
+        CockpitAction {
             text: navOverlaySettings.clickThrough
                   ? appWindow.t("nav.overlay_click_off", "CLICK-THROUGH OFF")
                   : appWindow.t("nav.overlay_click_on", "CLICK-THROUGH ON")
@@ -128,7 +148,7 @@ ColumnLayout {
         Item { Layout.fillWidth: true }
     }
     Label {
-        visible: !appWindow.navStationServicesOpen && !appWindow.navCommoditiesOpen
+        visible: !appWindow.navStationServicesOpen && !appWindow.navCommoditiesOpen && !appWindow.navTradeRoutesOpen
         Layout.fillWidth: true
         text: appWindow.t("nav.overlay_hint", "Floating compass for borderless-windowed play. You can also control it from the tray menu.")
         color: appWindow.muted
@@ -191,11 +211,11 @@ ColumnLayout {
             RowLayout {
                 Layout.fillWidth: true
                 Item { Layout.fillWidth: true }
-                Button {
+                CockpitAction {
                     text: appWindow.t("nav.cancel", "CANCEL")
                     onClicked: renameDialog.close()
                 }
-                Button {
+                CockpitAction {
                     text: appWindow.t("nav.save", "SAVE")
                     enabled: !!renameField.text.trim() && renameField.text.length <= 80
                     onClicked: renameDialog.submit()
@@ -206,7 +226,7 @@ ColumnLayout {
 
     ScrollView {
         id: navScroll
-        visible: !appWindow.navStationServicesOpen && !appWindow.navCommoditiesOpen
+        visible: !appWindow.navStationServicesOpen && !appWindow.navCommoditiesOpen && !appWindow.navTradeRoutesOpen
         Layout.fillWidth: true
         Layout.fillHeight: true
         clip: true
@@ -380,7 +400,7 @@ ColumnLayout {
                             Layout.preferredWidth: 140
                             placeholderText: appWindow.t("nav.longitude", "Longitude ±180")
                         }
-                        Button {
+                        CockpitAction {
                             text: appWindow.t("nav.save", "SAVE")
                             onClicked: {
                                 if (cockpit.saveSurfaceTarget(targetName.text, targetLatitude.text, targetLongitude.text)) {
@@ -393,7 +413,7 @@ ColumnLayout {
                     }
                     RowLayout {
                         Layout.fillWidth: true
-                        Button {
+                        CockpitAction {
                             text: appWindow.t("nav.save_here", "SAVE CURRENT POSITION")
                             enabled: !!navPage.position.body
                             onClicked: cockpit.saveCurrentSurfacePosition()
@@ -455,25 +475,25 @@ ColumnLayout {
                                 elide: Text.ElideRight
                             }
                         }
-                        Button {
+                        CockpitAction {
                             text: modelData.id === navPage.nav.activeId
                                   ? appWindow.t("nav.active", "ACTIVE")
                                   : appWindow.t("nav.navigate", "NAVIGATE")
                             enabled: modelData.id !== navPage.nav.activeId
                             onClicked: cockpit.activateSurfaceTarget(modelData.id)
                         }
-                        Button {
+                        CockpitAction {
                             text: appWindow.t("nav.rename", "RENAME")
                             onClicked: renameDialog.edit(modelData)
                         }
-                        Button {
+                        CockpitAction {
                             text: appWindow.t("nav.remove", "REMOVE")
                             onClicked: cockpit.removeSurfaceTarget(modelData.id)
                         }
                     }
                 }
             }
-            Button {
+            CockpitAction {
                 Layout.fillWidth: true
                 Layout.preferredHeight: 42
                 text: (navPage.farmsExpanded ? "▾  " : "▸  ")

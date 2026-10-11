@@ -252,6 +252,7 @@ from .controller_exobiology import ExobiologyMixin
 from .controller_surface_nav import SurfaceNavMixin
 from .controller_station_services import StationServicesMixin
 from .controller_commodities import CommoditiesMixin
+from .controller_trade_routes import TradeRoutesMixin
 from .controller_frontier_capi import FrontierCapiMixin
 from .controller_inara import InaraMixin
 
@@ -343,7 +344,7 @@ SHUTDOWN_PRIORITY_WORKER_PREFIXES = (
 
 class CockpitController(
     CommanderMixin, EddnMixin, EngineeringMixin, ExobiologyMixin,
-    SurfaceNavMixin, StationServicesMixin, CommoditiesMixin,
+    SurfaceNavMixin, StationServicesMixin, CommoditiesMixin, TradeRoutesMixin,
     FleetMaterialsMixin, FrontierCapiMixin, InaraMixin, JournalHealthMixin,
     LogbookMixin, NavigationMixin, UiSettingsMixin, CoreControllerMixin,
     QObject,
@@ -642,6 +643,8 @@ class CockpitController(
         self.stationServicesFinished.connect(self._finish_station_services)
         self.stateChanged.connect(self.commoditiesChanged.emit)
         self.commoditiesFinished.connect(self._finish_commodities)
+        self.stateChanged.connect(self.tradeRoutesChanged.emit)
+        self.tradeRoutesFinished.connect(self._finish_trade_routes)
         self.stateChanged.connect(self._maybe_refresh_regional_state_finds)
         self.hgeChanged.connect(self._invalidate_hge_cache)
         self.operationsChanged.connect(self._invalidate_operations_cache)

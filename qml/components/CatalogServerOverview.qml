@@ -1,6 +1,7 @@
 import QtQuick
 import QtQuick.Controls
 import QtQuick.Layouts
+import "UiMetrics.js" as UiMetrics
 
 ColumnLayout {
     id: overview
@@ -69,20 +70,27 @@ ColumnLayout {
         rowSpacing: 10; columnSpacing: 10
         Repeater {
             model: overview.cards
-            Rectangle {
+            CardSurface {
                 required property var modelData
+                required property int index
+                tone: index === 7 ? overview.warning : overview.accent
                 Layout.fillWidth: true
                 Layout.fillHeight: true
                 Layout.minimumWidth: 0
                 Layout.preferredHeight: tileColumn.implicitHeight + 28
-                radius: 8; color: overview.surface
+                color: overview.surface
                 border.color: Qt.rgba(overview.accent.r, overview.accent.g, overview.accent.b, 0.20)
+                Pictogram {
+                    anchors.right: parent.right; anchors.top: parent.top; anchors.margins: 14
+                    name: ["station", "market", "mining-finder", "engineering", "shipyard", "state-finds", "exploration", "clock", "diagnostics"][parent.index]
+                    tint: parent.tone; width: 26; height: 26
+                }
                 ColumnLayout {
                     id: tileColumn
                     anchors.left: parent.left; anchors.right: parent.right
                     anchors.top: parent.top; anchors.margins: 14
                     spacing: 6
-                    Label { text: modelData.title; color: overview.accent; font.pixelSize: 12; font.bold: true }
+                    Label { Layout.fillWidth: true; Layout.rightMargin: 40; wrapMode: Text.WordWrap; text: modelData.title; color: parent.parent.tone; font.pixelSize: UiMetrics.caption; font.bold: true }
                     Label { text: modelData.value; color: overview.foreground; font.pixelSize: 26; font.bold: true }
                     Label { text: modelData.detail; color: overview.foreground; font.pixelSize: 13; wrapMode: Text.WordWrap; Layout.fillWidth: true }
                     Label { text: modelData.hint; color: overview.secondary; font.pixelSize: 12; wrapMode: Text.WordWrap; Layout.fillWidth: true }
@@ -177,7 +185,7 @@ ColumnLayout {
                 ColumnLayout {
                     required property var modelData
                     Layout.fillWidth: true
-                    Label { text: modelData.label + window.t("connections.catalog_overview_36", " · ") + overview.percent(modelData.key); color: overview.foreground; font.pixelSize: 13 }
+                    Label { Layout.fillWidth: true; wrapMode: Text.WordWrap; text: modelData.label + window.t("connections.catalog_overview_36", " · ") + overview.percent(modelData.key); color: overview.foreground; font.pixelSize: 13 }
                     ProgressBar {
                         id: qualityBar
                         Layout.fillWidth: true; from: 0; to: 100

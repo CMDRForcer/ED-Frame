@@ -167,10 +167,10 @@ class FrontierOAuthCallbackTests(unittest.TestCase):
     def test_runtime_forwards_callbacks_to_the_controller(self):
         source = (ROOT / "phase14_main.py").read_text(encoding="utf-8")
 
-        self.assertIn(
-            "frontier_auth.callbackReceived.connect(\n"
-            "        controller.acceptFrontierOAuthCallback",
+        self.assertRegex(
             source,
+            r"frontier_auth\.callbackReceived\.connect\(\s*"
+            r"controller\.acceptFrontierOAuthCallback\s*,?\s*\)",
         )
 
 

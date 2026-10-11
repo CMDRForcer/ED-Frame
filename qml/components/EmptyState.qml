@@ -6,6 +6,9 @@ import "UiMetrics.js" as UiMetrics
 ColumnLayout {
     id: emptyState
     property string symbol: "◇"
+    property string pictogram: symbol === "✓" ? "check" : symbol === "!" ? "warning"
+        : hostWindow && typeof hostWindow.workspaceIcon === "function"
+          ? hostWindow.workspaceIcon(hostWindow.currentPage) : "info"
     property string title: ""
     property string detail: ""
     property color tone: hostWindow ? hostWindow.accent : "#3bdcff"
@@ -23,12 +26,12 @@ ColumnLayout {
         color: Qt.rgba(emptyState.tone.r, emptyState.tone.g, emptyState.tone.b, 0.10)
         border.width: 1
         border.color: Qt.rgba(emptyState.tone.r, emptyState.tone.g, emptyState.tone.b, 0.42)
-        Label {
+        Pictogram {
             anchors.centerIn: parent
-            text: emptyState.symbol
-            color: emptyState.tone
-            font.pixelSize: emptyState.prominent ? 38 : 21
-            font.bold: true
+            name: emptyState.pictogram
+            tint: emptyState.tone
+            width: emptyState.prominent ? 36 : 23
+            height: width
         }
     }
     Label {

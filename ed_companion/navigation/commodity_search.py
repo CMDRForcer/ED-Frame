@@ -1,4 +1,4 @@
-"""Commodity catalog labels and bounded observed station quotes, no guesses."""
+"""Commodity catalog labels and observed station/carrier quotes, no guesses."""
 import json
 import math
 from datetime import datetime, timezone
@@ -9,35 +9,21 @@ from .state_find_catalog import state_find_region
 from .station_services import describe_station_services
 
 
-# Normal station-market purchases only. Sell-only mining commodities, mission
-# rewards, salvage and other cargo remain in the database for other finders.
+# These trade categories also contain mined and mission-reward commodities.
+# Ordinary stations need not sell them: actual price and stock/demand observations
+# determine offers, including player-run carrier markets.
 STANDARD_MARKET_CATEGORIES = frozenset({
     "Chemicals", "Consumer Items", "Legal Drugs", "Foods", "Industrial Materials",
     "Machinery", "Medicines", "Metals", "Minerals", "Slavery", "Technology",
     "Textiles", "Waste", "Weapons",
 })
-NON_PURCHASABLE_CARGO = frozenset({
-    "hydrogenperoxide", "rockforthfertiliser", "helium", "helium3", "bootlegliquor",
-    "curatedcommodity", "articulationmotors", "modularterminals", "trinketsoffortune",
-    "nanobreakers", "telemetrysuite", "microcontrollers", "diagnosticsensor",
-    "hafnium178", "iridium", "osmium", "platinum", "praseodymium", "samarium",
-    "alexandrite", "bastnasite", "benitoite", "bromellite", "deuterium", "diamond",
-    "grandidierite", "jadeite", "lithiumhydroxide", "lowtemperaturediamond",
-    "magnesite", "methaneclathrate", "methanolmonohydratecrystals", "moissanite",
-    "monazite", "musgravite", "olivine", "painite", "periclasedunite",
-    "quartzpyroxenite", "rhodplumsite", "ruby", "sapphire", "serendibite",
-    "taaffeite", "thortveitite", "opal",
-})
 
 
-def is_standard_market_commodity(symbol, reference):
+def is_trade_commodity(symbol, reference):
     known = reference.get(str(symbol).strip().lower(), {})
     # Rare goods are a positive purchase reference, including rare items whose
     # broad cargo category happens to be Salvage.
-    return bool(known.get("rare") or (
-        known.get("category") in STANDARD_MARKET_CATEGORIES
-        and str(symbol).strip().lower() not in NON_PURCHASABLE_CARGO
-    ))
+    return bool(known.get("rare") or known.get("category") in STANDARD_MARKET_CATEGORIES)
 
 
 @lru_cache(maxsize=1)
@@ -51,6 +37,14 @@ def commodity_reference():
         return {}
 
 
+def commodity_search_region(origin, radius=100):
+    """Keep origin identity even when zero selects a search without a radius."""
+    region = state_find_region(origin, 100 if radius == 0 else radius)
+    if region is not None and radius == 0:
+        region["radiusLy"] = None
+    return region
+
+
 def fetch_commodity_catalog(*, get, timeout=20):
     response = get(EDFRAME_CATALOG_BASE + "/v1/catalog/commodities", timeout=timeout)
     response.raise_for_status()
@@ -61,7 +55,7 @@ def fetch_commodity_catalog(*, get, timeout=20):
     rows = []
     for symbol in sorted({str(s).strip().lower() for s in payload["results"] if isinstance(s, str) and s.strip()}):
         known = reference.get(symbol, {})
-        if not is_standard_market_commodity(symbol, reference):
+        if not is_trade_commodity(symbol, reference):
             continue
         rows.append({"id": symbol, "name": known.get("name") or symbol,
                      "category": "Rare Goods" if known.get("rare") else known["category"],
@@ -70,34 +64,39 @@ def fetch_commodity_catalog(*, get, timeout=20):
 
 
 def fetch_commodity_offers(*, commodity, direction, origin, radius=100, quantity=1,
-                           age_hours=24, pad="ANY", exclude_carriers=True, commodities=None, get, timeout=20):
-    region = state_find_region(origin, radius)
+                           age_hours=24, pad="ANY", exclude_carriers=False, commodities=None,
+                           sort_by="PRICE", get, timeout=20):
+    region = commodity_search_region(origin, radius)
     commodity = str(commodity).strip().lower()
     if (not region or direction not in {"BUY", "SELL"} or pad not in {"ANY", "S", "M", "L"}
             or not 2 <= len(commodity) <= 80 or not 1 <= quantity <= 1000000
-            or not 1 <= age_hours <= 2160):
+            or not 1 <= age_hours <= 2160 or sort_by not in {"PRICE", "DISTANCE", "AGE"}):
         raise MiningMarketError("Invalid commodity search")
     reference = commodity_reference()
     symbols = sorted(set(commodities or [])) if commodity == "all_rare_goods" else [commodity]
     if (not symbols or len(symbols) > 200
-            or any(not isinstance(s, str) or not is_standard_market_commodity(s, reference)
+            or any(not isinstance(s, str) or not is_trade_commodity(s, reference)
                    or (commodity == "all_rare_goods" and not reference.get(s, {}).get("rare")) for s in symbols)):
-        raise MiningMarketError("Commodity is not a normal station-market purchase")
+        raise MiningMarketError("Commodity is not a recognized trade commodity")
     params = dict(zip(("x", "y", "z"), region["origin"]))
-    params.update(commodity=commodity, direction=direction, max_distance=radius,
+    params.update(commodity=commodity, direction=direction, max_distance=region["radiusLy"] or 0,
                   min_quantity=quantity, max_age_hours=age_hours, limit=100,
-                  exclude_fleet_carriers=exclude_carriers)
+                  exclude_fleet_carriers=exclude_carriers, sort_by=sort_by)
     if pad != "ANY":
         params["landing_pad"] = pad
     if commodity == "all_rare_goods":
         params["commodities"] = ",".join(symbols)
     response = get(EDFRAME_CATALOG_BASE + "/v1/markets/commodity-offers", params=params, timeout=timeout)
+    if region["radiusLy"] is None and getattr(response, "status_code", None) == 422:
+        raise MiningMarketError("Unlimited search requires a catalog server update · choose a finite radius")
     response.raise_for_status()
     payload = response.json()
     if (not isinstance(payload, dict) or not isinstance(payload.get("results"), list)
             or payload.get("direction") != direction or payload.get("commodity") != commodity
             or payload.get("region") != region):
         raise MiningMarketError("Server did not confirm commodity search")
+    if payload.get("sortBy", "PRICE") != sort_by:
+        raise MiningMarketError("Server did not confirm sorting · catalog server update required")
     if commodity == "all_rare_goods" and payload.get("commodities") != symbols:
         raise MiningMarketError("Server did not confirm rare goods group")
     price_field, amount_field = ("buyPrice", "stock") if direction == "BUY" else ("sellPrice", "demand")
@@ -117,7 +116,8 @@ def fetch_commodity_offers(*, commodity, direction, origin, radius=100, quantity
         except (KeyError, TypeError, ValueError, OverflowError):
             continue
         if (price <= 0 or amount < quantity or not 0 <= elapsed <= age_hours or not math.isfinite(distance)
-                or not 0 <= distance <= radius or row.get("commodity") not in symbols):
+                or distance < 0 or (region["radiusLy"] is not None and distance > region["radiusLy"])
+                or row.get("commodity") not in symbols):
             continue
         if pad != "ANY" and ranks.get(row.get("landingPadSize"), 0) < ranks[pad]:
             continue
@@ -131,7 +131,7 @@ def fetch_commodity_offers(*, commodity, direction, origin, radius=100, quantity
 def describe_commodity_offers(rows, overview=None, permit_rules=None):
     reference = commodity_reference()
     result = describe_station_services([
-        row for row in rows if is_standard_market_commodity(row.get("commodity"), reference)
+        row for row in rows if is_trade_commodity(row.get("commodity"), reference)
     ], overview, permit_rules)
     for row in result:
         row["commodityName"] = reference.get(row.get("commodity"), {}).get("name") or row.get("commodity", "")

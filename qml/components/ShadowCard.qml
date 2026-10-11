@@ -1,11 +1,12 @@
 import QtQuick
 import QtQuick.Controls
+import "UiMetrics.js" as UiMetrics
 
 Item {
     id: shell
     default property alias content: contentHost.data
     property color accent: "transparent"
-    property real radius: 14
+    property real radius: UiMetrics.cardRadius
     property bool elevated: true
     readonly property var hostWindow: ApplicationWindow.window
 
@@ -30,11 +31,12 @@ Item {
         border.width: 1
         border.color: Qt.rgba(shell.accent.r, shell.accent.g, shell.accent.b, 0.16)
     }
-    Rectangle {
+    CardSurface {
         anchors.fill: parent
         anchors.rightMargin: 2
         anchors.bottomMargin: 4
         radius: shell.radius
+        tone: shell.accent
         color: shell.hostWindow ? shell.hostWindow.panel : "#102033"
         border.width: 1
         border.color: shell.hostWindow ? shell.hostWindow.borderTone : "#294560"

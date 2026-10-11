@@ -65,6 +65,7 @@ from PySide6.QtNetwork import QLocalServer, QLocalSocket
 from PySide6.QtWidgets import QApplication, QMenu, QStyle, QSystemTrayIcon
 
 from ed_companion import APP_VERSION
+from ed_companion.qml_startup import QmlStartup
 
 from ed_companion.phase14 import CockpitController
 from ed_companion.overlay import OverlaySettings, OverlayWindowRuntime
@@ -946,7 +947,6 @@ def run():
     frontier_auth = FrontierOAuthCallbackRuntime(
         initial_oauth_callback, parent=app
     )
-    app.aboutToQuit.connect(controller.shutdown)
     engine = QQmlApplicationEngine()
     engine.rootContext().setContextProperty("cockpit", controller)
     engine.rootContext().setContextProperty("overlaySettings", overlay_settings)
@@ -969,142 +969,177 @@ def run():
     engine.rootContext().setContextProperty(
         "previewCmdrSection", preview_cmdr_section
     )
-    qml = Path(__file__).resolve().parent / "Main.qml"
-    engine.load(QUrl.fromLocalFile(str(qml)))
-    if not engine.rootObjects():
-        return 2
-    window = engine.rootObjects()[0]
-    overlay_qml = Path(__file__).resolve().parent / "qml" / "Overlay.qml"
-    engine.load(QUrl.fromLocalFile(str(overlay_qml)))
-    overlay_window = next((
-        root for root in engine.rootObjects()
-        if root.objectName() == "engineering-overlay-window"
-    ), None)
-    if overlay_window is None:
-        return 2
-    overlay_runtime = OverlayWindowRuntime(
-        overlay_window, overlay_settings, parent=app
-    )
-    nav_overlay_qml = Path(__file__).resolve().parent / "qml" / "NavOverlay.qml"
-    engine.load(QUrl.fromLocalFile(str(nav_overlay_qml)))
-    nav_overlay_window = next((
-        root for root in engine.rootObjects()
-        if root.objectName() == "nav-overlay-window"
-    ), None)
-    if nav_overlay_window is None:
-        return 2
-    nav_overlay_runtime = OverlayWindowRuntime(
-        nav_overlay_window, nav_overlay_settings, parent=app,
-        fallback_size=(360, 250),
-    )
-    tray_runtime = TrayRuntime(
-        app, window, controller, overlay_settings, nav_overlay_settings,
-    )
-    single_instance.activationRequested.connect(tray_runtime.show_window)
+    runtime = {}
+
+    def activate_window():
+        tray = runtime.get("tray")
+        if tray is None:
+            runtime["activate_after_startup"] = True
+        else:
+            tray.show_window()
+
+    # The event loop now runs during QML compilation. Keep activations and
+    # OAuth callbacks received before the windows are ready.
+    single_instance.activationRequested.connect(activate_window)
     single_instance.oauthCallbackReceived.connect(frontier_auth.accept)
-    frontier_auth.callbackReceived.connect(
-        controller.acceptFrontierOAuthCallback
-    )
-    pending_frontier_callback = frontier_auth.take()
-    if pending_frontier_callback:
-        QTimer.singleShot(
-            0,
-            lambda callback=pending_frontier_callback:
-                controller.acceptFrontierOAuthCallback(callback),
+
+    def initialize_windows(roots):
+        window = roots[0]
+        overlay_window = next((
+            root for root in roots
+            if root.objectName() == "engineering-overlay-window"
+        ), None)
+        if overlay_window is None:
+            app.exit(2)
+            return
+        overlay_runtime = OverlayWindowRuntime(
+            overlay_window, overlay_settings, parent=app
         )
-    controller.exitRequested.connect(tray_runtime.exit_app)
-    controller.restartRequested.connect(tray_runtime.restart_app)
-    if "--background" in sys.argv and tray_runtime.enabled():
-        window.hide()
-    preview_width = os.environ.get("PHASE14_PREVIEW_WIDTH")
-    preview_height = os.environ.get("PHASE14_PREVIEW_HEIGHT")
-    try:
-        if preview_width:
-            window.setWidth(int(preview_width))
-        if preview_height:
-            window.setHeight(int(preview_height))
-    except ValueError:
-        pass
-    preview_page = os.environ.get("PHASE14_PREVIEW_PAGE")
-    if preview_page is not None:
-        try:
-            selected_preview_page = int(preview_page)
-            window.setProperty("currentPage", selected_preview_page)
-            # Journal bootstrap may restore the persisted page shortly after
-            # the QML root appears. Reassert explicit preview intent before a
-            # scheduled screenshot so documentation captures stay stable.
+        nav_overlay_window = next((
+            root for root in roots
+            if root.objectName() == "nav-overlay-window"
+        ), None)
+        if nav_overlay_window is None:
+            app.exit(2)
+            return
+        nav_overlay_runtime = OverlayWindowRuntime(
+            nav_overlay_window, nav_overlay_settings, parent=app,
+            fallback_size=(360, 250),
+        )
+        tray_runtime = TrayRuntime(
+            app, window, controller, overlay_settings, nav_overlay_settings,
+        )
+        frontier_auth.callbackReceived.connect(
+            controller.acceptFrontierOAuthCallback
+        )
+        pending_frontier_callback = frontier_auth.take()
+        if pending_frontier_callback:
             QTimer.singleShot(
-                500,
-                lambda page=selected_preview_page: window.setProperty(
-                    "currentPage", page
-                ),
+                0,
+                lambda callback=pending_frontier_callback:
+                    controller.acceptFrontierOAuthCallback(callback),
             )
-        except ValueError:
-            pass
-    preview_language = os.environ.get("PHASE14_PREVIEW_LANGUAGE")
-    if preview_language:
-        controller.setInterfaceLanguage(preview_language)
-    preview_theme = os.environ.get("PHASE14_PREVIEW_THEME")
-    if preview_theme:
-        controller.setTheme(preview_theme)
-    preview_cmdr_period = os.environ.get("PHASE14_PREVIEW_CMDR_PERIOD")
-    if preview_cmdr_period:
-        controller.setCommanderFinancePeriod(preview_cmdr_period)
-    preview_connection = os.environ.get("PHASE14_PREVIEW_CONNECTION")
-    if preview_connection is not None:
+        controller.exitRequested.connect(tray_runtime.exit_app)
+        controller.restartRequested.connect(tray_runtime.restart_app)
+        preview_width = os.environ.get("PHASE14_PREVIEW_WIDTH")
+        preview_height = os.environ.get("PHASE14_PREVIEW_HEIGHT")
         try:
-            window.setProperty(
-                "connectionPreviewMode", int(preview_connection)
-            )
+            if preview_width:
+                window.setWidth(int(preview_width))
+            if preview_height:
+                window.setHeight(int(preview_height))
         except ValueError:
             pass
-    preview_engineers_mode = os.environ.get("PHASE14_PREVIEW_ENGINEERS_MODE")
-    if preview_engineers_mode is not None:
-        try:
-            window.setProperty("previewEngineersMode", int(preview_engineers_mode))
-        except ValueError:
-            pass
-    preview_material = os.environ.get("PHASE14_PREVIEW_MATERIAL")
-    if preview_material:
-        controller.selectMaterial(preview_material)
-    preview_blueprint = os.environ.get("PHASE14_PREVIEW_BLUEPRINT")
-    if preview_blueprint:
-        controller.selectBlueprint(preview_blueprint)
-    preview_module_slot = os.environ.get("PHASE14_PREVIEW_MODULE_SLOT")
-    if preview_blueprint and preview_module_slot:
-        def select_preview_module():
+        preview_page = os.environ.get("PHASE14_PREVIEW_PAGE")
+        if preview_page is not None:
+            try:
+                selected_preview_page = int(preview_page)
+                window.setProperty("currentPage", selected_preview_page)
+                # Journal bootstrap may restore the persisted page shortly after
+                # the QML root appears. Reassert explicit preview intent before a
+                # scheduled screenshot so documentation captures stay stable.
+                QTimer.singleShot(
+                    500,
+                    lambda page=selected_preview_page: window.setProperty(
+                        "currentPage", page
+                    ),
+                )
+            except ValueError:
+                pass
+        preview_language = os.environ.get("PHASE14_PREVIEW_LANGUAGE")
+        if preview_language:
+            controller.setInterfaceLanguage(preview_language)
+        preview_theme = os.environ.get("PHASE14_PREVIEW_THEME")
+        if preview_theme:
+            controller.setTheme(preview_theme)
+        preview_cmdr_period = os.environ.get("PHASE14_PREVIEW_CMDR_PERIOD")
+        if preview_cmdr_period:
+            controller.setCommanderFinancePeriod(preview_cmdr_period)
+        preview_connection = os.environ.get("PHASE14_PREVIEW_CONNECTION")
+        if preview_connection is not None:
+            try:
+                window.setProperty(
+                    "connectionPreviewMode", int(preview_connection)
+                )
+            except ValueError:
+                pass
+        preview_engineers_mode = os.environ.get("PHASE14_PREVIEW_ENGINEERS_MODE")
+        if preview_engineers_mode is not None:
+            try:
+                window.setProperty("previewEngineersMode", int(preview_engineers_mode))
+            except ValueError:
+                pass
+        preview_material = os.environ.get("PHASE14_PREVIEW_MATERIAL")
+        if preview_material:
+            controller.selectMaterial(preview_material)
+        preview_blueprint = os.environ.get("PHASE14_PREVIEW_BLUEPRINT")
+        if preview_blueprint:
             controller.selectBlueprint(preview_blueprint)
-            controller.setSelectedModuleSlot(preview_module_slot)
-        QTimer.singleShot(500, select_preview_module)
-    preview_plan_mode = os.environ.get("PHASE14_PREVIEW_PLAN_MODE")
-    if preview_plan_mode:
-        def select_preview_plan_mode():
-            controller.setPlanMode(preview_plan_mode)
-            if os.environ.get("PHASE14_PREVIEW_EXPERIMENTAL") == "first":
-                rows = controller._selected_blueprint.get("experimentals", [])
-                if rows:
-                    controller.setSelectedExperimental(rows[0].get("id", ""))
-        QTimer.singleShot(600, select_preview_plan_mode)
-    screenshot = os.environ.get("PHASE14_SCREENSHOT")
-    smoke_runner = None
-    if smoke_test:
-        smoke_runner = SmokeTestRunner(
-            app, window, smoke_messages, screenshot=screenshot,
-            overlay_window=overlay_window, nav_overlay_window=nav_overlay_window,
-            controller=controller, parent=app,
-            flush_pending_qt_diagnostics=flush_pending_qt_diagnostics,
-        )
-        smoke_runner.start()
-    elif screenshot:
-        def capture():
-            app.exit(0 if window.grabWindow().save(screenshot) else 1)
-        try:
-            screenshot_delay = max(
-                200, min(15000, int(os.environ.get("PHASE14_SCREENSHOT_DELAY_MS", "800")))
+        preview_module_slot = os.environ.get("PHASE14_PREVIEW_MODULE_SLOT")
+        if preview_blueprint and preview_module_slot:
+            def select_preview_module():
+                controller.selectBlueprint(preview_blueprint)
+                controller.setSelectedModuleSlot(preview_module_slot)
+            QTimer.singleShot(500, select_preview_module)
+        preview_plan_mode = os.environ.get("PHASE14_PREVIEW_PLAN_MODE")
+        if preview_plan_mode:
+            def select_preview_plan_mode():
+                controller.setPlanMode(preview_plan_mode)
+                if os.environ.get("PHASE14_PREVIEW_EXPERIMENTAL") == "first":
+                    rows = controller._selected_blueprint.get("experimentals", [])
+                    if rows:
+                        controller.setSelectedExperimental(rows[0].get("id", ""))
+            QTimer.singleShot(600, select_preview_plan_mode)
+        screenshot = os.environ.get("PHASE14_SCREENSHOT")
+        smoke_runner = None
+        if smoke_test:
+            smoke_runner = SmokeTestRunner(
+                app, window, smoke_messages, screenshot=screenshot,
+                overlay_window=overlay_window, nav_overlay_window=nav_overlay_window,
+                controller=controller, parent=app,
+                flush_pending_qt_diagnostics=flush_pending_qt_diagnostics,
             )
-        except ValueError:
-            screenshot_delay = 800
-        QTimer.singleShot(screenshot_delay, capture)
+            smoke_runner.start()
+        elif screenshot:
+            def capture():
+                app.exit(0 if window.grabWindow().save(screenshot) else 1)
+            try:
+                screenshot_delay = max(
+                    200, min(15000, int(os.environ.get("PHASE14_SCREENSHOT_DELAY_MS", "800")))
+                )
+            except ValueError:
+                screenshot_delay = 800
+            QTimer.singleShot(screenshot_delay, capture)
+        runtime.update(
+            tray=tray_runtime, overlay=overlay_runtime,
+            nav_overlay=nav_overlay_runtime, smoke=smoke_runner,
+        )
+        if (runtime.get("activate_after_startup")
+                or not ("--background" in sys.argv and tray_runtime.enabled())):
+            window.show()
+
+    def finish_startup(roots):
+        try:
+            initialize_windows(roots)
+        except Exception:
+            traceback.print_exc()
+            app.exit(2)
+
+    def fail_startup(message):
+        print(redact_secrets(message), file=sys.stderr)
+        app.exit(2)
+
+    package_root = Path(__file__).resolve().parent
+    startup = QmlStartup(engine, [
+        QUrl.fromLocalFile(str(package_root / "Main.qml")),
+        QUrl.fromLocalFile(str(package_root / "qml" / "Overlay.qml")),
+        QUrl.fromLocalFile(str(package_root / "qml" / "NavOverlay.qml")),
+    ], parent=app)
+    startup.ready.connect(finish_startup)
+    startup.failed.connect(fail_startup)
+    app.aboutToQuit.connect(startup.cancel)
+    app.aboutToQuit.connect(controller.shutdown)
+    QTimer.singleShot(0, startup.start)
     exit_code = app.exec()
     # Qt invalidates context properties while tearing down the engine. Those
     # expected post-event-loop binding reevaluations are not runtime errors and
@@ -1112,14 +1147,15 @@ def run():
     qInstallMessageHandler(lambda _mode, _context, _message: None)
     # Destroy QML roots while the context controller is still alive. This
     # prevents shutdown-time bindings from observing a null context property.
-    for root in engine.rootObjects():
+    for root in startup.roots:
         root.setVisible(False)
         root.deleteLater()
     app.processEvents()
     engine.clearComponentCache()
     single_instance.server.close()
     QLocalServer.removeServer(SINGLE_INSTANCE_NAME)
-    if tray_runtime.restart_requested:
+    tray_runtime = runtime.get("tray")
+    if tray_runtime is not None and tray_runtime.restart_requested:
         if getattr(sys, "frozen", False):
             QProcess.startDetached(sys.executable, sys.argv[1:])
         else:

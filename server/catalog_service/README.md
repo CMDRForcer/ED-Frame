@@ -382,17 +382,80 @@ metadata, not guaranteed commander-specific access or trader/broker subtypes.
 `GET /v1/catalog/commodities` lists every symbol currently present in `markets`,
 including rare/new/special commodities. An indexed recursive walk avoids a
 full-table DISTINCT over millions of rows. Names/categories are a small client
-reference. The normal trading UI filters out unknown, salvage, nonmarketable,
-mission-reward and mining-only cargo. Rare purchases have their own category.
+reference. The trading UI includes known trade categories, including mined
+and mission-reward commodities traded on carriers. Unknown, nonmarketable and
+ordinary salvage cargo remain excluded. Rare purchases have their own category.
 The complete API/database inventory is retained for other consumers.
 
 `GET /v1/markets/commodity-offers` requires `commodity`, `direction=BUY|SELL`
 and `x/y/z`. BUY uses `buy_price/stock` ascending; SELL uses
 `sell_price/demand` descending. Nonpositive prices and insufficient quantities
 are excluded; there is no mean-price or reference-price fallback.
-`max_distance` defaults to 100 LY (max 2000), `min_quantity` to 1 (max 1M),
+`sort_by=PRICE|DISTANCE|AGE` defaults to PRICE. DISTANCE ranks nearest first;
+AGE ranks the most recent observation first. SQL sorts all eligible rows
+before the result limit; responses echo `sortBy`. Ties use price, distance,
+arrival distance and market ID as applicable.
+`max_distance` defaults to 100 LY (max 2000); **0 means unlimited** across all
+catalogued markets with known system coordinates. Unlimited responses confirm
+`region.radiusLy: null` while retaining the requested origin and each offer's
+distance. These searches run in a read-only transaction with a 10-second SQL
+timeout and 2-second lock timeout; a timed-out search returns HTTP 503.
+`min_quantity` defaults to 1 (max 1M),
 `max_age_hours` to 24 (max 2160). Pad compatibility and carrier exclusion
 follow the station-services endpoint. Up to 200 rows (`hasMore`), with region,
 timestamp, source, access metadata and all raw price/quantity fields.
 The app requests at most 100 rows manually. No new tables, history retention,
 background commodity polling or third-party live market requests are added.
+The start system can be entered manually or follow the Journal. Exact names
+resolve through `/v1/systems/suggest` inside the search worker, on an explicit
+search only; repeated searches reuse the last resolved origin for one hour.
+Manual origins remain valid when the Commander moves. Displayed filter
+summaries describe the completed request, not later edits to the controls.
+Existing positive radii retain their filters and response contract. An older
+server rejects radius 0; the app explains that a server update is required and
+retains previous results. It never silently substitutes a smaller radius.
+
+### Regional trading round trips
+
+`GET /v1/markets/trade-routes` proposes **A → B → A**, with a profitable
+outbound commodity and a separately chosen return commodity. Each leg uses
+observed buy/sell prices and positive stock/demand. Quantity is bounded by
+cargo capacity, stock, demand and the cash available at that point. Return
+cash includes profit from the outbound sale. Reference prices and unknown
+quantities never become executable offers.
+
+Parameters: `x/y/z`, `max_distance` (station A radius, default 50 LY),
+`max_leg_distance` (A–B, default 100 LY), `cargo_tonnes` (default 100),
+`budget_cr` (default 10M), `max_age_hours` (default 24), `landing_pad`,
+`exclude_fleet_carriers` (default false), `commodity` (outbound; default ALL),
+`sort_by=PROFIT|UNIT_PROFIT|DISTANCE`, `refresh` and `limit` (default 30,
+maximum 50). Both distance limits are positive and at most 500 LY; there is
+no unlimited round-trip search. Age is at most 168 hours. UNIT_PROFIT ranks
+the combined price spread per tonne; each leg can have a different quantity.
+
+The response echoes all filters and reports market coverage. Up to 320 nearby
+markets and 80 starting markets are examined, including every usable quote
+at those markets, before ranking complete loops. `coverage.sampled` explicitly
+identifies a regional selection; results do not claim a galaxy-wide optimum.
+No more than 120,000 quotes are accepted, and oversized snapshots fail with
+503 instead of silently truncating commodity prices. SQL is read-only, with
+10-second statement and 2-second lock timeouts; calculation has a 5-second
+deadline. An advisory transaction lock coordinates route calculations across
+API workers. Each worker caches eight searches for 60 seconds; `refresh=true`
+bypasses the cache, and `generatedAt` retains the actual snapshot timestamp.
+
+The app runs an explicit search through its existing bounded network worker,
+then publishes one completed snapshot. Editing filters does not query the
+server. Refresh reuses the last completed search. Manual origins survive
+Journal movement; stale profile/location completions are discarded. The app
+rechecks both legs' quantities, budgets, distances and totals before display.
+Known access issues and prohibited goods are flagged; carrier docking access
+can remain unknown. There are no new tables, background route polls or live
+third-party market requests. Cargo and purchase budget are explicit search
+parameters; Commander identity, full balance records and Journal files are
+not sent.
+
+`ops/verify-trade-routes-readonly.py` benchmarks the route service without
+running FastAPI lifespan or schema setup. Run it only in an approved isolated
+image/container with read-only transaction defaults and the deployment's
+database environment. It prints aggregate timing/coverage, not credentials.

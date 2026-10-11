@@ -1,6 +1,6 @@
 # ED-Frame 1.0 — Einstieg und Funktionen
 
-Aktualisiert für App **1.0.8** und den laufenden Katalogserver **0.9.4**.
+Aktualisiert für App **1.0.9** und den laufenden Katalogserver **0.9.4**.
 
 ED-Frame ist eine kostenlose Windows-Begleitapp für Elite Dangerous mit offenem Quellcode. Dein lokales Journal liefert die Commander-Daten. Unser eigener Community-Server ergänzt sie um gemeinsam gesammelte öffentliche Beobachtungen der Galaxie.
 
@@ -25,7 +25,8 @@ Voraussetzung ist Windows 10 oder 11. Einstellungen, Zugangsdaten, Baupläne und
 - **MiningFinder:** Rohstoff, Methode, Startsystem und Radius wählen. Fundortbelege, Preis, Nachfrage, Marktalter und Landeplatz vergleichen. Acquire-, Reinforce- und Undermine-Routen planen.
 - **Gemessener Mining-Ertrag:** Prospector- und Raffineriebeobachtungen von Hotspotmeldungen und Ringtyp-Schätzungen unterscheiden. Eine Stichprobe garantiert keinen späteren Ertrag.
 - **Modul- und Schiffssuche:** beobachtete Stationsangebote und Preise finden; Modulkompatibilität mit deinem aktuellen Schiff und Modulplatz prüfen. Beobachtete und abgeleitete Preise bleiben unterscheidbar.
-- **Warensuche:** BUY zeigt Stationsbestand, SELL die Nachfrage. Marktalter, Menge, Landeplatz und Entfernung filtern.
+- **Warensuche:** BUY zeigt Stations-/Carrier-Bestand, SELL die Nachfrage. Ausgangssystem manuell wählen; Marktalter, Menge, Landeplatz und Entfernung filtern oder einen unbegrenzten Radius verwenden. Carrier sind standardmäßig dabei. Unbegrenzte Suchen zeigen bis zu 100 Angebote in der gewählten Reihenfolge.
+- **Handelsrouten:** A → B → A mit Hin- und Rückfracht, Einkaufskosten, geschätztem Gewinn, Preisalter und Entfernung vergleichen. Frachtlimit, Startbudget und Marktzugang einstellen; nach Gesamtgewinn, kombinierter Spanne/T oder Entfernung sortieren. Ziele kopieren und Preise bei Bedarf erneut prüfen. NAV-Eingaben bleiben bei Seitenwechseln innerhalb der Sitzung erhalten.
 - **Stationsdienste:** in Nav nahe Stationen mit dem gesuchten beobachteten Dienst finden.
 - **State Finds und HGE:** Meldungen und verbleibende Signallebensdauer vergleichen. BGS-Prognosen bleiben gesondert gekennzeichnet.
 - **Powerplay:** Loyalität, Rang, Merits und ausdrücklich beobachtete Systemkontrolle prüfen.
@@ -35,7 +36,7 @@ Voraussetzung ist Windows 10 oder 11. Einstellungen, Zugangsdaten, Baupläne und
 - **Exobiologie:** Untersuchungsziele, Probenabstände, abgeschlossene Spezies und beobachtete Einnahmen verfolgen.
 - **Oberflächennavigation:** planetare Wegpunkte speichern und per Kompass oder separatem Overlay ansteuern. Live-Führung braucht Koordinaten und Blickrichtung aus Elite; Oberflächenentfernung zusätzlich den Planetenradius.
 - **Logbuch:** Flugereignisse durchsuchen und eigene lokale Notizen führen.
-- **Darstellung:** sechs Themes, vier Oberflächensprachen, Skalierung, Overlays und Diagnosefunktionen.
+- **Darstellung:** sechs Themes und vier Oberflächensprachen mit gemeinsamen Piktogrammen, Karten und Bedienelementen. Skalierung, Overlays und Diagnosefunktionen einstellen; QML lädt beim Start asynchron.
 
 ## Unser eigener Community-Server
 
@@ -45,9 +46,11 @@ Der Server verarbeitet laufend unterstützte öffentliche EDDN-Beobachtungen. Er
 
 Powerplay-Bestätigungen verwenden bis zu 48 Stunden alte Beobachtungen, unabhängig vom Marktalter-Filter. Geeignete ältere Angaben bis 14 Tage erscheinen mit Originaldatum als **zuletzt bekannt / im Spiel prüfen**; sie zählen nicht als bestätigte Merits. Ausdrücklich unbesetzte Systeme können als Acquire-Ziel dienen, auch ohne Präsenzzeile der gewählten Macht. Fehlende Belege bleiben unbekannt.
 
-App **1.0.8** ergänzt passende Märkte und Ringe, die regionale Toplisten übergehen, mit gebündelten System-/Rohstoffabfragen. Powerplay-Seiten filtern vor der Seitengrenze nach deiner Macht und deinem Ziel. Gezielte öffentliche Spansh-Prüfungen können fehlende Kontrolle ergänzen; Systemidentität, ursprüngliche Quellenzeiten und neuere EDDN-Belege behalten Vorrang. Der Community-Schalter steuert diese Abfragen. Schwere Mining-, Journal- und Powerplay-Vorbereitung läuft in begrenzten Hintergrundprozessen; die Parallelität richtet sich nach verfügbarer CPU und RAM. Große kalte Suchen können weiterhin Zeit benötigen.
+App **1.0.9** ergänzt passende Märkte und Ringe, die regionale Toplisten übergehen, mit gebündelten System-/Rohstoffabfragen. Powerplay-Seiten filtern vor der Seitengrenze nach deiner Macht und deinem Ziel. Gezielte öffentliche Spansh-Prüfungen können fehlende Kontrolle ergänzen; Systemidentität, ursprüngliche Quellenzeiten und neuere EDDN-Belege behalten Vorrang. Der Community-Schalter steuert diese Abfragen. Schwere Mining-, Journal- und Powerplay-Vorbereitung läuft in begrenzten Hintergrundprozessen; die Parallelität richtet sich nach verfügbarer CPU und RAM. Große kalte Suchen können weiterhin Zeit benötigen.
 
 Der laufende Server **0.9.4** aktualisiert die gemeinsame Bestandsstatistik ungefähr alle fünf Minuten im Hintergrund. Der Collector-Status bleibt live. Vorhandene App-Installationen 1.0.8 profitieren ohne Neuinstallation.
+
+Handelsrouten verwenden eine begrenzte regionale Marktauswahl; die Abdeckung wird im Ergebnis angezeigt. Sie versprechen kein Optimum über sämtliche Galaxiemärkte. Frachtlimit, Startbudget, Bestand und Nachfrage begrenzen beide Strecken. Die Rückfracht kann den Erlös aus dem ersten Verkauf verwenden. Die kombinierte Spanne/T addiert beide Preisunterschiede und entspricht bei unterschiedlichen Mengen nicht zwingend Gesamtgewinn/Frachtlimit. Preisprüfungen laufen auf Wunsch, nicht ständig im Hintergrund.
 
 Bereits gespeicherte Beobachtungen bleiben bei Ausfall oder Abschaltung eines Dienstes lokal nutzbar. Der SQLite-Ringspeicher liest die relevante Region und erhält ursprüngliche Beobachtungen sowie deren Historie. Offline kommen keine bislang unbekannten Live-Meldungen hinzu.
 

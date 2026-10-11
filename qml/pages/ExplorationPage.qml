@@ -206,10 +206,10 @@ ColumnLayout {
                 }
                 Rectangle { Layout.fillWidth: true; height: 1; color: borderTone }
 
-                Rectangle {
+                CardSurface {
                     Layout.fillWidth: true
                     Layout.preferredHeight: 54
-                    radius: 9
+                    radius: UiMetrics.cardRadius
                     color: selectedSystemId === "" ? inputBackground : panelRaised
                     border.width: selectedSystemId === "" ? 1.5 : 1
                     border.color: selectedSystemId === "" ? cyan : borderTone
@@ -257,12 +257,12 @@ ColumnLayout {
                         spacing: 7
                         Repeater {
                             model: systems
-                            delegate: Rectangle {
+                            delegate: CardSurface {
                                 id: systemRow
                                 required property var modelData
                                 Layout.fillWidth: true
                                 implicitHeight: systemColumn.implicitHeight + 20
-                                radius: 9
+                                radius: UiMetrics.cardRadius
                                 color: selectedSystemId === modelData.id ? inputBackground : panelRaised
                                 border.width: selectedSystemId === modelData.id ? 1.5 : 1
                                 border.color: selectedSystemId === modelData.id ? cyan : borderTone
@@ -364,12 +364,12 @@ ColumnLayout {
                         spacing: 8
                         Repeater {
                             model: displayedFindings
-                            delegate: Rectangle {
+                            delegate: CardSurface {
                                 id: findingRow
                                 required property var modelData
                                 Layout.fillWidth: true
                                 implicitHeight: findingContent.implicitHeight + 22
-                                radius: 10
+                                radius: UiMetrics.cardRadius
                                 color: panelRaised
                                 border.width: modelData.highValue ? 1.6 : 1
                                 border.color: modelData.highValue ? orange : borderTone

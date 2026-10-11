@@ -12,7 +12,7 @@ A free, open-source Windows companion for **Elite Dangerous**, bringing your loc
 
 [**Download for Windows**](https://github.com/CMDRForcer/ED-Frame/releases/latest) · [English guide](docs/ED-Frame-1.0-Guide-EN.md) · [Deutsche Anleitung](docs/ED-Frame-1.0-Guide-DE.md)
 
-**App 1.0.8** · **Own community server** · **EN / DE / ES / FR** · **Six themes**
+**App 1.0.9** · **Own community server** · **EN / DE / ES / FR** · **Six themes**
 
 </div>
 
@@ -28,7 +28,7 @@ It follows your actual ships and module slots, remembers your plans between sess
 
 | Build your fleet | Find your next run | Follow your discoveries |
 | :---: | :---: | :---: |
-| [Engineering & materials](#build-the-ship-you-want-to-fly) | [Mining & Powerplay](#find-your-next-mining-run) | [Exploration & exobiology](#turn-biological-signals-into-a-landing-plan) |
+| [Engineering & materials](#build-the-ship-you-want-to-fly) | [Mining & Powerplay](#find-your-next-mining-run) · [Trade routes](#make-the-return-trip-count) | [Exploration & exobiology](#turn-biological-signals-into-a-landing-plan) |
 
 *Screenshots show the current app with a synthetic Commander profile and example observations. Prices, routes and server counters illustrate the interface; they are not live recommendations.*
 
@@ -59,6 +59,20 @@ The recommended route puts the **mining site and sale destination side by side**
 - Check your ship's mining loadout and copy the mining or sale destination directly.
 
 Current facts, last-known suggestions and missing evidence remain distinguishable. Observed yield samples help you compare sites; they don't promise a particular haul or merit payout.
+
+## Make the return trip count
+
+**Two stations. Useful cargo in both directions.** NAV's new **Trading Routes** finder compares A → B → A loops with separate outbound and return cargo, estimated profit, travel distance and the oldest price observation.
+
+![Trading Routes showing the selected loop, both cargo legs, estimated profit and alternatives](docs/images/ed-frame-trading.png)
+
+Set your cargo capacity, starting budget, origin, radius and station access. Compare total profit, combined margin per tonne or distance; copy a destination and recheck prices before departing. Coverage is shown: suggestions come from a regional selection of observed markets.
+
+**Looking for a particular commodity?** Commodity Finder now includes Carrier offers by default and more goods, including Lithium Hydroxide and Bromellite. Choose a manual starting system, filter by stock or demand and expand the radius to **Unlimited** when needed.
+
+![Commodity Finder with a manually selected origin, Carrier offers and labelled price, stock, distance and observation age](docs/images/ed-frame-goods.png)
+
+An unlimited search returns up to 100 offers in your chosen order. NAV keeps your search inputs when you switch workspaces within the session.
 
 ## See what your sessions are earning
 
@@ -101,7 +115,7 @@ Choose **six themes** and **four interface languages**: English, German, Spanish
 
 ![Settings showing Arctic Alloy, the six available themes, language choice and interface controls](docs/images/ed-frame-themes.png)
 
-Dark and light options include **Orbital Dawn, Navy, Neon Vector, Arctic Alloy, Crimson Dark and Crimson Light**. Profiles, overlays and Windows tray behavior can be configured from the same workspace.
+Coordinated cards, pictograms and action buttons bring the workspaces together. Dark and light options include **Orbital Dawn, Navy, Neon Vector, Arctic Alloy, Crimson Dark and Crimson Light**. Profiles, overlays and Windows tray behavior can be configured from the same workspace.
 
 Heavy Mining, Journal and Powerplay work runs in bounded background processes, with concurrency adapted to available CPU and memory. Updates and notifications are grouped; large initial searches can still take time.
 
@@ -125,14 +139,14 @@ Your Commander profile, ships, plans, wishlists, Journal files and service crede
 [Connection and privacy guide](docs/ED-Frame-1.0-Guide-EN.md#connections-and-privacy) · [Deutsche Anleitung](docs/ED-Frame-1.0-Guide-DE.md)
 
 <details>
-<summary><strong>Latest improvements — app 1.0.8 and server 0.9.4</strong></summary>
+<summary><strong>Latest improvements — app 1.0.9 and server 0.9.4</strong></summary>
 
-- Broader mining coverage through grouped system/commodity lookups.
-- Powerplay searches filter by the selected Power and goal. Observations up to 48 hours old are current; eligible older observations up to 14 days appear as **last known / check in game**.
-- Bounded background processing and grouped updates reduce competing work.
-- Server statistics refresh in the background approximately every five minutes. Warm statistics requests measured **0.06–0.18 seconds**, compared with a previous single request of about 42 seconds; existing 1.0.8 installations benefit immediately.
+- A → B → A trading loops and correct combined-margin ranking.
+- Carrier commodity offers, more goods, manual origin and unlimited radius.
+- A consistent cockpit, asynchronous startup and preserved NAV filters.
+- Existing grouped Mining/Powerplay lookups and bounded background processes remain available. Shared server statistics refresh in the background approximately every five minutes.
 
-[Release notes](docs/releases/1.0.8.md) · [Changelog](CHANGELOG.md) · [Server documentation](server/catalog_service/README.md) · [Server measurements](reports/server_status_cache_2026-10-10.md)
+[Release notes](docs/releases/1.0.9.md) · [Changelog](CHANGELOG.md) · [Server documentation](server/catalog_service/README.md) · [Application audit](reports/app_audit_2026-10-11.md)
 
 </details>
 

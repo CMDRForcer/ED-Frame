@@ -224,7 +224,12 @@ Item {
     readonly property int routePriceWidth: 110
     readonly property int routeDemandWidth: 100
     readonly property int routeStatusWidth: 180
-    readonly property int routeSelectWidth: 64
+    readonly property int routeSelectWidth: Math.max(64, Math.ceil(routeSelectionMetrics.width) + 8)
+    TextMetrics {
+        id: routeSelectionMetrics
+        text: appWindow.t("mining.select", "SELECT")
+        font.pixelSize: UiMetrics.caption; font.bold: true
+    }
 
     objectName: "qa-page-mining-finder"
     anchors.fill: parent
@@ -842,8 +847,9 @@ Item {
     }
 
 
-    Rectangle {
+    CardSurface {
         objectName: "qa-mining-config"
+        tone: cyan
         Layout.fillWidth: true
         Layout.minimumWidth: 0
         Layout.maximumWidth: miningFinderPage.availableWorkspaceWidth
@@ -851,7 +857,7 @@ Item {
         Layout.preferredHeight: miningFinderPage.searchGoalExpanded
                                 ? Math.min(miningFinderPage.height * 0.62, miningFilterContent.implicitHeight + 86) : 48
         Layout.maximumHeight: Layout.preferredHeight
-        radius: 12
+        radius: UiMetrics.cardRadius
         color: panelRaised
         border.width: 1
         border.color: orange
@@ -896,15 +902,20 @@ Item {
                 }
                 Button {
                     id: toggleSearchGoalButton
-                    implicitWidth: miningFinderPage.searchGoalExpanded ? 94 : 126
+                    implicitWidth: Math.max(miningFinderPage.searchGoalExpanded ? 94 : 126,
+                        toggleSearchCaption.implicitWidth + leftPadding + rightPadding)
                     implicitHeight: 26
+                    ToolTip.visible: hovered && toggleSearchCaption.truncated
+                    ToolTip.text: text
                     text: miningFinderPage.searchGoalExpanded
                           ? appWindow.t("mining.collapse_search", "COLLAPSE")
                           : appWindow.t("mining.edit_search", "EDIT SEARCH")
                     onClicked: miningFinderPage.searchGoalExpanded =
                                    !miningFinderPage.searchGoalExpanded
                     contentItem: Label {
+                        id: toggleSearchCaption
                         text: toggleSearchGoalButton.text
+                        elide: Text.ElideRight
                         color: toggleSearchGoalButton.hovered ? cyan : textSecondary
                         horizontalAlignment: Text.AlignHCenter
                         verticalAlignment: Text.AlignVCenter
@@ -1348,7 +1359,7 @@ Item {
         Layout.maximumWidth: miningFinderPage.availableWorkspaceWidth
         Layout.preferredHeight: 30
         Layout.maximumHeight: 30
-        spacing: 15
+        spacing: UiMetrics.gap
         Label { text: "● " + appWindow.t("mining.journal_current", "JOURNAL CURRENT"); color: green; font.pixelSize: UiMetrics.caption; font.bold: true }
         Label { Layout.minimumWidth: 0; text: appWindow.t("mining.ring_sources", "RINGS · JOURNAL + EDDN + SPANSH"); color: muted; font.pixelSize: UiMetrics.caption; elide: Text.ElideRight }
         Label {
@@ -1375,7 +1386,8 @@ Item {
         }
         Label {
             Layout.minimumWidth: 0
-            Layout.maximumWidth: 220
+            Layout.preferredWidth: Math.min(220, miningFinderPage.availableWorkspaceWidth * 0.15)
+            Layout.maximumWidth: Layout.preferredWidth
             visible: miningFinderPage.searchRevision > 0
             text: cockpit.miningVerificationBusy
                   ? appWindow.tf(
@@ -1392,19 +1404,33 @@ Item {
             ToolTip.text: cockpit.miningVerificationStatus
             HoverHandler { id: verificationStatusHover }
         }
-        Label { text: readiness.ready ? "✓ " + appWindow.t("mining.loadout_ready", "LOADOUT READY") : "! " + appWindow.t("mining.loadout_incomplete", "LOADOUT INCOMPLETE"); color: readiness.ready ? green : orange; font.pixelSize: UiMetrics.caption; font.bold: true }
+        Label {
+            Layout.minimumWidth: 0
+            text: readiness.ready ? "✓ " + appWindow.t("mining.loadout_ready", "LOADOUT READY") : "! " + appWindow.t("mining.loadout_incomplete", "LOADOUT INCOMPLETE")
+            color: readiness.ready ? green : orange; font.pixelSize: UiMetrics.caption; font.bold: true
+            elide: Text.ElideRight
+            ToolTip.visible: loadoutStatusHover.hovered && truncated
+            ToolTip.text: text
+            HoverHandler { id: loadoutStatusHover }
+        }
         Button {
             id: refreshMiningButton
-            implicitWidth: 170; implicitHeight: 28
+            objectName: "qa-mining-refresh"
+            implicitWidth: Math.max(170, refreshCaption.implicitWidth + leftPadding + rightPadding)
+            implicitHeight: 28
+            ToolTip.visible: hovered && refreshCaption.truncated
+            ToolTip.text: text
             text: cockpit.miningSyncBusy ? appWindow.t("mining.refreshing", "REFRESHING…") : appWindow.t("mining.refresh", "REFRESH SYSTEM")
             enabled: !cockpit.miningSyncBusy
             onClicked: cockpit.refreshMiningFinder()
             contentItem: Label {
+                id: refreshCaption
                 text: refreshMiningButton.text
                 color: refreshMiningButton.enabled ? textSecondary : muted
                 horizontalAlignment: Text.AlignHCenter
                 verticalAlignment: Text.AlignVCenter
                 font.pixelSize: UiMetrics.caption; font.bold: true
+                elide: Text.ElideRight
             }
             background: Rectangle {
                 radius: 6; color: inputBackground
@@ -1422,11 +1448,12 @@ Item {
         objectName: "qa-mining-results"
         visible: resultRows.length > 0
 
-        Rectangle {
+        CardSurface {
             id: bestRouteCard
+            tone: cyan
             objectName: "qa-mining-best-route"
             Layout.fillWidth: true; Layout.fillHeight: true; Layout.minimumWidth: 0
-            radius: 11; color: panelRaised; border.width: 1; border.color: orange
+            radius: UiMetrics.cardRadius; color: panelRaised; border.width: 1; border.color: orange
             ColumnLayout {
                 anchors.fill: parent; anchors.margins: 10; spacing: 5
                 RowLayout {
@@ -1473,11 +1500,17 @@ Item {
                     Label { text: appWindow.tf("mining.overall_rating", "OVERALL %1 / 5", [Number(bestRoute.overallScore || 0).toLocaleString(Qt.locale(), "f", 1)]); color: green; font.pixelSize: 11; font.bold: true }
                     Button {
                         id: copyBestSystemButton
-                        implicitWidth: 104; implicitHeight: 32
+                        objectName: "qa-mining-copy-mine"
+                        implicitWidth: Math.max(104, copyMineCaption.implicitWidth + leftPadding + rightPadding)
+                        implicitHeight: 32
+                        ToolTip.visible: hovered && copyMineCaption.truncated
+                        ToolTip.text: text
                         text: appWindow.t("mining.copy_mine", "COPY MINE")
                         onClicked: cockpit.copySystem(String(bestRoute.system || ""))
                         contentItem: Label {
+                            id: copyMineCaption
                             text: copyBestSystemButton.text
+                            elide: Text.ElideRight
                             color: copyBestSystemButton.hovered ? textPrimary : textSecondary
                             horizontalAlignment: Text.AlignHCenter
                             verticalAlignment: Text.AlignVCenter
@@ -1490,12 +1523,18 @@ Item {
                     }
                     Button {
                         id: copySellSystemButton
-                        implicitWidth: 104; implicitHeight: 32
+                        objectName: "qa-mining-copy-sell"
+                        implicitWidth: Math.max(104, copySellCaption.implicitWidth + leftPadding + rightPadding)
+                        implicitHeight: 32
+                        ToolTip.visible: hovered && copySellCaption.truncated
+                        ToolTip.text: text
                         text: appWindow.t("mining.copy_sell", "COPY SELL")
                         visible: Boolean(bestRoute.marketKnown && bestRoute.sellSystem)
                         onClicked: cockpit.copySystem(String(bestRoute.sellSystem || ""))
                         contentItem: Label {
+                            id: copySellCaption
                             text: copySellSystemButton.text
+                            elide: Text.ElideRight
                             color: copySellSystemButton.hovered ? textPrimary : textSecondary
                             horizontalAlignment: Text.AlignHCenter
                             verticalAlignment: Text.AlignVCenter
@@ -1509,20 +1548,28 @@ Item {
                 }
                 RowLayout {
                     Layout.fillWidth: true; Layout.minimumWidth: 0; spacing: 8
-                    Rectangle {
+                    CardSurface {
                         Layout.fillWidth: true; Layout.minimumWidth: 0; Layout.preferredWidth: 1; Layout.preferredHeight: appliedPreferSecondary ? 84 : 66; radius: 8; color: backgroundSecondary
+                        tone: cyan
                         ColumnLayout { anchors.fill: parent; anchors.margins: 7; spacing: 2
-                            Label { text: appWindow.t("mining.mine_step", "1 · MINE"); color: cyan; font.pixelSize: UiMetrics.caption; font.bold: true }
+                            RowLayout {
+                                Pictogram { name: "mining-finder"; tint: cyan; Layout.preferredWidth: 15; Layout.preferredHeight: 15 }
+                                Label { text: appWindow.t("mining.mine_step", "1 · MINE"); color: cyan; font.pixelSize: UiMetrics.caption; font.bold: true }
+                            }
                             Label { text: String(bestRoute.system || "UNKNOWN") + " · " + String(bestRoute.ring || bestRoute.body || ""); color: textPrimary; font.pixelSize: 12; font.bold: true; Layout.fillWidth: true; elide: Text.ElideRight }
                             Label { text: String(bestRoute.selectedCommodityName || appliedCommodityFilter) + " · " + String(bestRoute.reserveName || "UNKNOWN") + " · " + formatDistance(bestRoute.distanceLy); color: textSecondary; font.pixelSize: UiMetrics.caption; Layout.fillWidth: true; elide: Text.ElideRight }
                             Label { visible: appliedPreferSecondary; text: secondaryMiningSummary(bestRoute); color: cyan; font.pixelSize: UiMetrics.caption; Layout.fillWidth: true; elide: Text.ElideRight }
                         }
                     }
                     Label { text: appWindow.t("mining.route_arrow", "→"); color: orange; font.pixelSize: 19; font.bold: true }
-                    Rectangle {
+                    CardSurface {
                         Layout.fillWidth: true; Layout.minimumWidth: 0; Layout.preferredWidth: 1; Layout.preferredHeight: appliedPreferSecondary ? 84 : 66; radius: 8; color: backgroundSecondary
+                        tone: bestRoute.marketKnown ? green : orange
                         ColumnLayout { anchors.fill: parent; anchors.margins: 7; spacing: 2
-                            Label { text: appWindow.t("mining.sell_step", "2 · SELL"); color: cyan; font.pixelSize: UiMetrics.caption; font.bold: true }
+                            RowLayout {
+                                Pictogram { name: "market"; tint: bestRoute.marketKnown ? green : orange; Layout.preferredWidth: 15; Layout.preferredHeight: 15 }
+                                Label { text: appWindow.t("mining.sell_step", "2 · SELL"); color: bestRoute.marketKnown ? green : orange; font.pixelSize: UiMetrics.caption; font.bold: true }
+                            }
                             Label { text: marketRouteName(bestRoute); color: bestRoute.marketKnown ? textPrimary : orange; font.pixelSize: 12; font.bold: true; Layout.fillWidth: true; elide: Text.ElideRight }
                             Label { text: marketDetail(bestRoute); color: textSecondary; font.pixelSize: UiMetrics.caption; Layout.fillWidth: true; elide: Text.ElideRight }
                             Label { visible: appliedPreferSecondary; text: secondarySaleSummary(bestRoute); color: orange; font.pixelSize: UiMetrics.caption; Layout.fillWidth: true; elide: Text.ElideRight }
@@ -1575,18 +1622,29 @@ Item {
             }
         }
 
-        Rectangle {
+        CardSurface {
+            objectName: "qa-mining-route-reasons"
             Layout.preferredWidth: Math.max(330, parent.width * 0.34)
-            Layout.fillHeight: true; radius: 11; color: panelRaised
+            Layout.fillHeight: true; radius: UiMetrics.cardRadius; color: panelRaised
+            clip: true
             border.width: 1; border.color: borderTone
+            ScrollView {
+                id: routeReasonsScroll
+                objectName: "qa-mining-route-reasons-scroll"
+                anchors.fill: parent; anchors.margins: 10
+                clip: true
+                rightPadding: 8
+                contentWidth: availableWidth
+                ScrollBar.horizontal.policy: ScrollBar.AlwaysOff
+                ScrollBar.vertical: CockpitScrollBar { x: parent.width - width }
             ColumnLayout {
-                anchors.fill: parent; anchors.margins: 10; spacing: 5
+                width: routeReasonsScroll.availableWidth; spacing: 5
                 Label { text: appWindow.t("mining.why_route", "WHY THIS ROUTE?"); color: orange; font.pixelSize: UiMetrics.caption; font.bold: true }
                 Repeater {
                     model: [
                         {"ok": bestRoute.meritVerified, "title": appWindow.t("mining.reason_merit", "Powerplay suitability"), "detail": bestRoute.powerplayVerificationState === "PROVISIONAL" ? appWindow.t("mining.powerplay_last_known_detail", "Rules fit the last known control. Confirm the current state in game.") : (bestRoute.meritKnown || (bestRoute.sameSystemSaleRequired && !bestRoute.marketKnown)) ? bestRoute.meritStatus : (miningFinderPage.marketFiltersBlockRoute() ? appWindow.t("mining.reason_merit_filtered", "Unknown — active market filters leave no sell route to verify") : appWindow.t("mining.reason_merit_unknown", "Unknown — no merit claim is made"))},
                         {"ok": bestRoute.targetMatch === "LOCAL_YIELD" || bestRoute.targetMatch === "HOTSPOT", "title": appWindow.t("mining.reason_method", "Mining evidence"), "detail": yieldEvidence(bestRoute)},
-                        {"ok": false, "title": "Community RES reports", "detail": overlapSummary(bestRoute) || "NO COMMUNITY OVERLAP REPORT FOR THIS COMMODITY"},
+                        {"ok": false, "title": appWindow.t("mining.reason_res", "Community RES reports"), "detail": overlapSummary(bestRoute) || appWindow.t("mining.reason_res_empty", "NO COMMUNITY OVERLAP REPORT FOR THIS COMMODITY")},
                         {"ok": bestRoute.marketKnown, "title": appWindow.t("mining.reason_market", "Market demand"), "detail": bestRoute.marketKnown ? String(bestRoute.marketQualityStatus || "MARKET KNOWN") + " · " + (bestRoute.demandInfinite ? "∞" : formatNumber(bestRoute.demand) + " T") + " · " + String(bestRoute.marketSource || "EDDN") : miningFinderPage.marketDetail(bestRoute)},
                         {"ok": !bestRoute.stale, "title": appWindow.t("mining.reason_age", "Data freshness"), "detail": bestRoute.confirmationStatus || "—"}
                     ]
@@ -1599,12 +1657,26 @@ Item {
                         spacing: 7
                         Label { text: modelData.ok ? "✓" : "!"; color: modelData.ok ? green : orange; font.pixelSize: 14; font.bold: true }
                         ColumnLayout { Layout.fillWidth: true; spacing: 1
-                            Label { text: modelData.title; color: textPrimary; font.pixelSize: 11; font.bold: true }
-                            Label { Layout.fillWidth: true; text: modelData.detail; color: textSecondary; font.pixelSize: UiMetrics.caption; elide: Text.ElideRight }
+                            Label {
+                                Layout.fillWidth: true; Layout.minimumWidth: 0
+                                text: modelData.title; color: textPrimary; font.pixelSize: 11; font.bold: true
+                                elide: Text.ElideRight
+                                ToolTip.visible: reasonTitleHover.hovered && truncated
+                                ToolTip.text: text
+                                HoverHandler { id: reasonTitleHover }
+                            }
+                            Label {
+                                Layout.fillWidth: true; Layout.minimumWidth: 0
+                                text: modelData.detail; color: textSecondary; font.pixelSize: UiMetrics.caption; elide: Text.ElideRight
+                                ToolTip.visible: reasonDetailHover.hovered && truncated
+                                ToolTip.text: text
+                                HoverHandler { id: reasonDetailHover }
+                            }
                         }
                     }
                 }
                 Label {
+                    objectName: "qa-mining-powerplay-source"
                     Layout.fillWidth: true
                     visible: text !== ""
                     text: powerplaySourceDetails(bestRoute)
@@ -1612,7 +1684,7 @@ Item {
                     font.pixelSize: UiMetrics.caption
                     wrapMode: Text.WordWrap
                 }
-                Item { Layout.fillHeight: true }
+            }
             }
         }
     }
@@ -1727,12 +1799,12 @@ Item {
                 policy: ScrollBar.AlwaysOn
             }
             onContentYChanged: miningFinderPage._listScrollY = contentY
-            delegate: Rectangle {
+            delegate: CardSurface {
                 id: routeRow
                 required property var route
                 readonly property var modelData: route
                 required property int index
-                width: routesList.width; height: 88; radius: 8
+                width: routesList.width; height: 88; radius: UiMetrics.cardRadius
                 clip: true
                 color: routeHover.hovered ? appWindow.hover : panelRaised
                 border.width: routeHover.hovered ? 2 : 1

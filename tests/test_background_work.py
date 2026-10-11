@@ -99,6 +99,17 @@ class BackgroundWorkTests(unittest.TestCase):
         self.assertFalse(work.submit(queued.set, "catalog-three"))
         self.assertFalse(queued.wait(.1))
 
+    def test_requested_trade_routes_do_not_wait_for_a_catalog_import(self):
+        started, release, routes = (threading.Event() for _ in range(3))
+        work = BackgroundWork()
+        self.addCleanup(work.close)
+        self.addCleanup(release.set)
+        work.submit(lambda: (started.set(), release.wait(5)), "edframe-catalog-sync")
+        self.assertTrue(started.wait(2))
+        work.submit(routes.set, "trade-routes")
+        self.assertTrue(routes.wait(2), "manual route search waited behind a running import")
+        self.assertFalse(release.is_set())
+
     def test_catalog_checks_coalesce_without_blocking_manual_actions(self):
         owner = CockpitController.__new__(CockpitController)
         owner._edframe_catalog_enabled = True

@@ -242,7 +242,7 @@ class QmlInteractionContractTests(unittest.TestCase):
         for path in QML_FILES:
             source = path.read_text(encoding="utf-8-sig")
             for offset, block in qml_blocks(
-                source, r"\b(?:CockpitButton|Button|ServiceButton|CommodityButton)\s*\{"
+                source, r"\b(?:CockpitButton|CockpitAction|Button|ServiceButton|CommodityButton|RouteButton|FinderButton|Action)\s*\{"
             ):
                 # Inline component declarations define a type, not an instance.
                 # Actual ServiceButton instances are checked above as well.
@@ -272,7 +272,7 @@ class QmlInteractionContractTests(unittest.TestCase):
             source = path.read_text(encoding="utf-8-sig")
             for _offset, block in qml_blocks(
                 source,
-                r"\b(?:CockpitButton|Button|MouseArea)\s*\{",
+                r"\b(?:CockpitButton|CockpitAction|Button|ServiceButton|CommodityButton|RouteButton|FinderButton|Action|MouseArea)\s*\{",
             ):
                 if not re.search(
                     r"\bon(?:Clicked|Pressed|Released|Toggled|CheckedChanged)\s*:",

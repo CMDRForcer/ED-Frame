@@ -11,7 +11,7 @@ ComboBox {
     rightPadding: 42
     topPadding: 0
     bottomPadding: 0
-    font.family: appWindow ? appWindow.font.family : "Segoe UI Variable Text"
+    font.family: appWindow ? appWindow.font.family : "Segoe UI"
     font.pixelSize: UiMetrics.body
     font.bold: true
     hoverEnabled: true
@@ -36,16 +36,14 @@ ComboBox {
         width: 38
         height: control.height
         x: control.width - width
-        Label {
+        Pictogram {
             anchors.centerIn: parent
-            text: "⌄"
-            color: control.enabled
+            name: "chevron"; width: 17; height: 17
+            tint: control.enabled
                    ? (control.appWindow ? control.appWindow.accent : "#3bdcff")
                    : (control.appWindow ? control.appWindow.textDisabled : "#587086")
-            font.pixelSize: 18
-            font.bold: true
             rotation: control.popup.visible ? 180 : 0
-            Behavior on rotation { NumberAnimation { duration: 120 } }
+            Behavior on rotation { enabled: !!control.appWindow && !control.appWindow.reducedMotion; NumberAnimation { duration: 120 } }
         }
     }
 
@@ -60,7 +58,7 @@ ComboBox {
         border.color: control.activeFocus || control.popup.visible
                       ? (control.appWindow ? control.appWindow.accent : "#3bdcff")
                       : (control.appWindow ? control.appWindow.borderTone : "#294560")
-        Behavior on color { ColorAnimation { duration: 90 } }
+        Behavior on color { enabled: !!control.appWindow && !control.appWindow.reducedMotion; ColorAnimation { duration: 90 } }
     }
 
     delegate: ItemDelegate {

@@ -317,29 +317,10 @@ Item {
 
     Component.onCompleted: cockpit.requestShipyardSuggestions(mode, "")
 
-    component FinderButton: Button {
-        id: control
-        property bool selected: false
-        property color tone: finder.orange
-        onClicked: {}
-        implicitHeight: UiMetrics.controlHeight
-        font.pixelSize: UiMetrics.body
-        font.bold: true
-        contentItem: Label {
-            text: control.text
-            color: control.selected ? appWindow.backgroundPrimary : textSecondary
-            horizontalAlignment: Text.AlignHCenter
-            verticalAlignment: Text.AlignVCenter
-            font: control.font
-            elide: Text.ElideRight
-        }
-        background: Rectangle {
-            radius: UiMetrics.controlRadius
-            color: control.selected ? control.tone
-                  : control.hovered ? appWindow.hover : inputBackground
-            border.width: control.selected ? 0 : 1
-            border.color: control.hovered ? control.tone : borderTone
-        }
+    component FinderButton: CockpitAction {
+        appWindow: finder.appWindow
+        property color tone: appWindow.accent
+        accentColor: tone
     }
 
     ColumnLayout {
@@ -847,11 +828,11 @@ Item {
                             cellHeight: 76
                             model: finder.moduleFamilyRows()
                             ScrollBar.vertical: CockpitScrollBar {}
-                            delegate: Rectangle {
+                            delegate: CardSurface {
                                 required property var modelData
                                 width: moduleFamilyGrid.cellWidth - 8
                                 height: moduleFamilyGrid.cellHeight - 7
-                                radius: 8; color: panelRaised
+                                radius: UiMetrics.cardRadius; color: panelRaised
                                 border.width: 1; border.color: familyMouse.containsMouse ? orange : borderTone
                                 ToolTip.visible: familyMouse.containsMouse
                                 ToolTip.text: String(modelData.purchaseReason || "")
@@ -938,7 +919,7 @@ Item {
                             }
                             model: finder.moduleVariantRows()
                             ScrollBar.vertical: CockpitScrollBar {}
-                            delegate: Rectangle {
+                            delegate: CardSurface {
                                 objectName: "qa-module-comparison-row"
                                 id: variantRow
                                 required property var modelData
@@ -946,7 +927,7 @@ Item {
                                     ? (modelData.currentShipSlotFits || ({}))[String(finder.selectedSlot.slot)] : null
                                 width: moduleVariantGrid.width - 12
                                 height: 82
-                                radius: 8; color: panelRaised
+                                radius: UiMetrics.cardRadius; color: panelRaised
                                 border.width: String(modelData.symbol || "") === finder.selectedSymbol ? 2 : 1
                                 border.color: String(modelData.symbol || "") === finder.selectedSymbol
                                               ? orange : variantMouse.containsMouse ? cyan : borderTone
@@ -1026,14 +1007,14 @@ Item {
                     boundsBehavior: Flickable.StopAtBounds
                     model: finder.ships
                     ScrollBar.horizontal: CockpitScrollBar {}
-                    delegate: Rectangle {
+                    delegate: CardSurface {
                         id: catalogTile
                         required property var modelData
                         readonly property bool rankLocked:
                             String(modelData.purchaseTone || "") === "LOCKED"
                         width: finder.mode === "SHIPS" ? 232 : 188
                         height: visualCatalog.height - 9
-                        radius: 10
+                        radius: UiMetrics.cardRadius
                         color: panelRaised
                         border.width: catalogTile.rankLocked ? 2 : 1
                         border.color: catalogTile.rankLocked
@@ -1388,10 +1369,10 @@ Item {
                             {title: appWindow.t("shipyard.source_journal", "JOURNAL ACCESS"), detail: appWindow.tf("shipyard.journal_access_detail", "%1 PERMITS · %2 VISITED SYSTEMS", [String((finder.overview.permits || []).length), String((finder.overview.visitedSystems || []).length)]), tone: finder.cyan},
                             {title: appWindow.t("shipyard.source_price", "SHIP PRICE"), detail: appWindow.t("shipyard.price_levels", "FIXED REFERENCE · STATION RULE · PURCHASE CONFIRMED"), tone: finder.orange}
                         ]
-                        delegate: Rectangle {
+                        delegate: CardSurface {
                             required property var modelData
                             Layout.fillWidth: true; Layout.preferredHeight: 54
-                            radius: 8; color: panelRaised
+                            radius: UiMetrics.cardRadius; color: panelRaised
                             border.width: 1; border.color: borderTone
                             Column {
                                 anchors.fill: parent; anchors.margins: 9; spacing: 3

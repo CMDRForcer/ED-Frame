@@ -124,7 +124,7 @@ ColumnLayout {
             }
             RowLayout {
                 Layout.fillWidth: true
-                Button {
+                CockpitAction {
                     visible: farmEditDialog.edited
                     text: appWindow.t("nav.farm_restore", "RESTORE ORIGINAL")
                     onClicked: {
@@ -138,11 +138,11 @@ ColumnLayout {
                     }
                 }
                 Item { Layout.fillWidth: true }
-                Button {
+                CockpitAction {
                     text: appWindow.t("nav.cancel", "CANCEL")
                     onClicked: farmEditDialog.close()
                 }
-                Button {
+                CockpitAction {
                     text: appWindow.t("nav.save", "SAVE")
                     onClicked: farmEditDialog.submit()
                 }
@@ -191,11 +191,11 @@ ColumnLayout {
             RowLayout {
                 Layout.fillWidth: true
                 Item { Layout.fillWidth: true }
-                Button {
+                CockpitAction {
                     text: appWindow.t("nav.cancel", "CANCEL")
                     onClicked: farmDeleteDialog.close()
                 }
-                Button {
+                CockpitAction {
                     text: appWindow.t("nav.remove", "REMOVE")
                     onClicked: {
                         if (cockpit.removeMaterialFarmSite(farmDeleteDialog.siteId,
@@ -300,20 +300,20 @@ ColumnLayout {
                 RowLayout {
                     Layout.fillWidth: true
                     Item { Layout.fillWidth: true }
-                    Button {
+                    CockpitAction {
                         text: appWindow.t("nav.copy_system", "COPY SYSTEM")
                         onClicked: cockpit.copySystem(modelData.system)
                     }
-                    Button {
+                    CockpitAction {
                         text: appWindow.t("nav.use_waypoint", "USE AS WAYPOINT")
                         enabled: modelData.latitude !== null && modelData.longitude !== null
                         onClicked: cockpit.activateMaterialFarmSite(modelData.siteId, modelData.sourceMaterialKey)
                     }
-                    Button {
+                    CockpitAction {
                         text: appWindow.t("nav.edit", "EDIT")
                         onClicked: farmEditDialog.edit(modelData)
                     }
-                    Button {
+                    CockpitAction {
                         text: appWindow.t("nav.remove", "REMOVE")
                         onClicked: farmDeleteDialog.confirm(modelData)
                     }
@@ -321,7 +321,7 @@ ColumnLayout {
             }
         }
     }
-    Button {
+    CockpitAction {
         visible: hostPage.farmDeletedSites.length > 0
         Layout.fillWidth: true
         text: (farmSection.showDeleted ? "▾  " : "▸  ")
@@ -345,7 +345,7 @@ ColumnLayout {
                     color: appWindow.muted
                     elide: Text.ElideRight
                 }
-                Button {
+                CockpitAction {
                     text: appWindow.t("nav.farm_restore", "RESTORE ORIGINAL")
                     onClicked: cockpit.restoreMaterialFarmSite(modelData.siteId,
                                                                 modelData.sourceMaterialKey)

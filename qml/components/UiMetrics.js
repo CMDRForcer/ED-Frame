@@ -6,4 +6,7 @@ var body = 13
 var controlHeight = 42
 var controlRadius = 8
 var gap = 8
+var cardRadius = 14
+var cardInset = 16
+var sectionGap = 14
 

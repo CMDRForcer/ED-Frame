@@ -129,11 +129,11 @@ ColumnLayout {
                     model: cockpit.recentSessions.slice(0, 3)
                     spacing: 5
                     clip: true
-                    delegate: Rectangle {
+                    delegate: CardSurface {
                         required property var modelData
                         width: recentSessionList.width
                         height: 42
-                        radius: 8
+                        radius: UiMetrics.cardRadius
                         color: panelRaised
                         RowLayout {
                             anchors.fill: parent

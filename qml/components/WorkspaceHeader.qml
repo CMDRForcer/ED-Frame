@@ -10,6 +10,8 @@ Item {
     property string title: ""
     property string subtitle: ""
     property string statusText: ""
+    property string pictogram: appWindow && typeof appWindow.workspaceIcon === "function"
+        ? appWindow.workspaceIcon(appWindow.currentPage) : "info"
     property color statusTone: appWindow.accentSecondary
     property string qaName: ""
     default property alias actions: actionRow.data
@@ -23,16 +25,21 @@ Item {
     Rectangle {
         anchors.left: parent.left
         anchors.top: parent.top
-        width: 3
-        height: 52
-        radius: 2
-        color: appWindow.accent
+        width: 44; height: 44; radius: 12
+        color: Qt.rgba(appWindow.accent.r, appWindow.accent.g, appWindow.accent.b, 0.10)
+        border.color: Qt.rgba(appWindow.accent.r, appWindow.accent.g, appWindow.accent.b, 0.28)
+        Pictogram {
+            objectName: "workspace-pictogram"
+            anchors.centerIn: parent
+            name: header.pictogram; tint: header.appWindow.accent
+            width: 25; height: 25
+        }
     }
 
     ColumnLayout {
         id: titleColumn
         anchors.left: parent.left
-        anchors.leftMargin: 16
+        anchors.leftMargin: 58
         anchors.top: parent.top
         anchors.right: appWindow.narrowWorkspace ? parent.right : actionRow.left
         anchors.rightMargin: appWindow.narrowWorkspace ? 0 : 22

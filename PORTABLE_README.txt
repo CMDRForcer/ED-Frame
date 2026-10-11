@@ -1,4 +1,4 @@
-ED-Frame 1.0.7 - Portable Windows Edition
+ED-Frame 1.0.9 - Portable Windows Edition
 ===================================================================
 
 1. Extract the complete ZIP archive.
@@ -7,10 +7,15 @@ ED-Frame 1.0.7 - Portable Windows Edition
 
 Python and the INSTALL_REQUIREMENTS step are not required for this portable build.
 
-This release accompanies catalog server 0.9.2. Targeted Spansh checks can
-supplement missing explicit Powerplay control while preserving original source
-times. Missing observations remain unknown. Broad 500-LY mining searches still
-have substantial latency/RAM cost; further optimization follows separately.
+This release works with catalog server 0.9.4. NAV includes A-B-A trading loops,
+Carrier commodity offers, a manual starting system and unlimited commodity radius.
+A coordinated cockpit and asynchronous startup improve everyday use. NAV search
+inputs survive page changes within the session. Trading suggestions show regional
+coverage and original quote ages; prices and stock can change before arrival.
+Large cold searches can still take time.
+
+When upgrading, quit the old app completely, including its tray process, before
+starting this version. Extract into a new folder; existing profiles are reused.
 
 User settings, service credentials, caches and Journal cursors are stored under
 %LOCALAPPDATA%\ED-Frame and are not written into this folder.

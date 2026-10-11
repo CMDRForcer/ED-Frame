@@ -281,7 +281,7 @@ ColumnLayout {
                         spacing: 8
                         Repeater {
                             model: stacks
-                            delegate: Rectangle {
+                            delegate: CardSurface {
                                 id: stackRow
                                 required property var modelData
                                 readonly property bool urgent: modelData.deadlineStatus === "expired"
@@ -289,7 +289,7 @@ ColumnLayout {
                                                                || modelData.deadlineStatus === "soon"
                                 Layout.fillWidth: true
                                 implicitHeight: stackColumn.implicitHeight + 24
-                                radius: 10
+                                radius: UiMetrics.cardRadius
                                 color: panelRaised
                                 border.width: urgent ? 1.6 : 1
                                 border.color: urgent ? danger : borderTone
@@ -416,7 +416,7 @@ ColumnLayout {
                         spacing: 8
                         Repeater {
                             model: missions
-                            delegate: Rectangle {
+                            delegate: CardSurface {
                                 id: missionRow
                                 required property var modelData
                                 readonly property bool urgent: modelData.deadlineStatus === "expired"
@@ -426,7 +426,7 @@ ColumnLayout {
                                 readonly property color kindColor: missionsPage.missionKindColor(kind)
                                 Layout.fillWidth: true
                                 implicitHeight: missionColumn.implicitHeight + 22
-                                radius: 10
+                                radius: UiMetrics.cardRadius
                                 clip: true
                                 color: panelRaised
                                 border.width: urgent ? 1.6 : 1
@@ -460,12 +460,11 @@ ColumnLayout {
                                             Layout.preferredHeight: 32
                                             radius: 8
                                             color: missionsPage.missionKindBackground(missionRow.kind)
-                                            Label {
+                                            Pictogram {
                                                 anchors.centerIn: parent
-                                                text: missionsPage.missionKindIcon(missionRow.kind)
-                                                color: missionRow.kindColor
-                                                font.pixelSize: 15
-                                                font.bold: true
+                                                name: missionRow.kind === "combat" ? "state-finds" : missionRow.kind === "donation" ? "credits" : missionRow.kind === "delivery" ? "goods" : "nav"
+                                                tint: missionRow.kindColor
+                                                width: 20; height: 20
                                             }
                                         }
                                         ColumnLayout {
@@ -641,7 +640,7 @@ ColumnLayout {
                         spacing: 8
                         Repeater {
                             model: goals
-                            delegate: Rectangle {
+                            delegate: CardSurface {
                                 id: cgRow
                                 required property var modelData
                                 readonly property int tierTotal: Math.max(
@@ -650,7 +649,7 @@ ColumnLayout {
                                 readonly property int tierDone: missionsPage.tierNumber(modelData.tierReached)
                                 Layout.fillWidth: true
                                 implicitHeight: cgColumn.implicitHeight + 22
-                                radius: 10
+                                radius: UiMetrics.cardRadius
                                 color: panelRaised
                                 border.width: 1
                                 border.color: borderTone

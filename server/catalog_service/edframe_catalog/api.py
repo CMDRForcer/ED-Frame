@@ -12,11 +12,14 @@ from typing import Annotated
 
 from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.responses import ORJSONResponse
-from psycopg.errors import UndefinedTable, QueryCanceled
+from psycopg.errors import UndefinedTable, QueryCanceled, LockNotAvailable
 from ed_companion.navigation.mining_commodities import MINING_COMMODITIES, mining_commodity_id
 
 from . import __version__
 from .merit_markets import MeritMarketQuery, search_merit_markets
+from .trade_routes import search_trade_routes
+from ed_companion.navigation.trade_route_model import search_filters
+from ed_companion.navigation.mining_market import MiningMarketError
 from .status_cache import StatusCache, StatusUnavailable
 from .mining_metadata import enrich_ring_metadata
 from .mining_revision import mining_revision, static_revision
@@ -267,6 +270,7 @@ def root() -> dict:
         "stations": "/v1/stations/search",
         "stationOffers": "/v1/station-offers/search",
         "marketSync": "/v1/sync/markets",
+        "tradeRoutes": "/v1/markets/trade-routes",
         "stationOfferSync": "/v1/sync/station-offers",
         "stationOfferObservations": "/v1/station-offers/observations",
         "miningMeritMarkets": "/v1/mining/merit-markets",
@@ -1214,16 +1218,22 @@ def commodity_offers(
     x: Annotated[float, Query(ge=-1000000, le=1000000)],
     y: Annotated[float, Query(ge=-1000000, le=1000000)],
     z: Annotated[float, Query(ge=-1000000, le=1000000)],
-    max_distance: Annotated[float, Query(gt=0, le=2000)] = 100,
+    max_distance: Annotated[float, Query(ge=0, le=2000)] = 100,
     min_quantity: Annotated[int, Query(ge=1, le=1000000)] = 1,
     max_age_hours: Annotated[int, Query(ge=1, le=2160)] = 24,
     landing_pad: Annotated[str | None, Query(pattern="^(S|M|L)$")] = None,
     exclude_fleet_carriers: bool = True,
     limit: Annotated[int, Query(ge=1, le=200)] = 100,
     commodities: Annotated[str | None, Query(max_length=12000)] = None,
+    sort_by: Annotated[str, Query(pattern="^(PRICE|DISTANCE|AGE)$")] = "PRICE",
 ) -> dict:
     if direction not in {"BUY", "SELL"}:
         raise HTTPException(status_code=422, detail="direction must be BUY or SELL")
+    if sort_by not in {"PRICE", "DISTANCE", "AGE"}:
+        raise HTTPException(status_code=422, detail="Invalid commodity sorting")
+    # Zero is an explicit global search; null in the response distinguishes it
+    # from every finite region and prevents old clients from accepting it.
+    unlimited = max_distance == 0
     symbols = sorted(set(commodities.strip().lower().split(","))) if commodities else None
     if symbols is not None and (len(symbols) > 200 or any(
             not 2 <= len(symbol) <= 80 or not all(c.isalnum() or c == "_" for c in symbol)
@@ -1233,12 +1243,20 @@ def commodity_offers(
         ("buy_price", "stock", "ASC") if direction == "BUY"
         else ("sell_price", "demand", "DESC")
     )
+    # Sort the complete eligible market set before selecting the bounded page.
+    order_clause = {
+        "PRICE": f'm.{price} {ordering}, "distanceLy"',
+        "DISTANCE": f'"distanceLy", m.{price} {ordering}',
+        "AGE": f'm.observed_at DESC, m.{price} {ordering}, "distanceLy"',
+    }[sort_by] + ", st.distance_to_arrival_ls ASC NULLS LAST, m.market_id"
     clauses = [
         "m.commodity = ANY(%s)" if symbols else "m.commodity = LOWER(%s)", f"m.{price} > 0", f"m.{quantity} >= %s",
         "m.observed_at >= NOW() - (%s * INTERVAL '1 hour')",
-        "POWER(s.x - %s, 2) + POWER(s.y - %s, 2) + POWER(s.z - %s, 2) <= POWER(%s, 2)",
     ]
-    values = [x, y, z, symbols or commodity.strip(), min_quantity, max_age_hours, x, y, z, max_distance]
+    values = [x, y, z, symbols or commodity.strip(), min_quantity, max_age_hours]
+    if not unlimited:
+        clauses.append("POWER(s.x - %s, 2) + POWER(s.y - %s, 2) + POWER(s.z - %s, 2) <= POWER(%s, 2)")
+        values.extend([x, y, z, max_distance])
     if landing_pad:
         clauses.append("st.landing_pad_size = ANY(%s)")
         values.append({"S": ["S", "M", "L"], "M": ["M", "L"], "L": ["L"]}[landing_pad])
@@ -1246,7 +1264,12 @@ def commodity_offers(
         clauses.append("st.fleet_carrier IS NOT TRUE")
     values.append(limit + 1)
     with connection() as conn:
-        rows = conn.execute(f"""
+        if unlimited:
+            conn.execute("SET TRANSACTION READ ONLY")
+            conn.execute("SET LOCAL statement_timeout = '10s'")
+            conn.execute("SET LOCAL lock_timeout = '2s'")
+        try:
+            rows = conn.execute(f"""
             SELECT m.market_id AS "marketId", m.commodity,
                    COALESCE(NULLIF(st.station_name, ''), m.station_name) AS station,
                    COALESCE(NULLIF(st.system_name, ''), m.system_name) AS system,
@@ -1267,15 +1290,42 @@ def commodity_offers(
                 ORDER BY sy.observed_at DESC NULLS LAST, sy.name LIMIT 1
             ) s ON TRUE
             WHERE {' AND '.join(clauses)}
-            ORDER BY m.{price} {ordering}, "distanceLy", st.distance_to_arrival_ls ASC NULLS LAST, m.market_id
+            ORDER BY {order_clause}
             LIMIT %s
-        """, tuple(values)).fetchall()
+            """, tuple(values)).fetchall()
+        except (QueryCanceled, LockNotAvailable) as exc:
+            raise HTTPException(status_code=503, detail="Commodity search timed out · narrow the search or retry") from exc
     return {
         "generatedAt": _now(), "results": rows[:limit], "hasMore": len(rows) > limit,
-        "direction": direction, "commodity": commodity.strip().lower(),
+        "direction": direction, "commodity": commodity.strip().lower(), "sortBy": sort_by,
         "commodities": symbols,
-        "region": {"origin": [x, y, z], "radiusLy": max_distance},
+        "region": {"origin": [x, y, z], "radiusLy": None if unlimited else max_distance},
     }
+
+
+@app.get("/v1/markets/trade-routes")
+def trade_routes(
+    x: Annotated[float, Query(ge=-1000000, le=1000000)],
+    y: Annotated[float, Query(ge=-1000000, le=1000000)],
+    z: Annotated[float, Query(ge=-1000000, le=1000000)],
+    max_distance: Annotated[float, Query(gt=0, le=500)] = 50,
+    max_leg_distance: Annotated[float, Query(gt=0, le=500)] = 100,
+    cargo_tonnes: Annotated[int, Query(ge=1, le=100000)] = 100,
+    budget_cr: Annotated[int, Query(ge=1, le=1000000000000)] = 10000000,
+    max_age_hours: Annotated[int, Query(ge=1, le=168)] = 24,
+    landing_pad: Annotated[str, Query(pattern="^(ANY|S|M|L)$")] = "ANY",
+    exclude_fleet_carriers: bool = False,
+    commodity: Annotated[str, Query(min_length=2, max_length=80)] = "ALL",
+    sort_by: Annotated[str, Query(pattern="^(PROFIT|UNIT_PROFIT|DISTANCE)$")] = "PROFIT",
+    refresh: bool = False,
+    limit: Annotated[int, Query(ge=1, le=50)] = 30,
+) -> dict:
+    try:
+        filters = search_filters([x,y,z],max_distance,max_leg_distance,cargo_tonnes,budget_cr,
+            max_age_hours,landing_pad,exclude_fleet_carriers,commodity,sort_by)
+    except MiningMarketError as exc:
+        raise HTTPException(422, str(exc)) from exc
+    return search_trade_routes(filters,limit,refresh)
 
 
 @app.get("/v1/stations/search")

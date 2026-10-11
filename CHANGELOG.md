@@ -1,5 +1,26 @@
 # Changelog
 
+## 1.0.9 — 2026-10-11
+
+- Add NAV trading loops A → B → A with outbound/return cargo, budget and cargo
+  constraints, source dates, regional coverage, profit/margin/distance ranking,
+  destination copying and explicit price rechecks. The catalog 0.9.4 API is live.
+- Optimize combined margin per tonne across affordable cargo pairs, including
+  return purchasing power after the outbound sale. Validate against exhaustive
+  affordable-pair searches; preserve stock and demand limits.
+- Include Fleet Carrier offers by default and expose 46 additional commodities
+  in the catalog checked for this release. Add manual origin and unlimited
+  commodity radius, client-side validation, clearer filters and result cards.
+- Unify workspace pictograms, headings, cards and action buttons across six
+  themes. Improve translated layouts, diagnostics scrolling and empty states.
+- Load QML asynchronously; retain NAV finder inputs across page changes within
+  the session and restore technical selections after language changes.
+- Use the interactive queue for manual trading searches within existing resource
+  limits. Guard missing header icon providers and correct startup/callback cleanup.
+- Restrict Windows build dependency discovery to Python and Windows paths to
+  prevent unrelated PDF/VR runtime DLLs from entering portable packages.
+- Refresh the README, screenshots, portable instructions and EN/DE guides.
+
 ## 1.0.8 — 2026-10-10
 
 - Add exact grouped Mining market queries, filtered by the selected method and

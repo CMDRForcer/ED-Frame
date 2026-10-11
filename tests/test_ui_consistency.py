@@ -28,10 +28,12 @@ class UiConsistencyTests(unittest.TestCase):
 
     def test_shared_control_metrics_are_used(self):
         for file in ("qml/components/CockpitComboBox.qml", "Main.qml",
-                     "qml/pages/ShipyardPage.qml"):
+                     "qml/components/CockpitAction.qml"):
             source = (ROOT / file).read_text(encoding="utf-8-sig")
             self.assertIn("UiMetrics.controlHeight", source, file)
             self.assertIn("UiMetrics.body", source, file)
+        shipyard = (ROOT / "qml/pages/ShipyardPage.qml").read_text(encoding="utf-8-sig")
+        self.assertIn("component FinderButton: CockpitAction", shipyard)
 
     def test_audited_pages_have_no_tiny_fixed_captions(self):
         for page in ("ShipyardPage", "MiningFinderPage", "PowerplayPage",

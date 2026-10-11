@@ -1,6 +1,6 @@
 # ED-Frame 1.0 — getting started and features
 
-Updated for app **1.0.8** and live catalog server **0.9.4**.
+Updated for app **1.0.9** and live catalog server **0.9.4**.
 
 ED-Frame is a free, open-source Windows companion for Elite Dangerous. Your local Journal drives your Commander workspace; ED-Frame's own community server supplements it with shared public galaxy observations.
 
@@ -25,7 +25,8 @@ Use Windows 10 or 11. Personal settings, credentials, builds and retained data l
 - **Mining Finder:** choose commodity, method, origin and radius; compare site evidence, market price, demand, quote age and pad size. Plan Acquire, Reinforce and Undermine routes.
 - **Measured mining yield:** distinguish Prospector/refining measurements from hotspot reports and ring-type estimates. A measured sample is not a yield guarantee.
 - **Module & Ship Finder:** search observed station inventories and prices. Review current-hull and physical-slot compatibility; distinguish observed and inferred prices.
-- **Commodity Finder:** use BUY for station stock or SELL for demand. Filter quote age, quantity, pad and distance.
+- **Commodity Finder:** use BUY for station/Carrier stock or SELL for demand. Choose a manual starting system; filter quote age, quantity, pad and distance, or search with an unlimited radius. Carriers are included by default. Unlimited searches return up to 100 offers in the selected order.
+- **Trading Routes:** find A → B → A loops with separate outbound and return cargo, purchase costs, estimated profit, quote age and distance. Set cargo capacity, starting budget and market access; compare total profit, combined margin per tonne or distance. Copy destinations or explicitly recheck prices. NAV inputs survive page changes within the session.
 - **Station services:** find nearby observed services from Nav.
 - **State Finds & HGE:** compare sightings, reported signal lifetime and separately labelled BGS predictions.
 - **Powerplay:** review pledged power, rank, merits and explicit system control from observed data.
@@ -35,7 +36,7 @@ Use Windows 10 or 11. Personal settings, credentials, builds and retained data l
 - **Exobiology:** track survey targets, sample distances, completed species and observed earnings.
 - **Surface navigation:** save planetary waypoints and use the compass or separate always-on-top overlay. Live guidance requires Elite's coordinates and heading; surface distance also needs body radius.
 - **Logbook:** search flight events and keep local notes.
-- **Appearance:** choose six themes, four interface languages, scaling, overlays and diagnostics.
+- **Appearance:** choose six themes and four interface languages, with shared pictograms, cards and actions. Adjust scaling, overlays and diagnostics; QML loads asynchronously at startup.
 
 ## The ED-Frame community server
 
@@ -48,6 +49,8 @@ Powerplay confirmation uses observations up to 48 hours old, assessed separately
 App **1.0.8** uses grouped system/commodity queries to recover suitable markets and rings missed by regional top lists. Powerplay pages filter by your chosen Power and goal before pagination. Targeted public Spansh checks can supplement missing explicit control, preserving system identity, original source times and newer EDDN evidence. The community connection switch controls these lookups. Heavy Mining, Journal and Powerplay preparation runs in bounded background processes; concurrency adapts to available CPU and memory. Large cold searches can still take time.
 
 The live **0.9.4** server refreshes its shared statistics in the background approximately every five minutes. Collector status remains live. Existing app 1.0.8 installations benefit from this server update without reinstalling.
+
+Trading routes use a bounded regional selection of markets, with coverage shown in the result. They do not promise a galaxy-wide optimum. Available cargo, starting budget, stock and demand constrain both legs; the return purchase can use the funds from the first sale. Combined margin per tonne adds the two unit-price differences and is not necessarily total profit divided by ship capacity. Price checks run on request, not on a constant polling loop.
 
 Retained observations remain available locally when a service is unavailable or disabled. The ring store reads the relevant region from SQLite and preserves original observations and their history. Offline data cannot provide unseen live updates.
 
