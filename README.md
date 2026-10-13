@@ -12,7 +12,7 @@ A free, open-source Windows companion for **Elite Dangerous**, bringing your loc
 
 [**Download for Windows**](https://github.com/CMDRForcer/ED-Frame/releases/latest) · [English guide](docs/ED-Frame-1.0-Guide-EN.md) · [Deutsche Anleitung](docs/ED-Frame-1.0-Guide-DE.md)
 
-**App 1.0.9** · **Own community server** · **EN / DE / ES / FR** · **Six themes**
+**App 1.0.10** · **Own community server** · **EN / DE / ES / FR** · **Six themes**
 
 </div>
 
@@ -128,25 +128,29 @@ Heavy Mining, Journal and Powerplay work runs in bounded background processes, w
 
 Existing profiles, builds and retained data are reused. Full project source and `SHA256SUMS.txt` are separate release downloads. The current **1.0 release line** succeeds earlier EDEC/ED-Frame builds, including 1.5.43; use the **Latest release** link to find the current version.
 
-## Your profile, your connections
+## Data and privacy
 
 Your Commander profile, ships, plans, wishlists, Journal files and service credentials are **stored locally**, outside the program folder.
 
 - **ED-Frame and EDDN** community connections are enabled for new profiles and have separate controls. Disabling them preserves retained local data.
 - The **ED-Frame server** accepts supported anonymous public observations, not Commander names/FIDs, raw Journals, private builds or credentials.
 - **Frontier CAPI and INARA** require separate setup. INARA can send supported Commander events when enabled; review each service for local-only operation. Supported credentials are protected with Windows DPAPI.
+- **Active installation counting** runs automatically in release builds. **Settings → Connections** and onboarding explain the data sent. Release builds send only a random UUID4 installation ID and app version, at most once per UTC day, when the ED-Frame catalog is enabled. The random ID is recognizable across days, shared across Commander profiles and shown with a copy button in **Settings → About**. No hardware IDs, Commander names/FIDs, Journals, events or screen/activity data are sent. The database stores only ID, UTC day and version; entries older than 90 days are deleted daily. It stores no IP addresses. Existing access-log settings remain unchanged. There is no dedicated counting switch. Disabling the ED-Frame catalog or setting `EDFRAME_NO_USAGE_PING=1` prevents pings; development builds never ping. Failed days are not replayed. DAU/WAU/MAU are private operator statistics, separate from the public catalog statistics.
 
 [Connection and privacy guide](docs/ED-Frame-1.0-Guide-EN.md#connections-and-privacy) · [Deutsche Anleitung](docs/ED-Frame-1.0-Guide-DE.md)
 
 <details>
-<summary><strong>Latest improvements — app 1.0.9 and server 0.9.4</strong></summary>
+<summary><strong>Latest improvements — app 1.0.10 and server 0.9.5</strong></summary>
 
+- A skippable setup wizard with a tour of every sidebar area, in all four languages.
+- Automatic active-installation counts: random ID + version, once per UTC day; private statistics and 90-day retention.
+- Faster server statistics and market synchronization, resilient collector transactions and fewer redundant outfitting writes.
 - A → B → A trading loops and correct combined-margin ranking.
 - Carrier commodity offers, more goods, manual origin and unlimited radius.
 - A consistent cockpit, asynchronous startup and preserved NAV filters.
 - Existing grouped Mining/Powerplay lookups and bounded background processes remain available. Shared server statistics refresh in the background approximately every five minutes.
 
-[Release notes](docs/releases/1.0.9.md) · [Changelog](CHANGELOG.md) · [Server documentation](server/catalog_service/README.md) · [Application audit](reports/app_audit_2026-10-11.md)
+[Release notes](docs/releases/1.0.10.md) · [Changelog](CHANGELOG.md) · [Server documentation](server/catalog_service/README.md) · [Application audit](reports/app_audit_2026-10-11.md)
 
 </details>
 

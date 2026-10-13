@@ -1,6 +1,8 @@
 # ED-Frame 1.0 — getting started and features
 
-Updated for app **1.0.9** and live catalog server **0.9.4**.
+Updated for app **1.0.10** and catalog server **0.9.5**.
+
+First launch offers a skippable setup wizard and a tour of every area. Completed profiles keep their setup; reopen it from Settings → OPEN ONBOARDING. Release builds with the catalog enabled automatically send a random installation ID and app version at most once per UTC day. The ID is recognizable across days, shared across Commander profiles and available in Settings → About. Records are kept for 90 days; the database stores no IP addresses or Commander/Journal data. Disable the catalog or set EDFRAME_NO_USAGE_PING=1 to prevent pings; development builds do not ping.
 
 ED-Frame is a free, open-source Windows companion for Elite Dangerous. Your local Journal drives your Commander workspace; ED-Frame's own community server supplements it with shared public galaxy observations.
 

@@ -27,6 +27,7 @@ profile-*/
 ED-Frame/
 EDEngineeringCompanion/
 phase14_graphics.json
+usage_ping.json
 phase14.log
 journal_path.txt
 
@@ -82,6 +83,7 @@ dist/
 build-*/
 dist-*/
 output/
+outputs/
 *.egg-info/
 *.zip
 

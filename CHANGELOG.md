@@ -1,5 +1,14 @@
 # Changelog
 
+## 1.0.10 — 2026-10-13
+
+- Add a skippable setup wizard and a complete sidebar-derived tour, preserving existing completed profiles and immediately saved settings.
+- Support six themes, four languages, keyboard controls and scrollable layouts at all supported scales.
+- Automatically count active release installations with a shared random ID + version, once per UTC day. Explain collection in Connections/onboarding and show the ID in About.
+- Add catalog 0.9.5 private DAU/WAU/MAU, excluded IDs, admin-token protection and daily 90-day retention. Preserve existing access logging.
+- Include server statistics/sync optimizations, bounded collector transaction retries and sparse outfitting writes with compatible freshness reads.
+- Cancel delayed trading-details callbacks when the page unloads; exclude installation IDs and local test outputs from release artifacts.
+
 ## 1.0.9 — 2026-10-11
 
 - Add NAV trading loops A → B → A with outbound/return cargo, budget and cargo

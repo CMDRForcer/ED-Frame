@@ -446,7 +446,7 @@ ApplicationWindow {
         applyInterfaceScale()
         if (smokeInjectQmlError)
             console.warn("PHASE14 injected QML smoke-test failure")
-        if (!cockpit.onboardingComplete)
+        if (!cockpit.onboardingComplete && !onboardingDialog.visible)
             onboardingDialog.open()
     }
     onWidthChanged: applyInterfaceScale()
@@ -457,7 +457,7 @@ ApplicationWindow {
             window.applyInterfaceScale()
             if (!cockpit.commanderUpdatePopups)
                 window.feedbackVisible = false
-            if (!cockpit.onboardingComplete)
+            if (!cockpit.onboardingComplete && !onboardingDialog.visible)
                 onboardingDialog.open()
         }
         function onActivityChanged() {
@@ -672,87 +672,6 @@ ApplicationWindow {
             title: settingsHeader.heading
             subtitle: settingsHeader.subheading
             SettingsNavigation {}
-        }
-    }
-
-    component CockpitDialog: Dialog {
-        id: dialogControl
-        modal: true
-        dim: true
-        padding: 20
-        topPadding: 18
-        leftPadding: 20
-        rightPadding: 20
-        bottomPadding: 18
-        palette.window: panel
-        palette.windowText: textPrimary
-        palette.base: inputBackground
-        palette.text: textPrimary
-        palette.button: panelRaised
-        palette.buttonText: textPrimary
-        palette.highlight: accent
-        palette.highlightedText: backgroundPrimary
-
-        Overlay.modal: Rectangle { color: overlay }
-        background: Rectangle {
-            radius: 14
-            color: panel
-            border.width: 1
-            border.color: borderTone
-            Rectangle {
-                anchors.left: parent.left
-                anchors.top: parent.top
-                anchors.bottom: parent.bottom
-                width: 3
-                radius: 2
-                color: accent
-            }
-        }
-        header: CardSurface {
-            implicitHeight: 58
-            color: panelRaised
-            radius: UiMetrics.cardRadius
-            Rectangle {
-                anchors.left: parent.left
-                anchors.right: parent.right
-                anchors.bottom: parent.bottom
-                height: 1
-                color: divider
-            }
-            Label {
-                anchors.left: parent.left
-                anchors.leftMargin: 20
-                anchors.right: parent.right
-                anchors.rightMargin: 20
-                anchors.verticalCenter: parent.verticalCenter
-                elide: Text.ElideRight
-                text: dialogControl.title
-                color: textPrimary
-                font.pixelSize: 17
-                font.weight: Font.DemiBold
-            }
-        }
-        footer: DialogButtonBox {
-            visible: dialogControl.standardButtons !== Dialog.NoButton
-            standardButtons: dialogControl.standardButtons
-            padding: 12
-            spacing: 8
-            palette.button: inputBackground
-            palette.buttonText: textSecondary
-            palette.highlight: accent
-            background: Rectangle {
-                color: panelRaised
-                radius: 14
-                Rectangle {
-                    anchors.left: parent.left
-                    anchors.right: parent.right
-                    anchors.top: parent.top
-                    height: 1
-                    color: divider
-                }
-            }
-            onAccepted: dialogControl.accept()
-            onRejected: dialogControl.reject()
         }
     }
 
@@ -7202,6 +7121,12 @@ ApplicationWindow {
                         text: window.t("settings.onboarding", "OPEN ONBOARDING")
                         onClicked: cockpit.reopenOnboarding()
                     }
+                    CockpitButton {
+                        objectName: "qa-settings-about"
+                        text: window.t("dialog.about.title", "About ED-Frame")
+                        Accessible.name: text
+                        onClicked: aboutDialog.open()
+                    }
                     Item { Layout.fillHeight: true }
                 }
             }
@@ -8004,6 +7929,19 @@ ApplicationWindow {
                                                  && !cockpit.edFrameStateFindSyncBusy
                                         onClicked: cockpit.refreshEdFrameCatalogStatus()
                                     }
+                                }
+                                Label {
+                                    objectName: "qa-usage-counting-info"
+                                    Layout.fillWidth: true
+                                    text: window.t("onboarding.connections.usage", "Active installation counting")
+                                    color: textPrimary; font.pixelSize: UiMetrics.body; font.bold: true
+                                    wrapMode: Text.WordWrap
+                                }
+                                Label {
+                                    Layout.fillWidth: true
+                                    text: window.t("usage.privacy", "Release builds automatically send a random installation ID + app version, at most once per UTC day with the catalog enabled. The ID is recognizable across days. Stored for 90 days; no IP addresses in the database, no Commander data or Journals.")
+                                    color: muted; font.pixelSize: UiMetrics.caption
+                                    wrapMode: Text.WordWrap
                                 }
                                 Label {
                                     Layout.fillWidth: true
@@ -9070,6 +9008,7 @@ ApplicationWindow {
         anchors.centerIn: parent
         width: Math.min(620, window.width - 80)
         standardButtons: Dialog.Close
+        onOpened: cockpit.ensureUsageInstallId()
         contentItem: ColumnLayout {
             spacing: 14
             Label {
@@ -9086,6 +9025,27 @@ ApplicationWindow {
                 wrapMode: Text.WordWrap
             }
             Rectangle { Layout.fillWidth: true; height: 1; color: borderTone }
+            Label {
+                Layout.fillWidth: true
+                text: window.t("usage.install_id", "YOUR RANDOM INSTALLATION ID")
+                color: muted; font.pixelSize: UiMetrics.caption; font.bold: true
+                wrapMode: Text.WordWrap
+            }
+            Label {
+                objectName: "qa-usage-install-id"
+                Layout.fillWidth: true
+                text: cockpit.usageInstallId || window.t("usage.id_pending", "Preparing local ID…")
+                color: textPrimary; font.pixelSize: UiMetrics.body
+                wrapMode: Text.WrapAnywhere
+            }
+            CockpitButton {
+                objectName: "qa-usage-copy-id"
+                Layout.fillWidth: true
+                text: window.t("usage.copy_id", "COPY INSTALLATION ID")
+                Accessible.name: text
+                enabled: !!cockpit.usageInstallId
+                onClicked: cockpit.copyUsageInstallId()
+            }
             RowLayout {
                 Layout.fillWidth: true
                     Label { text: window.t("dialog.about.developer", "DEVELOPER"); color: muted; font.pixelSize: UiMetrics.caption; font.bold: true }
@@ -9140,40 +9100,13 @@ ApplicationWindow {
         }
     }
 
-    CockpitDialog {
+    OnboardingWizard {
         id: onboardingDialog
         objectName: "qa-dialog-onboarding"
-        title: window.t("dialog.onboarding.title", "Welcome, Commander")
-        modal: true
-        closePolicy: Popup.NoAutoClose
-        anchors.centerIn: parent
-        width: 620
-        standardButtons: Dialog.Ok
-        onAccepted: cockpit.completeOnboarding()
-        contentItem: ColumnLayout {
-            spacing: 14
-            Label {
-                text: window.t("dialog.onboarding.heading", "YOUR ENGINEERING COCKPIT")
-                color: cyan; font.pixelSize: 20; font.bold: true
-            }
-            Label {
-                Layout.fillWidth: true
-                text: window.t("onboarding.steps", "1 · Pin a module plan in Engineering.\n")
-                      + "2 · Operations calculates materials, safe trades and routes.\n"
-                      + "3 · Elite Journal events update inventory, trades and crafts automatically."
-                color: textPrimary; font.pixelSize: 13
-                wrapMode: Text.WordWrap
-            }
-            Label {
-                Layout.fillWidth: true
-                text: window.t("onboarding.network", "No network connection is required for planning. INARA and EDDN stay disabled until you explicitly grant access in Connections.")
-                color: muted; font.pixelSize: 11; wrapMode: Text.WordWrap
-            }
-            Label {
-                text: window.t("onboarding.search", "Press Ctrl+K anywhere for global search.")
-                color: green; font.pixelSize: 12; font.bold: true
-            }
-        }
+        appWindow: window
+        controller: cockpit
+        navigationItems: window.primaryNavigation
+        onOpenArea: page => window.currentPage = page
     }
 
     Rectangle {

@@ -74,7 +74,8 @@ class SchemaContractTests(unittest.TestCase):
         self.assertIn("st.fleet_carrier IS NOT TRUE", source)
         self.assertIn('@app.get("/v1/sync/markets")', source)
         self.assertIn("nextCursor", source)
-        self.assertIn("ORDER BY sync_at, market_id, commodity", source)
+        self.assertIn("ORDER BY sync_at, market_id, commodity",
+            (SERVICE / "edframe_catalog" / "market_sync.py").read_text())
         self.assertIn('@app.get("/v1/sync/state-finds")', source)
         self.assertIn("WHERE expires_at > NOW()", source)
         self.assertIn('@app.get("/v1/sync/station-offers")', source)

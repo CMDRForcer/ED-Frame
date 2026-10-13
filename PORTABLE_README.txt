@@ -1,4 +1,4 @@
-ED-Frame 1.0.9 - Portable Windows Edition
+ED-Frame 1.0.10 - Portable Windows Edition
 ===================================================================
 
 1. Extract the complete ZIP archive.
@@ -7,7 +7,7 @@ ED-Frame 1.0.9 - Portable Windows Edition
 
 Python and the INSTALL_REQUIREMENTS step are not required for this portable build.
 
-This release works with catalog server 0.9.4. NAV includes A-B-A trading loops,
+This release works with catalog server 0.9.5. NAV includes A-B-A trading loops,
 Carrier commodity offers, a manual starting system and unlimited commodity radius.
 A coordinated cockpit and asynchronous startup improve everyday use. NAV search
 inputs survive page changes within the session. Trading suggestions show regional
@@ -43,3 +43,10 @@ License: GNU General Public License v3.0
 
 ED-Frame is an independent third-party project and is not affiliated with
 Frontier Developments. Elite Dangerous is a trademark of Frontier Developments plc.
+
+First launch offers a skippable setup wizard and a tour of every area.
+Release builds with the catalog enabled automatically send a random installation ID
+and app version at most once per UTC day. The ID is recognizable across days and
+shared across profiles. View/copy it in Settings > About. Records expire after
+90 days; the database stores no IP addresses or Commander/Journal/activity data.
+Disable the catalog or set EDFRAME_NO_USAGE_PING=1 to prevent pings.

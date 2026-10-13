@@ -49,6 +49,7 @@ jobs:
           "ED_FRAME_PROFILE_FID=F0000000" >> $env:GITHUB_ENV
           "ED_FRAME_SINGLE_INSTANCE_NAME=ED-Frame-ci-$env:GITHUB_RUN_ID-$env:GITHUB_RUN_ATTEMPT" >> $env:GITHUB_ENV
           "PHASE14_PREVIEW_SKIP_ONBOARDING=1" >> $env:GITHUB_ENV
+          "EDFRAME_NO_USAGE_PING=1" >> $env:GITHUB_ENV
           "PHASE14_SMOKE_TEST=1" >> $env:GITHUB_ENV
           "QT_QPA_PLATFORM=offscreen" >> $env:GITHUB_ENV
 

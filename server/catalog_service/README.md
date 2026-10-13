@@ -1,13 +1,13 @@
 # ED-Frame central catalog service
 
-Version **0.9.4**, compatible with app **1.0.9**. Public statistics are cached
+Version **0.9.5**, compatible with app **1.0.10**. Public statistics are cached
 and refreshed in the background; see [API](#api) for freshness and retry behavior.
 The targeted Spansh Powerplay
 extension supplements missing explicit control from identity-checked public
 snapshots, preserving original source times and newer/equal-time EDDN facts.
 
 `POST /v1/mining/merit-markets` is a public read-only batch lookup. Its JSON body
-contains `targets` (1–200 unique exact systems with concrete commodity IDs),
+contains `targets` (1â€“200 unique exact systems with concrete commodity IDs),
 `power`, `goal`, `method`, optional `opposingPower`, `minDemand`, `maxAgeHours`
 and `landingPad`. Only catalogued commodities compatible with the requested
 method are queried. Powerplay eligibility uses the shared route rules; missing
@@ -92,6 +92,97 @@ default for new profiles. Its Connections switch controls catalog access and
 supported anonymous contributions together; an explicit disabled setting is
 preserved. Commander identities, raw Journal files and private builds remain
 outside this public service contract.
+
+## Private active-installation counts
+
+Release clients count installations automatically when the catalog is enabled; there is no dedicated counting switch. The random ID remains recognizable across dates. Development builds and `EDFRAME_NO_USAGE_PING=1` do not ping.
+
+`POST /v1/usage/ping` accepts exactly `install_id` (UUID) and `app_version`
+(a nonempty string of at most 32 characters). The API assigns the current UTC
+date. `(install_id, day)` is unique; duplicate submissions do not overwrite
+the first version of that day. The table contains only those three columns,
+with a date index. Neither peer IP nor forwarded IP is used by this endpoint.
+The bounded in-memory rate limiter allows six requests per UUID per minute
+in each API worker; it is a basic request budget, not a proof of unique users.
+Deleting the local config or copying it to another installation changes the
+relationship between IDs and real installations.
+
+The API lifespan starts an hourly UTC-date check outside requests, deleting
+rows older than 90 days once per UTC day, and at startup after a downtime.
+Cleanup only touches `usage_pings`. A failed cleanup is logged and retried
+on the next hourly check. Existing catalog maintenance remains unchanged.
+
+`GET /v1/usage/stats` requires the `X-EDFrame-Admin-Token` header. The configured
+token is compared in constant time. Missing/incorrect tokens, and an unset
+server token, return 401 before opening the database. The response is private
+and `Cache-Control: no-store`:
+
+```json
+{"dau": 0, "wau": 0, "mau": 0, "by_version_30d": {"1.0.10": 0}}
+```
+
+DAU uses today in UTC; WAU and MAU use today plus the preceding 6 and 29 dates.
+Each window counts distinct installation IDs. Version counts assign each
+30-day-active ID to its most recent reported version, counting it once.
+No IDs are returned. These counts are not included in `/v1/status`, public
+discovery metadata or the website, and the endpoint has no CORS allowance.
+
+Compose passes these settings to the API only:
+
+- `EDFRAME_ADMIN_TOKEN`: private operator token; empty disables statistics
+  access (always 401). Supply a secret in the deployment environment, never
+  the app, website, repository or URL.
+- `EDFRAME_USAGE_EXCLUDED_IDS`: comma-separated UUIDs whose new pings are
+  acknowledged without being stored. Invalid entries are ignored. Configure
+  exclusions before collecting those IDs; the setting does not erase history.
+
+Before switching to this API, install the additive usage_pings table and date
+index in a bounded transaction, after verifying a database backup. Existing
+catalog tables need no backfill for this addition. Verify the new schema and
+use its SHA-256 for EDFRAME_VERIFIED_SCHEMA_SHA256; the older fingerprint must
+not be reused. The desktop app never migrates the server database.
+
+Uvicorn and Caddy access logging, `FORWARDED_ALLOW_IPS`, proxy-header options
+and the existing `/v1/status` CORS rule are unchanged. The installation table
+has no IP-address column; existing infrastructure access logs are separate.
+
+## Collector transaction retries
+
+A collector frame is projected and committed atomically. PostgreSQL deadlocks
+(`40P01`) and serialization failures (`40001`) roll back the entire attempt
+before replaying the same decoded frame, original observation times and original
+receipt time. There are at most four attempts. Three bounded waits with jitter
+add at most 425 ms; database execution and lock-wait time are additional.
+Recovered attempts do not duplicate the committed message/row counters.
+Persistent conflicts remain reported as one failed frame. Invalid data,
+constraint errors and uncertain connection/COMMIT failures are not replayed.
+Only schema, timestamps, SQLSTATE and attempt information are logged for retries,
+not relay payloads. A verified unchanged-schema collector deployment uses the
+same read-only startup check as the API.
+
+## Internal SQL measurements
+
+PostgreSQL preloads `pg_stat_statements`; first activation needs one database
+restart. `track_io_timing=on` records read timings. Execution statistics use the
+bounded default statement store and top-level tracking; planning tracking is
+left disabled. The extension is created in the retained catalog database.
+Product tables, their contents and existing indexes are not replaced.
+
+The operator report runs inside the collector, without a public HTTP endpoint:
+
+```sh
+docker compose exec -T collector python - < ops/report-query-performance.py
+# Explicitly include normalized SQL text for the operator:
+docker compose exec -T collector python - --sql --limit 20 < ops/report-query-performance.py
+```
+
+The report ranks cumulative execution time and includes calls, mean/maximum
+execution time, physical reads, temporary writes and WAL bytes. SQL text is
+excluded by default. Reset time and eviction count identify measurement
+coverage; short windows after a restart are not representative benchmarks.
+The PostgreSQL module records successful statement executions (including ones
+whose surrounding transaction later rolls back); failed executions still need
+the existing service error logs. No statistics-reset command is run by the report.
 
 ## Conditional Mining snapshots
 
@@ -296,6 +387,24 @@ use parallel query workers. The replaceable cache is one row, persists through
 API restarts and contains only public catalog projections. Prime it before
 switching the API image during a deployment.
 
+The commodity counter seeks the next distinct observed commodity through
+`markets_search_idx`; it does not sort every market row or count reference
+catalog definitions. Empty catalogs and newly observed commodity IDs retain
+the same exact count semantics as `COUNT(DISTINCT commodity)`.
+`ops/verify-status-readonly.py` checks PostgreSQL edge cases, index usage and
+bounded execution against the retained market catalog without writing rows.
+
+For a verified API deployment with **no schema changes**, the operator can set
+`EDFRAME_VERIFIED_SCHEMA_SHA256` to the SHA-256 of the already installed,
+matching `edframe_catalog/schema.sql`. Startup then checks the bundled hash and
+all declared public tables/indexes in a read-only transaction instead of
+repeating DDL and backfills alongside the running collector. A different hash,
+missing relation or failed database check prevents startup; it never falls
+back to unapproved schema writes in this mode. Without the variable, the
+normal idempotent schema initialization remains enabled. Set this variable
+only after verifying the installed schema; schema changes require the normal
+migration path and a new validated deployment.
+
 - `GET /healthz`
 - `GET /v1/status`
 - `GET /v1/systems/suggest?q=Cube`
@@ -368,6 +477,28 @@ the same read-only, anonymous contract.
 `/v1/status` exposes separate catalog counts plus freshness and completeness
 metrics for market details, station metadata, coordinates and mining evidence.
 
+### Indexed market synchronization
+
+`GET /v1/sync/markets` keeps its opaque version-1 cursor, ascending
+`(syncAt, marketId, commodity)` ordering, optional commodity filter, full
+response fields, and `limit + 1` check for `hasMore`. `syncAt` remains the newer
+of the retained market receipt and its station metadata receipt. Station-only
+changes re-emit retained commodities without making old prices look newer.
+
+The query uses disjoint market/station receipt streams with the existing
+`markets_received_idx`, `stations_received_idx` and primary keys. It selects
+a small page of keys before joining full station/system metadata. There is no
+schema migration, extra background poll, history truncation or global
+`work_mem` increase. Existing app versions can use the faster server directly.
+
+`ops/verify-market-sync.py --synthetic` requires a disposable database named
+`edframe_sync_probe_*`; it populates only that database and compares full
+results against the former query, including pagination and station changes.
+`--live-readonly` performs bounded comparisons in one repeatable-read,
+read-only snapshot without schema setup. Run this operator probe explicitly
+in a separate container; it is not a public endpoint or recurring task.
+
+
 ### Regional State Finds
 
 `GET /v1/sync/state-finds` optionally accepts `x`, `y`, `z` together and
@@ -430,7 +561,7 @@ retains previous results. It never silently substitutes a smaller radius.
 
 ### Regional trading round trips
 
-`GET /v1/markets/trade-routes` proposes **A → B → A**, with a profitable
+`GET /v1/markets/trade-routes` proposes **A â†’ B â†’ A**, with a profitable
 outbound commodity and a separately chosen return commodity. Each leg uses
 observed buy/sell prices and positive stock/demand. Quantity is bounded by
 cargo capacity, stock, demand and the cash available at that point. Return
@@ -438,7 +569,7 @@ cash includes profit from the outbound sale. Reference prices and unknown
 quantities never become executable offers.
 
 Parameters: `x/y/z`, `max_distance` (station A radius, default 50 LY),
-`max_leg_distance` (A–B, default 100 LY), `cargo_tonnes` (default 100),
+`max_leg_distance` (Aâ€“B, default 100 LY), `cargo_tonnes` (default 100),
 `budget_cr` (default 10M), `max_age_hours` (default 24), `landing_pad`,
 `exclude_fleet_carriers` (default false), `commodity` (outbound; default ALL),
 `sort_by=PROFIT|UNIT_PROFIT|DISTANCE`, `refresh` and `limit` (default 30,
@@ -472,3 +603,45 @@ not sent.
 running FastAPI lifespan or schema setup. Run it only in an approved isolated
 image/container with read-only transaction defaults and the deployment's
 database environment. It prints aggregate timing/coverage, not credentials.
+
+## Sparse outfitting writes and storage observations
+
+The optional `EDFRAME_SHARED_OUTFITTING_FRESHNESS=1` writer stores the last
+complete inventory observation once in `station_outfitting`. Existing
+normalized module rows are rewritten only when their effective identifier or
+price evidence changes. A newer price observation is still retained even if
+its price is unchanged. Unknown identifiers/prices and older price evidence
+retain the existing merge behavior; genuine inventory removals and additions
+remain authoritative. Shipyard partial purchases and market writes retain
+their existing behavior.
+
+The compatible API reads availability freshness as
+`GREATEST(mo.observed_at, station_outfitting.observed_at)`, and orders offers
+using that same effective value. Price observation times remain independent.
+Raw normalized `observed_at`/availability source fields are seed values in this
+mode: operators must join the parent inventory for current availability.
+Complete JSON snapshots, receipt timestamps and station-offer sync cursors
+continue to advance normally.
+
+Activation is reader first, then the opt-in collector. Collector startup
+requires `/healthz` capability `sharedOutfittingFreshness: true` from the
+internal API. Enable only after every reader is upgraded. On rollback,
+restore the old collector with the flag disabled and keep the compatible API.
+After sparse writes have occurred, downgrading that API would require a
+separately planned normalized-timestamp backfill; never blindly restore the old
+reader. On this private deployment, `compose.override.yaml` pins the active
+images and protocol flags without credentials. Update that private override
+alongside any deliberate rollback.
+
+`ops/verify-outfitting-writes.py` compares the old/new writer and API using a
+disposable `edframe_write_probe_*` database. Its read-only mode compares
+production fields, selected station sets and freshness ordering. Equally fresh
+offer ties have no defined order in the existing endpoint.
+
+The installed `edframe-catalog-storage-monitor.timer` records private disk,
+table and index measurements every two hours, with a short randomized delay.
+It performs bounded read-only metadata queries and stores at most 31 days of
+its own JSON reports under `/var/lib/edframe-catalog/storage-monitor`.
+Warnings begin at 70%; 85% produces a failed service result. These messages
+are in the server journal; no external notifications are configured.
+It does not rebuild indexes or delete catalog facts, backups or images.

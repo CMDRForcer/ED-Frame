@@ -6,6 +6,18 @@ x-logging: &bounded-logging
     max-size: "20m"
     max-file: "3"
 
+x-database-environment: &database_environment
+  POSTGRES_HOST: db
+  POSTGRES_PORT: "5432"
+  POSTGRES_DB: ${POSTGRES_DB}
+  POSTGRES_USER: ${POSTGRES_USER}
+  POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+  # Opt in only after the shared-freshness API reader is activated.
+  EDFRAME_SHARED_OUTFITTING_FRESHNESS: ${EDFRAME_SHARED_OUTFITTING_FRESHNESS:-0}
+  # Install transactional markers explicitly before approved activation.
+  EDFRAME_MINING_SNAPSHOT_PROTOCOL: ${EDFRAME_MINING_SNAPSHOT_PROTOCOL:-0}
+  EDFRAME_MINING_PAGES_PATH: ${EDFRAME_MINING_PAGES_PATH:-/tmp/edframe-mining-pages.sqlite3}
+
 services:
   db:
     image: postgres:17-alpine
@@ -34,6 +46,11 @@ services:
       - max_connections=50
       - -c
       - work_mem=4MB
+      # Bounded internal SQL measurements; applying preload needs one restart.
+      - -c
+      - shared_preload_libraries=pg_stat_statements
+      - -c
+      - track_io_timing=on
     mem_limit: 1200m
     logging: *bounded-logging
     networks: [backend]
@@ -43,15 +60,10 @@ services:
       context: ../..
       dockerfile: server/catalog_service/Dockerfile
     restart: unless-stopped
-    environment: &database_environment
-      POSTGRES_HOST: db
-      POSTGRES_PORT: "5432"
-      POSTGRES_DB: ${POSTGRES_DB}
-      POSTGRES_USER: ${POSTGRES_USER}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
-      # Install transactional markers explicitly before approved activation.
-      EDFRAME_MINING_SNAPSHOT_PROTOCOL: ${EDFRAME_MINING_SNAPSHOT_PROTOCOL:-0}
-      EDFRAME_MINING_PAGES_PATH: ${EDFRAME_MINING_PAGES_PATH:-/tmp/edframe-mining-pages.sqlite3}
+    environment:
+      <<: *database_environment
+      EDFRAME_ADMIN_TOKEN: ${EDFRAME_ADMIN_TOKEN:-}
+      EDFRAME_USAGE_EXCLUDED_IDS: ${EDFRAME_USAGE_EXCLUDED_IDS:-}
     depends_on:
       db:
         condition: service_healthy

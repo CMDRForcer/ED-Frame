@@ -77,6 +77,7 @@ jobs:
           "ED_FRAME_PROFILE_FID=F0000000" >> $env:GITHUB_ENV
           "ED_FRAME_SINGLE_INSTANCE_NAME=ED-Frame-release-source-${{ github.run_id }}-${{ github.run_attempt }}" >> $env:GITHUB_ENV
           "PHASE14_PREVIEW_SKIP_ONBOARDING=1" >> $env:GITHUB_ENV
+          "EDFRAME_NO_USAGE_PING=1" >> $env:GITHUB_ENV
           "PHASE14_SMOKE_TEST=1" >> $env:GITHUB_ENV
           "PHASE14_SMOKE_MINING_PROCESS=1" >> $env:GITHUB_ENV
           "PHASE14_SMOKE_COMPUTE_WORK=1" >> $env:GITHUB_ENV
@@ -128,6 +129,7 @@ jobs:
           $env:ED_FRAME_PROFILE_FID = "F0000000"
           $env:ED_FRAME_SINGLE_INSTANCE_NAME = "ED-Frame-release-package-${{ github.run_id }}-${{ github.run_attempt }}"
           $env:PHASE14_PREVIEW_SKIP_ONBOARDING = "1"
+          $env:EDFRAME_NO_USAGE_PING = "1"
           $env:PHASE14_SMOKE_TEST = "1"
           $env:PHASE14_SMOKE_MINING_PROCESS = "1"
           $env:PHASE14_SMOKE_COMPUTE_WORK = "1"
@@ -187,7 +189,7 @@ jobs:
               }
               $forbidden = @($entries | Where-Object {
                 $_.FullName -match '(^|/)(__pycache__|tests|profile-[^/]*|EDEngineeringCompanion|ED-Frame|\.git)(/|$)' -or
-                $_.Name -match '^(phase14\.log|inara_config\.json|inara_receipts\.json|inara_journal_cache\.json|eddn_config\.json|Journal.*\.log)$'
+                $_.Name -match '^(phase14\.log|inara_config\.json|inara_receipts\.json|inara_journal_cache\.json|eddn_config\.json|usage_ping\.json|Journal.*\.log)$'
               })
               if ($forbidden.Count) {
                 Write-Error "Forbidden runtime or personal files found in $($archiveFile.Name): $($forbidden.FullName -join ', ')"

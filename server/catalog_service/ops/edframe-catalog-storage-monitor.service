@@ -1,0 +1,13 @@
+[Unit]
+Description=Measure ED-Frame catalog storage without changing facts
+Requires=docker.service
+After=docker.service
+
+[Service]
+Type=oneshot
+ExecStart=/bin/sh /opt/edframe-catalog/server/catalog_service/ops/catalog-storage-monitor.sh
+TimeoutStartSec=30
+Nice=15
+IOSchedulingClass=best-effort
+IOSchedulingPriority=7
+UMask=0077

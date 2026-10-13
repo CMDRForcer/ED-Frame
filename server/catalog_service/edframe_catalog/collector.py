@@ -9,8 +9,12 @@ import zmq
 
 from ed_companion.integrations.eddn import EddnRelayDecodeError, decode_relay_frame
 
+from .collector_transactions import retry_transaction
+from .startup import prepare_api_schema
+from .outfitting_write_policy import require_outfitting_reader
+
 from .database import (
-    connection, ensure_schema, record_state, upsert_batch,
+    connection, record_state, upsert_batch,
     upsert_state_find_batch, upsert_station_offer_batch,
     upsert_powerplay_snapshot,
     upsert_state_sighting_batch,
@@ -41,6 +45,47 @@ def _stop(_signum, _frame) -> None:
     RUNNING = False
 
 
+def _project_and_commit(conn, payload, schema, received_at, message_bytes):
+    system = project_system(payload)
+    markets = project_markets(payload, received_at)
+    sites = project_sites(payload, received_at)
+    stations = project_stations(payload, received_at)
+    systems = projected_systems(
+        system, markets, sites, stations,
+    )
+    projected = upsert_batch(
+        conn,
+        systems,
+        stations,
+        markets,
+        sites,
+    )
+    snapshot = project_state_bgs_snapshot(payload, received_at)
+    signals = project_state_signals(payload, received_at)
+    sightings = project_state_sightings(payload, received_at)
+    upsert_signal_systems(conn, sightings)
+    projected += upsert_state_sighting_batch(conn, sightings)
+    projected += upsert_state_find_batch(
+        conn,
+        [snapshot] if snapshot else [],
+        signals,
+    )
+    projected += upsert_station_offer_batch(
+        conn, project_station_offers(payload, received_at)
+    )
+    projected += upsert_powerplay_snapshot(
+        conn, project_powerplay_snapshot(payload, received_at)
+    )
+    record_state(
+        conn,
+        schema=schema,
+        received_at=received_at,
+        projected=projected,
+        message_bytes=message_bytes,
+    )
+    conn.commit()
+
+
 def main() -> None:
     logging.basicConfig(
         level=os.environ.get("LOG_LEVEL", "INFO"),
@@ -48,7 +93,8 @@ def main() -> None:
     )
     signal.signal(signal.SIGTERM, _stop)
     signal.signal(signal.SIGINT, _stop)
-    ensure_schema()
+    prepare_api_schema()
+    require_outfitting_reader()
 
     relay = os.environ.get("EDDN_RELAY_URL", "tcp://eddn.edcd.io:9500")
     context = zmq.Context()
@@ -72,44 +118,14 @@ def main() -> None:
                 try:
                     payload = decode_relay_frame(raw)
                     schema = schema_name(payload) or "unknown"
-                    system = project_system(payload)
-                    markets = project_markets(payload, received_at)
-                    sites = project_sites(payload, received_at)
-                    stations = project_stations(payload, received_at)
-                    systems = projected_systems(
-                        system, markets, sites, stations,
-                    )
-                    projected = upsert_batch(
+                    retry_transaction(
                         conn,
-                        systems,
-                        stations,
-                        markets,
-                        sites,
-                    )
-                    snapshot = project_state_bgs_snapshot(payload, received_at)
-                    signals = project_state_signals(payload, received_at)
-                    sightings = project_state_sightings(payload, received_at)
-                    upsert_signal_systems(conn, sightings)
-                    projected += upsert_state_sighting_batch(conn, sightings)
-                    projected += upsert_state_find_batch(
-                        conn,
-                        [snapshot] if snapshot else [],
-                        signals,
-                    )
-                    projected += upsert_station_offer_batch(
-                        conn, project_station_offers(payload, received_at)
-                    )
-                    projected += upsert_powerplay_snapshot(
-                        conn, project_powerplay_snapshot(payload, received_at)
-                    )
-                    record_state(
-                        conn,
+                        lambda: _project_and_commit(
+                            conn, payload, schema, received_at, message_bytes,
+                        ),
                         schema=schema,
                         received_at=received_at,
-                        projected=projected,
-                        message_bytes=message_bytes,
                     )
-                    conn.commit()
                 except (EddnRelayDecodeError, ValueError, TypeError) as exc:
                     conn.rollback()
                     LOG.warning("rejected relay frame: %s", exc)

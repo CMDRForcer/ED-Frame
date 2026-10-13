@@ -52,7 +52,14 @@ Item {
     Connections {
         target: cockpit
         function onTradeRoutesChanged() { routes.syncRows() }
-        function onUiChanged() { Qt.callLater(routes.restoreFilters) }
+        function onUiChanged() { restoreTimer.restart() }
+    }
+    // A page switch also saves UI settings. Cancel deferred restoration when
+    // this page unloads, instead of calling into its destroyed QML context.
+    Timer {
+        id: restoreTimer
+        interval: 0
+        onTriggered: routes.restoreFilters()
     }
     onSnapshotChanged: {
         var stamp = String(snapshot.generatedAt || "")

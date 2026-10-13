@@ -6,6 +6,7 @@ from contextlib import asynccontextmanager, ExitStack
 from datetime import datetime, timedelta, timezone
 import json
 import os
+import secrets
 import threading
 import time
 from typing import Annotated
@@ -21,6 +22,10 @@ from .trade_routes import search_trade_routes
 from ed_companion.navigation.trade_route_model import search_filters
 from ed_companion.navigation.mining_market import MiningMarketError
 from .status_cache import StatusCache, StatusUnavailable
+from .status_queries import COMMODITY_COUNT_SQL
+from .market_sync import market_sync_query
+from .startup import prepare_api_schema
+from .usage import UsagePingPayload, UsageRetention, excluded_ids, record_ping, usage_stats
 from .mining_metadata import enrich_ring_metadata
 from .mining_revision import mining_revision, static_revision
 from .mining_region import regional_page_limit, regional_box_clause
@@ -67,12 +72,14 @@ def _now() -> str:
 
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
-    ensure_schema()
+    prepare_api_schema()
     _status_cache.start()
+    _usage_retention.start()
     try:
         yield
     finally:
         _status_cache.stop()
+        _usage_retention.stop()
 
 
 app = FastAPI(
@@ -94,6 +101,44 @@ _powerplay_rate_lock = threading.Lock()
 _powerplay_rate_buckets: dict[str, list[float]] = {}
 _merit_rate_lock = threading.Lock()
 _merit_rate_buckets: dict[str, list[float]] = {}
+_usage_rate_lock = threading.Lock()
+_usage_rate_buckets: dict[str, list[float]] = {}
+_usage_retention = UsageRetention(connection)
+
+
+@app.post("/v1/usage/ping")
+def receive_usage_ping(payload: UsagePingPayload):
+    if payload.install_id in excluded_ids():
+        return {"ok": True}
+    identity = str(payload.install_id)
+    now = time.monotonic()
+    # Bounded, in-memory buckets, keyed by the already supplied random UUID.
+    # Neither forwarded client IP nor peer IP is read or written here.
+    with _usage_rate_lock:
+        if len(_usage_rate_buckets) > 4096:
+            _usage_rate_buckets.clear()
+        recent = [stamp for stamp in _usage_rate_buckets.get(identity, []) if now - stamp < 60]
+        if len(recent) >= 6:
+            raise HTTPException(status_code=429, detail="Usage ping request budget exceeded")
+        _usage_rate_buckets[identity] = [*recent, now]
+    with connection() as conn:
+        conn.execute("SET LOCAL statement_timeout = '5s'")
+        record_ping(conn, payload)
+    return {"ok": True}
+
+
+@app.get("/v1/usage/stats")
+def get_usage_stats(request: Request):
+    configured = os.environ.get("EDFRAME_ADMIN_TOKEN", "")
+    supplied = request.headers.get("x-edframe-admin-token", "")
+    if not configured or not supplied or not secrets.compare_digest(
+            configured.encode("utf-8"), supplied.encode("utf-8")):
+        raise HTTPException(status_code=401, detail="Unauthorized")
+    with connection() as conn:
+        conn.execute("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY")
+        conn.execute("SET LOCAL statement_timeout = '5s'")
+        result = usage_stats(conn)
+    return ORJSONResponse(result, headers={"Cache-Control": "no-store"})
 
 
 def _percent(part: int, whole: int) -> float:
@@ -283,7 +328,8 @@ def root() -> dict:
 def health() -> dict:
     with connection() as conn:
         conn.execute("SELECT 1").fetchone()
-    return {"status": "ok", "version": __version__, "time": _now()}
+    return {"status": "ok", "version": __version__, "time": _now(),
+            "capabilities": {"sharedOutfittingFreshness": True}}
 
 
 @app.get("/v1/status")
@@ -357,7 +403,7 @@ def _load_status() -> dict:
             """
         ).fetchall()
         commodities = conn.execute(
-            "SELECT COUNT(DISTINCT commodity) AS value FROM markets"
+            COMMODITY_COUNT_SQL
         ).fetchone()
         market_quality = conn.execute(
             """
@@ -623,7 +669,7 @@ def search_station_offers(
                    sc.reference_price AS "shipReferencePrice",
                    sc.reference_price_samples AS "shipReferenceSamples",
                    ship_price_evidence.rows AS "shipPriceEvidence",
-                   mo.observed_at AS "outfittingObservedAt",
+                   GREATEST(mo.observed_at, o.observed_at) AS "outfittingObservedAt",
                    so.observed_at AS "shipyardObservedAt"
             {offer_tables}
             LEFT JOIN station_outfitting o ON o.market_id = mo.market_id
@@ -649,7 +695,7 @@ def search_station_offers(
             ) ship_price_evidence ON so.ship_symbol IS NOT NULL
             WHERE {' AND '.join(clauses)}
             ORDER BY GREATEST(
-                COALESCE(mo.observed_at, '-infinity'::timestamptz),
+                COALESCE(GREATEST(mo.observed_at, o.observed_at), '-infinity'::timestamptz),
                 COALESCE(so.observed_at, '-infinity'::timestamptz)
             ) DESC
             LIMIT %s
@@ -1005,78 +1051,20 @@ def sync_markets(
     cursor_at, cursor_market_id, cursor_commodity = _decode_market_cursor(
         cursor
     )
-    clauses = [
-        "(sync_at, market_id, commodity) > (%s, %s, %s)",
-    ]
-    values: list[object] = [
-        cursor_at, cursor_market_id, cursor_commodity,
-    ]
     requested = sorted({
         item.strip().casefold()
         for item in str(commodities or "").split(",")
         if item.strip()
     })
-    if requested:
-        if len(requested) > 100:
-            raise HTTPException(
-                status_code=400, detail="Too many requested commodities",
-            )
-        clauses.append("commodity = ANY(%s)")
-        values.append(requested)
-    values.append(limit + 1)
+    if len(requested) > 100:
+        raise HTTPException(
+            status_code=400, detail="Too many requested commodities",
+        )
+    query, values = market_sync_query(
+        cursor_at, cursor_market_id, cursor_commodity, requested, limit + 1,
+    )
     with connection() as conn:
-        rows = conn.execute(
-            f"""
-            WITH changed AS (
-                SELECT m.market_id, m.commodity,
-                       COALESCE(NULLIF(st.station_name, ''), m.station_name)
-                           AS station_name,
-                       COALESCE(NULLIF(st.system_name, ''), m.system_name)
-                           AS system_name,
-                       m.mean_price, m.buy_price, m.stock, m.stock_bracket,
-                       m.sell_price, m.demand, m.demand_bracket,
-                       m.status_flags, m.observed_at, m.received_at,
-                       s.x, s.y, s.z, m.source,
-                       st.station_type, st.system_address,
-                       st.landing_pad_size, st.distance_to_arrival_ls,
-                       st.services, st.economies, st.primary_economy,
-                       st.government, st.controlling_faction,
-                       st.fleet_carrier, st.carrier_docking_access,
-                       st.prohibited,
-                       GREATEST(
-                           m.received_at,
-                           COALESCE(st.received_at, m.received_at)
-                       ) AS sync_at
-                FROM markets m
-                LEFT JOIN systems s
-                  ON LOWER(s.name) = LOWER(m.system_name)
-                LEFT JOIN stations st ON st.market_id = m.market_id
-            )
-            SELECT market_id AS "marketId", commodity,
-                   station_name AS station, system_name AS system,
-                   mean_price AS "meanPrice", buy_price AS "buyPrice",
-                   stock, stock_bracket AS "stockBracket",
-                   sell_price AS "sellPrice", demand,
-                   demand_bracket AS "demandBracket",
-                   status_flags AS "statusFlags",
-                   observed_at AS "observedAt", received_at AS "receivedAt",
-                   x, y, z, source,
-                   station_type AS "stationType",
-                   system_address AS "systemAddress",
-                   landing_pad_size AS "landingPadSize",
-                   distance_to_arrival_ls AS "distanceToArrivalLs",
-                   services, economies, primary_economy AS "primaryEconomy",
-                   government, controlling_faction AS "controllingFaction",
-                   fleet_carrier AS "fleetCarrier",
-                   carrier_docking_access AS "carrierDockingAccess",
-                   prohibited, sync_at AS "syncAt"
-            FROM changed
-            WHERE {' AND '.join(clauses)}
-            ORDER BY sync_at, market_id, commodity
-            LIMIT %s
-            """,
-            values,
-        ).fetchall()
+        rows = conn.execute(query, values).fetchall()
     has_more = len(rows) > limit
     page = rows[:limit]
     next_cursor = str(cursor or "")

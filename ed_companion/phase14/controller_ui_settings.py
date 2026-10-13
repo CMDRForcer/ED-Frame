@@ -218,6 +218,7 @@ LOGGER = logging.getLogger(__name__)
 
 INARA_ACTIVE_RECEIPT_LIMIT = 100
 from .controller_core import CoreControllerMixin, THEME_IDS
+from .onboarding import ONBOARDING_VERSION
 EDDN_ACTIVE_RECEIPT_LIMIT = 100
 FRONTIER_REQUEST_WATCHDOG_MS = 120_000
 COMMANDER_CARD_IDS = (
@@ -360,6 +361,7 @@ class UiSettingsMixin:
             "commander_update_popups": self._commander_update_popups,
             "enhanced_visuals": self._enhanced_visuals,
             "onboarding_complete": self._onboarding_complete,
+            "onboarding_version": getattr(self, "_onboarding_version", ONBOARDING_VERSION),
             "last_page": self._last_page,
             "debug_mode": self._debug_mode,
             "journal_auto": self._journal_auto,
@@ -617,6 +619,7 @@ class UiSettingsMixin:
     @Slot()
     def completeOnboarding(self):
         self._onboarding_complete = True
+        self._onboarding_version = ONBOARDING_VERSION
         self._save_ui_config()
         self.uiChanged.emit()
 
@@ -626,6 +629,13 @@ class UiSettingsMixin:
         self._onboarding_complete = False
         self._save_ui_config()
         self.uiChanged.emit()
+
+
+    @Slot(QUrl)
+    def setJournalFolder(self, folder):
+        """Adapt the native folder picker to the existing Journal path logic."""
+        if folder.isLocalFile():
+            self.setJournalPath(folder.toLocalFile())
 
 
     @Slot(bool)

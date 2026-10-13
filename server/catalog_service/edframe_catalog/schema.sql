@@ -402,3 +402,12 @@ CREATE TABLE IF NOT EXISTS collector_schema_metrics_hourly (
 
 CREATE INDEX IF NOT EXISTS collector_schema_metrics_hourly_received_idx
     ON collector_schema_metrics_hourly (last_received_at DESC, schema);
+
+-- Active installations only. No network addresses, profiles or event data.
+CREATE TABLE IF NOT EXISTS usage_pings (
+    install_id UUID NOT NULL,
+    day DATE NOT NULL,
+    app_version TEXT NOT NULL CHECK (length(app_version) BETWEEN 1 AND 32),
+    PRIMARY KEY (install_id, day)
+);
+CREATE INDEX IF NOT EXISTS usage_pings_day_idx ON usage_pings (day);

@@ -7,6 +7,9 @@ import re
 from typing import Any, Iterable
 
 import psycopg
+from .outfitting_write_policy import (
+    shared_outfitting_writes_enabled, outfitting_content_changed,
+)
 from psycopg.rows import dict_row
 
 
@@ -58,7 +61,7 @@ def purge_invalid_shipyard_trade_in_values(
                 )
             ), '[]'::jsonb),
             updated_at = NOW()
-        WHERE yard.source LIKE 'ED-Frame Journal · Shipyard.json%'
+        WHERE yard.source LIKE 'ED-Frame Journal Â· Shipyard.json%'
           AND EXISTS (
               SELECT 1
               FROM jsonb_array_elements(yard.ships) entry(value)
@@ -75,14 +78,14 @@ def purge_invalid_shipyard_trade_in_values(
             SELECT DISTINCT ship_symbol
             FROM station_ship_offers
             WHERE ship_id <= 0
-              AND price_source LIKE 'ED-Frame Journal · Shipyard.json%'
+              AND price_source LIKE 'ED-Frame Journal Â· Shipyard.json%'
         ), removed AS (
             DELETE FROM station_ship_offers offer
             USING invalid
             WHERE offer.ship_symbol = invalid.ship_symbol
               AND offer.ship_id <= 0
               AND offer.price_source LIKE
-                  'ED-Frame Journal · Shipyard.json%'
+                  'ED-Frame Journal Â· Shipyard.json%'
             RETURNING invalid.ship_symbol
         )
         UPDATE ship_catalog catalog
@@ -97,7 +100,7 @@ def purge_invalid_shipyard_trade_in_values(
     conn.execute(
         """
         DELETE FROM station_shipyards
-        WHERE source LIKE 'ED-Frame Journal · Shipyard.json%'
+        WHERE source LIKE 'ED-Frame Journal Â· Shipyard.json%'
           AND ships = '[]'::jsonb
         """
     )
@@ -228,7 +231,7 @@ def seed_reference_catalog(conn: psycopg.Connection) -> None:
                     price_captured_at or None
                 ),
                 "reference_price_source": (
-                    f"Static reference · {price_row.get('source')}"
+                    f"Static reference Â· {price_row.get('source')}"
                     if reference_price else None
                 ),
             })
@@ -671,23 +674,24 @@ def upsert_station_offer_batch(
                     SELECT COALESCE(
                       jsonb_agg(
                         COALESCE(
-                          (
-                            SELECT retained.value
-                            FROM jsonb_array_elements(
-                              station_outfitting.modules
-                            ) retained(value)
-                            WHERE jsonb_typeof(retained.value) = 'object'
-                              AND LOWER(retained.value ->> 'name') = LOWER(
-                                incoming.value #>> '{}'
-                              )
-                            LIMIT 1
-                          ),
+                          retained.items -> LOWER(incoming.value #>> '{}'),
                           incoming.value
                         ) ORDER BY incoming.ordinality
-                      ),
-                      '[]'::jsonb
+                      ), '[]'::jsonb
                     )
-                    FROM jsonb_array_elements(EXCLUDED.modules)
+                    FROM (
+                      SELECT COALESCE(
+                        jsonb_object_agg(
+                          LOWER(entry.value ->> 'name'), entry.value
+                          ORDER BY entry.ordinality DESC
+                        ), '{}'::jsonb
+                      ) AS items
+                      FROM jsonb_array_elements(station_outfitting.modules)
+                        WITH ORDINALITY entry(value, ordinality)
+                      WHERE jsonb_typeof(entry.value) = 'object'
+                        AND entry.value ->> 'name' IS NOT NULL
+                    ) retained
+                    CROSS JOIN jsonb_array_elements(EXCLUDED.modules)
                       WITH ORDINALITY incoming(value, ordinality)
                   )
                   ELSE EXCLUDED.modules
@@ -701,23 +705,24 @@ def upsert_station_offer_batch(
                     SELECT COALESCE(
                       jsonb_agg(
                         COALESCE(
-                          (
-                            SELECT retained.value
-                            FROM jsonb_array_elements(
-                              station_shipyards.ships
-                            ) retained(value)
-                            WHERE jsonb_typeof(retained.value) = 'object'
-                              AND LOWER(retained.value ->> 'name') = LOWER(
-                                incoming.value #>> '{}'
-                              )
-                            LIMIT 1
-                          ),
+                          retained.items -> LOWER(incoming.value #>> '{}'),
                           incoming.value
                         ) ORDER BY incoming.ordinality
-                      ),
-                      '[]'::jsonb
+                      ), '[]'::jsonb
                     )
-                    FROM jsonb_array_elements(EXCLUDED.ships)
+                    FROM (
+                      SELECT COALESCE(
+                        jsonb_object_agg(
+                          LOWER(entry.value ->> 'name'), entry.value
+                          ORDER BY entry.ordinality DESC
+                        ), '{}'::jsonb
+                      ) AS items
+                      FROM jsonb_array_elements(station_shipyards.ships)
+                        WITH ORDINALITY entry(value, ordinality)
+                      WHERE jsonb_typeof(entry.value) = 'object'
+                        AND entry.value ->> 'name' IS NOT NULL
+                    ) retained
+                    CROSS JOIN jsonb_array_elements(EXCLUDED.ships)
                       WITH ORDINALITY incoming(value, ordinality)
                   )
                   ELSE EXCLUDED.ships
@@ -824,7 +829,7 @@ def _upsert_ship_purchase_offer(
              price_observed_at, availability_source, price_source, updated_at)
         SELECT %(market_id)s, symbol, ship_id, buy_price,
                %(observed_at)s::timestamptz, price_observed_at,
-               'ED-Frame Journal · ShipyardBuy', price_source, NOW()
+               'ED-Frame Journal Â· ShipyardBuy', price_source, NOW()
         FROM incoming
         ON CONFLICT (market_id, ship_symbol) DO UPDATE SET
             ship_id = COALESCE(
@@ -870,7 +875,7 @@ def _replace_normalized_station_offers(
                  ELSE NULL END
         """
         merc_insert_columns = ", buy_merc_coins_price"
-        merc_select_column = ", buy_merc_coins_price"
+        merc_select_column = ", incoming.buy_merc_coins_price"
         merc_update = """
             buy_merc_coins_price = CASE
               WHEN EXCLUDED.buy_price IS NOT NULL
@@ -888,6 +893,26 @@ def _replace_normalized_station_offers(
         merc_insert_columns = ""
         merc_select_column = ""
         merc_update = ""
+    sparse = kind == "OUTFITTING" and shared_outfitting_writes_enabled()
+    observed_update = f"{target}.observed_at" if sparse else "EXCLUDED.observed_at"
+    source_update = f"{target}.availability_source" if sparse else "EXCLUDED.availability_source"
+    input_rows = "FROM incoming"
+    update_guard = ""
+    if sparse:
+        # Filter before INSERT to avoid locking every unchanged module. Recheck
+        # on conflict as well. Parent inventory update serializes station merges.
+        input_rows = f"""
+            FROM incoming
+            LEFT JOIN {target} retained
+              ON retained.market_id = %(market_id)s
+             AND retained.module_symbol = incoming.symbol
+            WHERE retained.market_id IS NULL OR (
+                {outfitting_content_changed("retained", "incoming", "incoming.item_id")}
+            )
+        """
+        update_guard = "WHERE " + outfitting_content_changed(
+            target, "EXCLUDED", "EXCLUDED.module_id",
+        )
     conn.execute(
         f"""
         WITH eligible AS MATERIALIZED (
@@ -947,10 +972,10 @@ def _replace_normalized_station_offers(
             (market_id, {symbol_column}, {id_column}, buy_price
              {merc_insert_columns}, observed_at, price_observed_at,
              availability_source, price_source, updated_at)
-        SELECT %(market_id)s, symbol, item_id, buy_price
+        SELECT %(market_id)s, incoming.symbol, incoming.item_id, incoming.buy_price
                {merc_select_column}, %(observed_at)s::timestamptz,
-               price_observed_at, %(source)s, price_source, NOW()
-        FROM incoming
+               incoming.price_observed_at, %(source)s, incoming.price_source, NOW()
+        {input_rows}
         ON CONFLICT (market_id, {symbol_column}) DO UPDATE SET
             {id_column} = COALESCE(EXCLUDED.{id_column}, {target}.{id_column}),
             buy_price = CASE
@@ -960,14 +985,14 @@ def _replace_normalized_station_offers(
                 THEN EXCLUDED.buy_price
               ELSE {target}.buy_price END,
             {merc_update}
-            observed_at = EXCLUDED.observed_at,
+            observed_at = {observed_update},
             price_observed_at = CASE
               WHEN EXCLUDED.buy_price IS NOT NULL
                AND ({target}.price_observed_at IS NULL
                     OR EXCLUDED.price_observed_at >= {target}.price_observed_at)
                 THEN EXCLUDED.price_observed_at
               ELSE {target}.price_observed_at END,
-            availability_source = EXCLUDED.availability_source,
+            availability_source = {source_update},
             price_source = CASE
               WHEN EXCLUDED.buy_price IS NOT NULL
                AND ({target}.price_observed_at IS NULL
@@ -975,6 +1000,7 @@ def _replace_normalized_station_offers(
                 THEN EXCLUDED.price_source
               ELSE {target}.price_source END,
             updated_at = NOW()
+        {update_guard}
         """,
         row,
     )

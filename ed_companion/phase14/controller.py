@@ -244,6 +244,8 @@ from .controller_commander import CommanderMixin
 from .controller_eddn import EddnMixin, _eddn_relay_relevant
 from .controller_journal_health import JournalHealthMixin, _last_complete_json_record
 from .controller_ui_settings import UiSettingsMixin
+from .onboarding import onboarding_state
+from .controller_usage import UsageMixin
 from .controller_navigation import NavigationMixin
 from .controller_fleet_materials import FleetMaterialsMixin
 from .controller_engineering import EngineeringMixin
@@ -346,7 +348,7 @@ class CockpitController(
     CommanderMixin, EddnMixin, EngineeringMixin, ExobiologyMixin,
     SurfaceNavMixin, StationServicesMixin, CommoditiesMixin, TradeRoutesMixin,
     FleetMaterialsMixin, FrontierCapiMixin, InaraMixin, JournalHealthMixin,
-    LogbookMixin, NavigationMixin, UiSettingsMixin, CoreControllerMixin,
+    LogbookMixin, NavigationMixin, UiSettingsMixin, UsageMixin, CoreControllerMixin,
     QObject,
 ):
     diagnosticsChanged = Signal()
@@ -479,11 +481,10 @@ class CockpitController(
         preview_enhanced = os.environ.get("PHASE14_PREVIEW_ENHANCED")
         if preview_enhanced in {"0", "1"}:
             self._enhanced_visuals = preview_enhanced == "1"
-        self._onboarding_complete = bool(
-            ui_config.get("onboarding_complete", False)
+        self._onboarding_complete, self._onboarding_version = onboarding_state(
+            ui_config,
+            preview_skip=os.environ.get("PHASE14_PREVIEW_SKIP_ONBOARDING") == "1",
         )
-        if os.environ.get("PHASE14_PREVIEW_SKIP_ONBOARDING") == "1":
-            self._onboarding_complete = True
         self._debug_mode = bool(ui_config.get("debug_mode", False))
         self._journal_auto = bool(ui_config.get("journal_auto", True))
         self._spansh_auto_refresh = bool(
@@ -936,6 +937,7 @@ class CockpitController(
         self.refreshStateReady.connect(self._finish_refresh_state)
         self.refreshStateFailed.connect(self._fail_refresh_state)
         self._start_initial_state_load()
+        self._init_usage_ping()
         self.timer = QTimer(self)
         self.timer.setInterval(1200)
         self.timer.timeout.connect(self.pollJournal)
@@ -3164,6 +3166,7 @@ class CockpitController(
             "_mining_market_retry_timer",
             "_frontier_watchdog",
             "catalogSyncTimer", "uiHeartbeatTimer", "backgroundPublishTimer",
+            "usagePingTimer",
         ):
             timer = getattr(self, timer_name, None)
             if timer is not None:

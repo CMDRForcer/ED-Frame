@@ -1,0 +1,10 @@
+[Unit]
+Description=Record ED-Frame storage every two hours
+
+[Timer]
+OnCalendar=*-*-* 00/2:15:00 UTC
+RandomizedDelaySec=10m
+Persistent=true
+
+[Install]
+WantedBy=timers.target
