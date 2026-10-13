@@ -12,7 +12,7 @@ A free, open-source Windows companion for **Elite Dangerous**, bringing your loc
 
 [**Download for Windows**](https://github.com/CMDRForcer/ED-Frame/releases/latest) · [English guide](docs/ED-Frame-1.0-Guide-EN.md) · [Deutsche Anleitung](docs/ED-Frame-1.0-Guide-DE.md)
 
-**App 1.0.10** · **Own community server** · **EN / DE / ES / FR** · **Six themes**
+**App 1.0.11** · **Own community server** · **EN / DE / ES / FR** · **Six themes**
 
 </div>
 
@@ -128,6 +128,30 @@ Heavy Mining, Journal and Powerplay work runs in bounded background processes, w
 
 Existing profiles, builds and retained data are reused. Full project source and `SHA256SUMS.txt` are separate release downloads. The current **1.0 release line** succeeds earlier EDEC/ED-Frame builds, including 1.5.43; use the **Latest release** link to find the current version.
 
+## App updates
+
+Release 1.0.11 adds a quiet update notice and **Settings → About**
+controls. Packaged release builds check GitHub at most once per UTC day; you can
+check manually or disable automatic checks. Optional automatic downloads stay in
+the background, show progress and support cancellation. Installation starts only
+after you choose **Update and restart**.
+
+The package SHA-256 and complete file manifest are verified before installation.
+A separate copied runtime waits for ED-Frame to exit, backs up every local profile
+and cache, then swaps only the program folder and verifies the new app's startup.
+A failed swap/start restores the previous app and profile snapshot; failed-version
+files are retained too. Profile backups can be opened from About. Backups and the
+previous app consume disk space and are retained for recovery.
+
+Profiles, plans, credentials and caches remain under %LOCALAPPDATA%/ED-Frame.
+Extracting/reinstalling the app into another program folder reuses that data.
+Development builds do not check automatically or replace their source checkout.
+EDFRAME_NO_UPDATES=1 disables checks. Update checks use GitHub independently of
+the catalog switch and do not send installation IDs or Commander/Journal data.
+
+Versions up to **1.0.10** do not contain this updater. Install **1.0.11** manually
+once; subsequent compatible releases can then be installed from the app.
+
 ## Data and privacy
 
 Your Commander profile, ships, plans, wishlists, Journal files and service credentials are **stored locally**, outside the program folder.
@@ -140,8 +164,9 @@ Your Commander profile, ships, plans, wishlists, Journal files and service crede
 [Connection and privacy guide](docs/ED-Frame-1.0-Guide-EN.md#connections-and-privacy) · [Deutsche Anleitung](docs/ED-Frame-1.0-Guide-DE.md)
 
 <details>
-<summary><strong>Latest improvements — app 1.0.10 and server 0.9.5</strong></summary>
+<summary><strong>Latest improvements — app 1.0.11 and server 0.9.5</strong></summary>
 
+- Daily update notices, optional background downloads and confirmed installation with profile backups and startup rollback.
 - A skippable setup wizard with a tour of every sidebar area, in all four languages.
 - Automatic active-installation counts: random ID + version, once per UTC day; private statistics and 90-day retention.
 - Faster server statistics and market synchronization, resilient collector transactions and fewer redundant outfitting writes.
@@ -150,7 +175,7 @@ Your Commander profile, ships, plans, wishlists, Journal files and service crede
 - A consistent cockpit, asynchronous startup and preserved NAV filters.
 - Existing grouped Mining/Powerplay lookups and bounded background processes remain available. Shared server statistics refresh in the background approximately every five minutes.
 
-[Release notes](docs/releases/1.0.10.md) · [Changelog](CHANGELOG.md) · [Server documentation](server/catalog_service/README.md) · [Application audit](reports/app_audit_2026-10-11.md)
+[Release notes](docs/releases/1.0.11.md) · [Changelog](CHANGELOG.md) · [Server documentation](server/catalog_service/README.md) · [Application audit](reports/app_audit_2026-10-11.md)
 
 </details>
 

@@ -246,6 +246,7 @@ from .controller_journal_health import JournalHealthMixin, _last_complete_json_r
 from .controller_ui_settings import UiSettingsMixin
 from .onboarding import onboarding_state
 from .controller_usage import UsageMixin
+from .controller_updates import UpdatesMixin
 from .controller_navigation import NavigationMixin
 from .controller_fleet_materials import FleetMaterialsMixin
 from .controller_engineering import EngineeringMixin
@@ -348,7 +349,7 @@ class CockpitController(
     CommanderMixin, EddnMixin, EngineeringMixin, ExobiologyMixin,
     SurfaceNavMixin, StationServicesMixin, CommoditiesMixin, TradeRoutesMixin,
     FleetMaterialsMixin, FrontierCapiMixin, InaraMixin, JournalHealthMixin,
-    LogbookMixin, NavigationMixin, UiSettingsMixin, UsageMixin, CoreControllerMixin,
+    LogbookMixin, NavigationMixin, UiSettingsMixin, UsageMixin, UpdatesMixin, CoreControllerMixin,
     QObject,
 ):
     diagnosticsChanged = Signal()
@@ -938,6 +939,7 @@ class CockpitController(
         self.refreshStateFailed.connect(self._fail_refresh_state)
         self._start_initial_state_load()
         self._init_usage_ping()
+        self._init_updates()
         self.timer = QTimer(self)
         self.timer.setInterval(1200)
         self.timer.timeout.connect(self.pollJournal)
@@ -3166,7 +3168,7 @@ class CockpitController(
             "_mining_market_retry_timer",
             "_frontier_watchdog",
             "catalogSyncTimer", "uiHeartbeatTimer", "backgroundPublishTimer",
-            "usagePingTimer",
+            "usagePingTimer", "updateTimer",
         ):
             timer = getattr(self, timer_name, None)
             if timer is not None:

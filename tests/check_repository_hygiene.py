@@ -25,6 +25,7 @@ BLOCKED_NAMES = {
     "shipyard.json",
     "status.json",
     "usage_ping.json",
+    "updates.json",
 }
 BLOCKED_SUFFIXES = {".bak", ".crash", ".key", ".log", ".p12", ".pem", ".pfx", ".pyc", ".tmp", ".zip"}
 SECRET_PATTERNS = {

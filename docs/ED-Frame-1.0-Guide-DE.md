@@ -1,6 +1,6 @@
 # ED-Frame 1.0 — Einstieg und Funktionen
 
-Aktualisiert für App **1.0.10** und Katalogserver **0.9.5**.
+Aktualisiert für App **1.0.11** und Katalogserver **0.9.5**.
 
 Beim ersten Start hilft ein überspringbarer Einrichtungsassistent mit Rundgang durch alle Bereiche. Fertig eingerichtete Profile bleiben erhalten; erneut öffnen über Settings → OPEN ONBOARDING. Release-Builds mit aktivem Katalog senden automatisch höchstens einmal pro UTC-Tag eine zufällige Installations-ID und die App-Version. Die ID bleibt über Tage wiedererkennbar, ist für alle Commander-Profile gemeinsam und unter Settings → About sichtbar. Einträge werden 90 Tage gespeichert; die Datenbank enthält keine IP-Adressen oder Commander-/Journal-Daten. Ein deaktivierter Katalog oder EDFRAME_NO_USAGE_PING=1 verhindert Pings; Development-Builds senden keine.
 
@@ -15,6 +15,14 @@ ED-Frame ist eine kostenlose Windows-Begleitapp für Elite Dangerous mit offenem
 5. Prüfe **Connections / Verbindungen** und öffne den Arbeitsbereich für deine nächste Aktivität.
 
 Voraussetzung ist Windows 10 oder 11. Einstellungen, Zugangsdaten, Baupläne und gespeicherte Beobachtungen liegen unter `%LOCALAPPDATA%\ED-Frame`, außerhalb des Programmordners. Dein vorhandenes Profil wird weiterverwendet; kopiere es nicht ins Programmarchiv. Die neue Veröffentlichungsreihe **1.0 ersetzt die bisherigen EDEC-/ED-Frame-Versionen einschließlich 1.5.43**. Wähle das aktuelle Release und nicht die größte historische Versionsnummer. Die EXE ist nicht signiert; Windows kann einen SmartScreen-Hinweis anzeigen.
+
+## Updates ohne Verlust deiner Pläne
+
+Versionen bis 1.0.10 haben keinen eingebauten Updater. Installiere 1.0.11 einmal manuell in einen neuen Ordner, nachdem die alte App beendet ist. Commander-Profile, Wishlists, Baupläne und Zugangsdaten werden aus dem getrennten AppData-Ordner weiterverwendet.
+
+Unter **Settings → About** findest du Updatehinweise, die manuelle Prüfung und optionale automatische Downloads. Release-Builds prüfen GitHub höchstens einmal pro UTC-Tag; automatische Downloads sind zunächst aus. Die Installation braucht deine Bestätigung mit **Update and restart**. Die App prüft Download und vollständiges Paket, wartet auf das Ende des alten Prozesses, sichert alle lokalen Profildaten und behält den vorherigen Programmordner. Schlägt der Austausch oder Start fehl, werden die alte App und der Profilstand wiederhergestellt. Die behaltenen Sicherungen öffnest du in About; sie und alte Programmordner brauchen zusätzlichen Speicherplatz.
+
+Die GitHub-Updateprüfung läuft unabhängig von der Katalogverbindung und sendet keine Installations-ID oder Commander-/Journal-Daten. Automatische Prüfungen lassen sich in About abschalten; EDFRAME_NO_UPDATES=1 unterbindet alle Prüfungen. Quellcode-/Development-Builds prüfen nicht automatisch und ersetzen ihren Checkout nicht.
 
 ## Die Funktionen einzeln
 
@@ -50,7 +58,7 @@ Powerplay-Bestätigungen verwenden bis zu 48 Stunden alte Beobachtungen, unabhä
 
 App **1.0.9** ergänzt passende Märkte und Ringe, die regionale Toplisten übergehen, mit gebündelten System-/Rohstoffabfragen. Powerplay-Seiten filtern vor der Seitengrenze nach deiner Macht und deinem Ziel. Gezielte öffentliche Spansh-Prüfungen können fehlende Kontrolle ergänzen; Systemidentität, ursprüngliche Quellenzeiten und neuere EDDN-Belege behalten Vorrang. Der Community-Schalter steuert diese Abfragen. Schwere Mining-, Journal- und Powerplay-Vorbereitung läuft in begrenzten Hintergrundprozessen; die Parallelität richtet sich nach verfügbarer CPU und RAM. Große kalte Suchen können weiterhin Zeit benötigen.
 
-Der laufende Server **0.9.4** aktualisiert die gemeinsame Bestandsstatistik ungefähr alle fünf Minuten im Hintergrund. Der Collector-Status bleibt live. Vorhandene App-Installationen 1.0.8 profitieren ohne Neuinstallation.
+Der laufende Server **0.9.5** aktualisiert die gemeinsame Bestandsstatistik ungefähr alle fünf Minuten im Hintergrund. Der Collector-Status bleibt live. Vorhandene App-Installationen 1.0.8 profitieren ohne Neuinstallation.
 
 Handelsrouten verwenden eine begrenzte regionale Marktauswahl; die Abdeckung wird im Ergebnis angezeigt. Sie versprechen kein Optimum über sämtliche Galaxiemärkte. Frachtlimit, Startbudget, Bestand und Nachfrage begrenzen beide Strecken. Die Rückfracht kann den Erlös aus dem ersten Verkauf verwenden. Die kombinierte Spanne/T addiert beide Preisunterschiede und entspricht bei unterschiedlichen Mengen nicht zwingend Gesamtgewinn/Frachtlimit. Preisprüfungen laufen auf Wunsch, nicht ständig im Hintergrund.
 

@@ -13,6 +13,11 @@ if __name__ == "__main__":
     import multiprocessing
     multiprocessing.freeze_support()
 
+    if '--edframe-update-helper' in sys.argv:
+        from ed_companion.updates.helper import run_helper
+        index = sys.argv.index('--edframe-update-helper')
+        raise SystemExit(run_helper(sys.argv[index + 1]))
+
 from ed_companion.persistence import atomic_write, cleanup_stale_atomic_temps
 from ed_companion.logging_security import redact_secrets
 
@@ -1121,6 +1126,8 @@ def run():
     def finish_startup(roots):
         try:
             initialize_windows(roots)
+            from ed_companion.updates.install import report_startup_ready
+            QTimer.singleShot(1000, lambda: report_startup_ready(APP_VERSION))
         except Exception:
             traceback.print_exc()
             app.exit(2)
@@ -1155,6 +1162,19 @@ def run():
     single_instance.server.close()
     QLocalServer.removeServer(SINGLE_INSTANCE_NAME)
     tray_runtime = runtime.get("tray")
+    pending_update = getattr(controller, '_pending_update_job', None)
+    if pending_update is not None:
+        from ed_companion.updates.install import launch_helper, write_json
+        from ed_companion.updates.package import UpdateError
+        try:
+            if not controller._save_ui_config():
+                raise UpdateError('save')
+            launch_helper(pending_update)
+        except Exception as error:
+            write_json(Path(pending_update).parent/'result.json',
+                       {'status':'failed','code':getattr(error, 'code', 'install')})
+            QProcess.startDetached(sys.executable, [])
+        return exit_code
     if tray_runtime is not None and tray_runtime.restart_requested:
         if getattr(sys, "frozen", False):
             QProcess.startDetached(sys.executable, sys.argv[1:])

@@ -1,5 +1,13 @@
 # Changelog
 
+## 1.0.11 — 2026-10-13
+
+- **Portable app updates:** daily release checks, a discreet sidebar notification and Settings → About controls. Optional background downloads are cancellable; installation requires confirmation.
+- **Preserved user data:** the copied updater waits for the app to exit, backs up every profile, swaps the program folder and verifies startup. Failed replacement/start restores the previous app and profile snapshot. Existing plans, credentials, caches and installation IDs remain in AppData; backups and previous app folders are retained.
+- **Verified packages:** fixed GitHub release source, HTTPS/redirect restrictions, asset SHA-256, complete file hashes and version checks. Development checkouts are not automatically checked or replaced.
+- **UI and release checks:** all four languages and six themes, narrow/scaled About controls, real Windows replacement/rollback tests and a required package manifest in the release workflow.
+- **Upgrade:** install 1.0.11 manually once; packages up to 1.0.10 have no updater. Catalog server 0.9.5 needs no deployment for this app release.
+
 ## 1.0.10 — 2026-10-13
 
 - Add a skippable setup wizard and a complete sidebar-derived tour, preserving existing completed profiles and immediately saved settings.

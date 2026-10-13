@@ -1,4 +1,4 @@
-ED-Frame 1.0.10 - Portable Windows Edition
+ED-Frame 1.0.11 - Portable Windows Edition
 ===================================================================
 
 1. Extract the complete ZIP archive.
@@ -50,3 +50,13 @@ and app version at most once per UTC day. The ID is recognizable across days and
 shared across profiles. View/copy it in Settings > About. Records expire after
 90 days; the database stores no IP addresses or Commander/Journal/activity data.
 Disable the catalog or set EDFRAME_NO_USAGE_PING=1 to prevent pings.
+
+App updates:
+Settings > About contains update checks, optional automatic background downloads,
+cancellation and Update and restart. GitHub checks are independent of the catalog;
+disable automatic checks there or set EDFRAME_NO_UPDATES=1.
+The helper backs up all local profile data after the app exits, keeps the previous
+program folder, and restores the old app/profiles if replacement or startup fails.
+Deleting/replacing the program folder does not delete LOCALAPPDATA/ED-Frame.
+Backups require additional free space and can be opened from About.
+Versions up to 1.0.10 predate this updater; install 1.0.11 manually once.

@@ -116,6 +116,9 @@ jobs:
           Copy-Item -LiteralPath "docs/ED-Frame-1.0-Guide-EN.md", "docs/ED-Frame-1.0-Guide-DE.md" -Destination "dist/ED-Frame/"
           Copy-Item -LiteralPath "docs/ED-Frame_User_Manual_Privacy_EN_1.5.5.pdf", "docs/ED-Frame_User_Manual_Privacy_DE_1.5.5.pdf" -Destination "dist/ED-Frame/"
 
+      - name: Generate complete portable update manifest
+        run: python -c "from ed_companion import APP_VERSION; from ed_companion.updates.package import write_manifest; write_manifest('dist/ED-Frame', APP_VERSION)"
+
       - name: Run honest packaged smoke test
         shell: pwsh
         run: |
@@ -150,6 +153,13 @@ jobs:
             Write-Error "Packaged smoke report did not confirm PASS."
             exit 1
           }
+
+      - name: Verify portable update and profile-preserving rollback
+        shell: pwsh
+        run: |
+          $env:PYTHONPATH = (Get-Location).Path
+          python tests/verify_update_package.py
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - name: Create release archives and checksums
         shell: pwsh
@@ -189,7 +199,7 @@ jobs:
               }
               $forbidden = @($entries | Where-Object {
                 $_.FullName -match '(^|/)(__pycache__|tests|profile-[^/]*|EDEngineeringCompanion|ED-Frame|\.git)(/|$)' -or
-                $_.Name -match '^(phase14\.log|inara_config\.json|inara_receipts\.json|inara_journal_cache\.json|eddn_config\.json|usage_ping\.json|Journal.*\.log)$'
+                $_.Name -match '^(phase14\.log|inara_config\.json|inara_receipts\.json|inara_journal_cache\.json|eddn_config\.json|usage_ping\.json|updates\.json|Journal.*\.log)$'
               })
               if ($forbidden.Count) {
                 Write-Error "Forbidden runtime or personal files found in $($archiveFile.Name): $($forbidden.FullName -join ', ')"
@@ -206,6 +216,10 @@ jobs:
             $names = @($windows.Entries.FullName)
             if (-not ($names -match '(^|/)ED-Frame\.exe$')) {
               Write-Error "Portable archive does not contain ED-Frame.exe."
+              exit 1
+            }
+            if (-not ($names -contains 'ED-Frame-update.json')) {
+              Write-Error "Portable archive is missing the update manifest."
               exit 1
             }
             if (-not ($names -match 'qml/pages/PowerplayPage\.qml$')) {

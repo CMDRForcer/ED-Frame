@@ -973,6 +973,12 @@ ApplicationWindow {
                     font.pixelSize: 22; font.bold: true; font.letterSpacing: 1.5
                 }
             }
+            UpdateNotice {
+                appWindow: window
+                controller: cockpit
+                Layout.fillWidth: true
+                onShowUpdates: aboutDialog.open()
+            }
             ListView {
                 id: navigationList
                 objectName: "qa-navigation-drag-list"
@@ -9005,12 +9011,28 @@ ApplicationWindow {
         objectName: "qa-dialog-about"
         title: window.t("dialog.about.title", "About ED-Frame")
         modal: true
-        anchors.centerIn: parent
-        width: Math.min(620, window.width - 80)
+        parent: Overlay.overlay
+        scale: cockpit.uiScale
+        transformOrigin: Popup.TopLeft
+        x: (parent.width - width * scale) / 2
+        y: (parent.height - height * scale) / 2
+        width: Math.min(720, parent.width / scale - 24)
+        height: Math.min(780, parent.height / scale - 24)
         standardButtons: Dialog.Close
         onOpened: cockpit.ensureUsageInstallId()
-        contentItem: ColumnLayout {
+        contentItem: ScrollView {
+            id: aboutUpdatesScroll
+            clip: true
+            contentWidth: availableWidth
+            ScrollBar.horizontal.policy: ScrollBar.AlwaysOff
+            ColumnLayout {
+            width: aboutUpdatesScroll.availableWidth
             spacing: 14
+            UpdatePanel {
+                Layout.fillWidth: true
+                appWindow: window
+                controller: cockpit
+            }
             Label {
                 text: "ED-Frame"
                 color: cyan
@@ -9096,6 +9118,7 @@ ApplicationWindow {
                 color: muted
                 font.pixelSize: UiMetrics.caption
                 wrapMode: Text.WordWrap
+            }
             }
         }
     }

@@ -120,3 +120,7 @@ collection = COLLECT(
     upx_exclude=[],
     name="ED-Frame",
 )
+
+# Runtime and every file are versioned and hashed for the portable updater.
+from ed_companion.updates.package import write_manifest
+write_manifest(Path(DISTPATH) / "ED-Frame", APP_VERSION)

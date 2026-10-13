@@ -1,6 +1,6 @@
 # ED-Frame 1.0 — getting started and features
 
-Updated for app **1.0.10** and catalog server **0.9.5**.
+Updated for app **1.0.11** and catalog server **0.9.5**.
 
 First launch offers a skippable setup wizard and a tour of every area. Completed profiles keep their setup; reopen it from Settings → OPEN ONBOARDING. Release builds with the catalog enabled automatically send a random installation ID and app version at most once per UTC day. The ID is recognizable across days, shared across Commander profiles and available in Settings → About. Records are kept for 90 days; the database stores no IP addresses or Commander/Journal data. Disable the catalog or set EDFRAME_NO_USAGE_PING=1 to prevent pings; development builds do not ping.
 
@@ -15,6 +15,14 @@ ED-Frame is a free, open-source Windows companion for Elite Dangerous. Your loca
 5. Review **Connections**, then select the workspace for your next activity.
 
 Use Windows 10 or 11. Personal settings, credentials, builds and retained data live under `%LOCALAPPDATA%\ED-Frame`, outside the portable folder. Reuse your existing profile; do not copy it into the application archive. The new 1.0 release line succeeds the older EDEC/ED-Frame builds, including 1.5.43, even though those historical numbers are larger. Download the current release rather than sorting old tags numerically. The executable is not code-signed; Windows may show a SmartScreen warning.
+
+## Updates without losing your plans
+
+Versions up to 1.0.10 have no built-in updater. Install 1.0.11 manually once into a new folder after quitting the old app. Existing Commander profiles, wishlists, builds and credentials are reused from the separate AppData folder.
+
+In **Settings → About**, review update notices, check manually or enable optional automatic downloads. Release builds check GitHub at most once per UTC day; automatic downloads are off initially. Installation requires **Update and restart**. The app verifies the download and complete package, waits for the old process to exit, backs up all local profile data and retains the previous program folder. Failed replacement or startup restores the old app and profile snapshot. Open the retained backups from About; backups and old program folders take additional disk space.
+
+GitHub update checks are independent of the catalog connection and send no installation ID or Commander/Journal data. Disable automatic checks in About, or set EDFRAME_NO_UPDATES=1 to disable all checks. Source/development builds do not check automatically or replace their checkout.
 
 ## Features, one at a time
 
