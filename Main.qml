@@ -3561,6 +3561,7 @@ ApplicationWindow {
                             width: parent.width * 1.58
                             height: parent.height * 1.58
                             source: engineeringPage.selectedShipData.symbol
+                                    && engineeringPage.selectedShipData.schematicAvailable !== false
                                     ? "assets/ships/" + engineeringPage.selectedShipData.symbol + ".svg"
                                     : ""
                             fillMode: Image.PreserveAspectFit
@@ -3569,6 +3570,7 @@ ApplicationWindow {
                         Label {
                             anchors.centerIn: parent
                             visible: !engineeringPage.selectedShipData.symbol
+                                     || engineeringPage.selectedShipData.schematicAvailable === false
                             text: window.t("engineering.no_schematic", "NO SHIP SCHEMATIC")
                             color: muted; font.pixelSize: 11; font.bold: true
                         }

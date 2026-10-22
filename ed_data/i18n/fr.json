@@ -1577,5 +1577,9 @@
   "updates.error.startup": "La nouvelle app n’a pas démarré correctement ; l’ancienne version est restaurée.",
   "updates.error.platform": "L’installation automatique nécessite le paquet portable Windows.",
   "updates.status.updated": "Mise à jour terminée. L’ancienne app et les sauvegardes sont conservées.",
-  "updates.backups": "OUVRIR LES SAUVEGARDES"
+  "updates.backups": "OUVRIR LES SAUVEGARDES",
+  "shipyard.reference_stats": "RÉFÉRENCE",
+  "shipyard.hull_mass_value": "Coque %1 t",
+  "shipyard.base_shield_value": "Bouclier de base %1 MJ",
+  "shipyard.approx_range_value": "Portée ≈ %1 AL"
 }

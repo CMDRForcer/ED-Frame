@@ -348,7 +348,14 @@
       "referencePrice": 69289470,
       "source": "Elite-Dangerous-Almanac/Almanac-Core",
       "sourcePath": "data/ships/ships.jsonc"
+    },
+    "anacondamkii": {
+      "symbol": "AnacondaMkII",
+      "name": "Anaconda Mk II",
+      "referencePrice": null,
+      "availability": "ARX_EARLY_ACCESS",
+      "source": "https://www.elitedangerous.com/news/updates/4-4-2-0",
+      "note": "No verified standard-credit purchase offer at ARX early-access launch."
     }
   }
 }
-

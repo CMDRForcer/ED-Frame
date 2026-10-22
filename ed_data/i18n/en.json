@@ -1577,5 +1577,9 @@
   "updates.error.startup": "The new app did not start correctly; the previous version was restored.",
   "updates.error.platform": "Automatic installation requires the Windows portable package.",
   "updates.status.updated": "Update completed. The previous app and profile backups are retained.",
-  "updates.backups": "OPEN PROFILE BACKUPS"
+  "updates.backups": "OPEN PROFILE BACKUPS",
+  "shipyard.reference_stats": "REFERENCE",
+  "shipyard.hull_mass_value": "Hull %1 t",
+  "shipyard.base_shield_value": "Base shield %1 MJ",
+  "shipyard.approx_range_value": "Range ≈ %1 LY"
 }

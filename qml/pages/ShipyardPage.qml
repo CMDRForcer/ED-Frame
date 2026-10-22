@@ -36,6 +36,9 @@ Item {
     readonly property var currentShipSlots: cockpit.shipyardCurrentShipSlots || []
     readonly property var suggestions: cockpit.shipyardFinderSuggestions || []
     readonly property var ships: cockpit.shipyardShipCatalog || []
+    onSelectedSymbolChanged: Qt.callLater(revealSelectedShip)
+    onShipsChanged: Qt.callLater(revealSelectedShip)
+    onModeChanged: Qt.callLater(revealSelectedShip)
     readonly property var modules: cockpit.shipyardModuleCatalog || []
     readonly property var moduleFamilies: cockpit.shipyardModuleFamilies || []
     readonly property var results: cockpit.shipyardFinderResults || []
@@ -115,6 +118,15 @@ Item {
         var path = String((row || {}).schematicSource || "")
         return path ? Qt.resolvedUrl("../../" + path) : ""
     }
+    function revealSelectedShip() {
+        if (mode !== "SHIPS" || !selectedSymbol) return
+        for (var index = 0; index < ships.length; ++index) {
+            if (String(ships[index].symbol || "") === selectedSymbol) {
+                visualCatalog.positionViewAtIndex(index, ListView.Contain)
+                return
+            }
+        }
+    }
     function chooseItem(row) {
         selectedItem = row || ({})
         selectedSymbol = String((row || {}).symbol || "")
@@ -134,10 +146,14 @@ Item {
                 "ABRASION BLASTER", "SEISMIC CHARGE LAUNCHER",
                 "SUB-SURFACE DISPLACEMENT MISSILE", "SUB-SURFACE EXTRACTION MISSILE",
                 "REFINERY", "PROSPECTOR LIMPET CONTROLLER", "COLLECTOR LIMPET CONTROLLER",
-                "MINING MULTI-LIMPET CONTROLLER", "PULSE WAVE ANALYSER", "CARGO RACK"]
+                "MINING MULTI-LIMPET CONTROLLER", "PULSE WAVE ANALYSER", "CARGO RACK", "MK II CARGO RACK"]
                 .indexOf(family) >= 0
     }
     function moduleBrowseGroup(row) {
+        // Fuel tanks are core modules elsewhere, but also fit Cargo01.
+        if (typeof selectedSlot !== "undefined"
+                && String(selectedSlot.restriction || "").toLowerCase() === "cargo"
+                && String((row || {}).moduleCoreSlot || "") === "FuelTank") return "OPTIONAL"
         var route = String((row || {}).acquisitionRoute || "")
         if (route === "TECH_BROKER") return "TECH BROKER"
         if (isMiningModule(row)) return "MINING"
@@ -1001,8 +1017,16 @@ Item {
                 }
                 ListView {
                     id: visualCatalog
+                    objectName: "qa-ship-catalog"
                     visible: finder.mode === "SHIPS"
                     Layout.fillWidth: true; Layout.fillHeight: true
+                    // Keep the carousel inside the physical window even
+                    // while ApplicationWindow relayouts its scaled content.
+                    Layout.maximumWidth: Math.max(0, Math.min(
+                        finder.width - 26,
+                        appWindow.width / Math.max(0.1, cockpit.uiScale)
+                            - finder.sidebarWidth
+                            - (appWindow.compactSidebar ? 36 : 52) - 26))
                     orientation: ListView.Horizontal; spacing: 8; clip: true
                     boundsBehavior: Flickable.StopAtBounds
                     model: finder.ships
@@ -1123,7 +1147,7 @@ Item {
                     ShadowCard {
                         Layout.fillWidth: true
                         Layout.preferredWidth: 0.82
-                        Layout.preferredHeight: finder.mode === "SHIPS" ? 510 : 470
+                        Layout.preferredHeight: finder.mode === "SHIPS" ? 550 : 470
                         accent: cyan
                         ColumnLayout {
                             anchors.fill: parent; anchors.margins: 15; spacing: 8
@@ -1237,6 +1261,18 @@ Item {
                                         }
                                     }
                                 }
+                            }
+                            Label {
+                                Layout.fillWidth: true
+                                visible: finder.mode === "SHIPS" && Number(finder.selectedItem.hullMass || 0) > 0
+                                text: appWindow.t("shipyard.reference_stats", "REFERENCE") + " · "
+                                    + appWindow.tf("shipyard.hull_mass_value", "Hull %1 t", [String(finder.selectedItem.hullMass || "—")])
+                                    + (Number(finder.selectedItem.baseShieldStrength || 0) > 0
+                                       ? " · " + appWindow.tf("shipyard.base_shield_value", "Base shield %1 MJ", [String(finder.selectedItem.baseShieldStrength)]) : "")
+                                    + (Number(finder.selectedItem.referenceJumpRangeLy || 0) > 0
+                                       ? " · " + appWindow.tf("shipyard.approx_range_value", "Range ≈ %1 LY", [String(finder.selectedItem.referenceJumpRangeLy)]) : "")
+                                color: muted; font.pixelSize: UiMetrics.caption
+                                wrapMode: Text.Wrap
                             }
                         }
                     }

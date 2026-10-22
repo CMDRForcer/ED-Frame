@@ -377,12 +377,14 @@ class CommanderMixin:
             return cached[1]
         asset_symbols = {}
         asset_names = {}
+        asset_available = {}
         for record in self._ship_catalog if isinstance(self._ship_catalog, list) else []:
             if not isinstance(record, dict):
                 continue
             symbol = str(record.get("symbol") or "").strip()
             if not symbol:
                 continue
+            asset_available[symbol] = record.get("schematicAvailable", True)
             for value in (symbol, record.get("name")):
                 key = self._ship_asset_key(value)
                 if key:
@@ -405,7 +407,7 @@ class CommanderMixin:
             if asset_names.get(type_key):
                 row["type"] = asset_names[type_key]
             row["schematicSource"] = (
-                f"assets/ships/{symbol}.svg" if symbol else ""
+                f"assets/ships/{symbol}.svg" if symbol and asset_available.get(symbol, True) else ""
             )
             row["valueKnown"] = isinstance(row.get("value"), int)
             row["rebuyKnown"] = isinstance(row.get("rebuy"), int)

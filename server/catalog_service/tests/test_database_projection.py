@@ -242,7 +242,11 @@ class DatabaseProjectionTests(unittest.TestCase):
         self.assertEqual((beam["display_name"], beam["module_class"], beam["rating"]),
                          ("BEAM LASER", 1, "E"))
         self.assertTrue(any(row["display_name"] == "Anaconda" for row in ships))
-        self.assertEqual(len(ships), 48)
+        self.assertEqual(len(ships), 49)
+        mkii = next(row for row in ships if row["symbol"] == "anacondamkii")
+        self.assertEqual(mkii["display_name"], "Anaconda Mk II")
+        self.assertIsNone(mkii["reference_price"])
+        self.assertEqual(mkii["specifications"]["optional"][3]["name"], "Cargo01")
         mandalay = next(row for row in ships if row["display_name"] == "Mandalay")
         self.assertEqual(mandalay["reference_price"], 17639220)
         lynx = next(row for row in ships if row["display_name"] == "Lynx Highliner")

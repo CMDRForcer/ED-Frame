@@ -8,6 +8,21 @@ from PySide6.QtQml import QJSEngine
 
 
 class ShipyardSlotBrowserTests(unittest.TestCase):
+    def test_search_selection_reveals_last_ship_in_catalog(self):
+        start = self.source.index("    function revealSelectedShip()")
+        end = self.source.index("    function chooseItem(row)", start)
+        engine = QJSEngine()
+        engine.evaluate('var mode="SHIPS", selectedSymbol="anacondamkii";'
+                        'var ships=[{symbol:"sidewinder"},{symbol:"anacondamkii"}];'
+                        'var revealed=-1; var ListView={Contain:2};'
+                        'var visualCatalog={positionViewAtIndex:function(i,alignment){revealed=i;}};'
+                        + self.source[start:end])
+        result = engine.evaluate('revealSelectedShip(); revealed')
+        self.assertFalse(result.isError(), result.toString())
+        self.assertEqual(result.toInt(), 1)
+        self.assertEqual(engine.evaluate('mode="MODULES"; revealed=-1; revealSelectedShip(); revealed').toInt(), -1)
+        self.assertEqual(engine.evaluate('mode="SHIPS"; selectedSymbol="unknown"; revealSelectedShip(); revealed').toInt(), -1)
+
     @classmethod
     def setUpClass(cls):
         cls.app = QCoreApplication.instance() or QCoreApplication([])
@@ -85,11 +100,25 @@ class ShipyardSlotBrowserTests(unittest.TestCase):
         for name, included in (("MINING LASER", True), ("REFINERY", True),
                                ("PROSPECTOR LIMPET CONTROLLER", True),
                                ("PULSE WAVE ANALYSER", True), ("CARGO RACK", True),
+                               ("MK II CARGO RACK", True),
                                ("MINE LAUNCHER", False), ("BEAM LASER", False)):
             with self.subTest(name=name):
                 result = engine.evaluate("matchesModuleGroup(" + json.dumps({"moduleFamily": name}) + ")")
                 self.assertFalse(result.isError(), result.toString())
                 self.assertEqual(result.toBool(), included)
+
+    def test_cargo_slot_offers_fuel_tanks_without_reclassifying_core_browser(self):
+        start = self.source.index("    function isMiningModule(row)")
+        end = self.source.index("    function moduleFamilyRows()", start)
+        engine = QJSEngine()
+        engine.evaluate('var moduleGroup="OPTIONAL", selectedSlot={restriction:"cargo"};'
+                        + self.source[start:end])
+        row = json.dumps({"moduleGroup": "CORE", "moduleCoreSlot": "FuelTank"})
+        self.assertTrue(engine.evaluate("matchesModuleGroup(" + row + ")").toBool())
+        engine.evaluate('selectedSlot={};')
+        self.assertFalse(engine.evaluate("matchesModuleGroup(" + row + ")").toBool())
+        engine.evaluate('moduleGroup="CORE";')
+        self.assertTrue(engine.evaluate("matchesModuleGroup(" + row + ")").toBool())
 
     def test_exclusive_categories_and_broker_subgroups(self):
         start = self.source.index("    function isMiningModule(row)")

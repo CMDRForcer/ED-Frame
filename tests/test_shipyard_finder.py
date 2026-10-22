@@ -64,11 +64,12 @@ class ShipyardFinderTests(unittest.TestCase):
         }
         actual = set(prices["ships"])
         self.assertEqual(actual, expected)
-        self.assertEqual(len(actual), 48)
+        self.assertEqual(len(actual), 49)
         self.assertTrue(all(
-            isinstance(row.get("referencePrice"), int)
-            and row["referencePrice"] > 0
-            and row.get("source")
+            row.get("source") and (
+                (row.get("referencePrice") is None and row.get("availability") == "ARX_EARLY_ACCESS")
+                or (isinstance(row.get("referencePrice"), int) and row["referencePrice"] > 0)
+            )
             for row in prices["ships"].values()
         ))
         self.assertEqual(prices["ships"]["mandalay"]["referencePrice"], 17639220)

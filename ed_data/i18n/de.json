@@ -1577,5 +1577,9 @@
   "updates.error.startup": "Die neue App startete nicht korrekt; die vorige Version wurde wiederhergestellt.",
   "updates.error.platform": "Automatische Installation benötigt das portable Windows-Paket.",
   "updates.status.updated": "Update abgeschlossen. Vorige App und Profilsicherungen bleiben erhalten.",
-  "updates.backups": "PROFILSICHERUNGEN ÖFFNEN"
+  "updates.backups": "PROFILSICHERUNGEN ÖFFNEN",
+  "shipyard.reference_stats": "REFERENZ",
+  "shipyard.hull_mass_value": "Rumpf %1 t",
+  "shipyard.base_shield_value": "Basisschild %1 MJ",
+  "shipyard.approx_range_value": "Reichweite ≈ %1 LJ"
 }

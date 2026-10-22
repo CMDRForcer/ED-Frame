@@ -1577,5 +1577,9 @@
   "updates.error.startup": "La nueva app no arrancó correctamente; se restauró la anterior.",
   "updates.error.platform": "La instalación automática requiere el paquete portátil Windows.",
   "updates.status.updated": "Actualización completada. Se conservan la app anterior y las copias de perfiles.",
-  "updates.backups": "ABRIR COPIAS DE PERFILES"
+  "updates.backups": "ABRIR COPIAS DE PERFILES",
+  "shipyard.reference_stats": "REFERENCIA",
+  "shipyard.hull_mass_value": "Casco %1 t",
+  "shipyard.base_shield_value": "Escudo base %1 MJ",
+  "shipyard.approx_range_value": "Alcance ≈ %1 AL"
 }

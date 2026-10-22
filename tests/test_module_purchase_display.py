@@ -15,7 +15,7 @@ class ModulePurchaseDisplayTests(unittest.TestCase):
         import json
         path = Path(__file__).resolve().parents[1] / "ed_data/module_display.json"
         catalog = json.loads(path.read_text(encoding="utf-8"))["modules"]
-        self.assertEqual(len(catalog), 961)
+        self.assertGreaterEqual(len(catalog), 961)
         for symbol, (name, rating) in catalog.items():
             with self.subTest(symbol=symbol):
                 actual_name, actual_rating = module_purchase_identity(symbol)

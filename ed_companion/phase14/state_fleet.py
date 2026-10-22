@@ -58,6 +58,7 @@ from ed_companion.navigation.trader_type_cache import normalize_timestamp
 from ed_companion.trader_config import HEURISTIC_TRADER_WARNING_KEY
 from ed_companion.material_integrity import material_key
 from ed_companion.module_identity import (
+    ABLATIVE_ARMOUR_HULLS,
     canonical_module_id,
     module_identity_key,
     same_module_identity,
@@ -469,8 +470,12 @@ def ship_slot_layout(
     for index, spec in enumerate(ship.get("optional", []) or [], 1):
         if not isinstance(spec, dict):
             continue
+        # Rebalanced hulls retain old physical names and add Slot00. Their
+        # new sorted positions must never rebind an existing player's plan.
+        if ship.get("optionalSlotAliases") == "physical" and not spec.get("legacyName"):
+            continue
         size = int(spec.get("size") or 0)
-        legacy_slot = f"Slot{index:02d}_Size{size}"
+        legacy_slot = str(spec.get("legacyName") or f"Slot{index:02d}_Size{size}")
         physical_slot = str(spec.get("name") or legacy_slot)
         if (
             physical_slot != legacy_slot
@@ -995,7 +1000,8 @@ def module_store_core_replacement(event: dict[str, Any]) -> str:
     slot = str(event.get("Slot") or "")
     if slot == "Armour":
         ship = str(event.get("Ship") or "").strip("$;")
-        return f"{ship}_armour_grade1" if ship else ""
+        variant = "grade1_default" if ship.casefold() in ABLATIVE_ARMOUR_HULLS else "grade1"
+        return f"{ship}_armour_{variant}" if ship else ""
     stock_family = MANDATORY_CORE_STOCK_FAMILIES.get(slot, "")
     if not stock_family:
         return ""

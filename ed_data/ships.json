@@ -45,9 +45,26 @@
       },
       {
         "size": 1,
-        "restriction": "planetaryApproachSuite"
+        "restriction": "planetaryApproachSuite",
+        "legacyName": "Slot07_Size1",
+        "name": "PlanetaryApproachSuite"
       }
-    ]
+    ],
+    "hullMass": 25,
+    "baseShieldStrength": 55,
+    "heatCapacity": 140,
+    "flightReference": {
+      "pitchRate": 43.0,
+      "yawRate": 17.0,
+      "rollRate": 110.0,
+      "forwardAcceleration": 44.39,
+      "reverseAcceleration": 29.96,
+      "lateralAcceleration": 29.96,
+      "minimumHeatDissipation": 1.18,
+      "maximumHeatDissipation": 18.15
+    },
+    "referenceDataDate": "2026-10-20",
+    "referenceDataSource": "https://edsy.org/eddb.js"
   },
   {
     "symbol": "Eagle",
@@ -102,9 +119,26 @@
       },
       {
         "size": 1,
-        "restriction": "planetaryApproachSuite"
+        "restriction": "planetaryApproachSuite",
+        "legacyName": "Slot08_Size1",
+        "name": "PlanetaryApproachSuite"
       }
-    ]
+    ],
+    "hullMass": 50,
+    "baseShieldStrength": 80,
+    "heatCapacity": 165,
+    "flightReference": {
+      "pitchRate": 50.0,
+      "yawRate": 18.0,
+      "rollRate": 120.0,
+      "forwardAcceleration": 43.97,
+      "reverseAcceleration": 29.97,
+      "lateralAcceleration": 29.86,
+      "minimumHeatDissipation": 1.38,
+      "maximumHeatDissipation": 21.48
+    },
+    "referenceDataDate": "2026-10-20",
+    "referenceDataSource": "https://edsy.org/eddb.js"
   },
   {
     "symbol": "Hauler",
@@ -358,34 +392,64 @@
     "utility": 3,
     "optional": [
       {
-        "size": 5
+        "size": 6,
+        "name": "Slot00_Size6"
       },
       {
-        "size": 5
+        "size": 5,
+        "name": "Slot01_Size5"
       },
       {
-        "size": 4
+        "size": 5,
+        "name": "Slot02_Size5"
       },
       {
-        "size": 4
+        "size": 4,
+        "name": "Slot03_Size4"
       },
       {
-        "size": 3
+        "size": 4,
+        "name": "Slot04_Size4"
       },
       {
-        "size": 2
+        "size": 3,
+        "name": "Slot05_Size3"
       },
       {
-        "size": 2
+        "size": 2,
+        "name": "Slot06_Size2"
       },
       {
-        "size": 1
+        "size": 2,
+        "name": "Slot07_Size2"
       },
       {
         "size": 1,
-        "restriction": "planetaryApproachSuite"
+        "name": "Slot08_Size1"
+      },
+      {
+        "size": 1,
+        "restriction": "planetaryApproachSuite",
+        "name": "PlanetaryApproachSuite",
+        "legacyName": "Slot09_Size1"
       }
-    ]
+    ],
+    "hullMass": 155,
+    "baseShieldStrength": 125,
+    "heatCapacity": 179,
+    "optionalSlotAliases": "physical",
+    "flightReference": {
+      "pitchRate": 30.0,
+      "yawRate": 17.0,
+      "rollRate": 100.0,
+      "forwardAcceleration": 20.1,
+      "reverseAcceleration": 14.96,
+      "lateralAcceleration": 15.07,
+      "minimumHeatDissipation": 1.7,
+      "maximumHeatDissipation": 24.55
+    },
+    "referenceDataDate": "2026-10-20",
+    "referenceDataSource": "https://edsy.org/eddb.js"
   },
   {
     "symbol": "Dolphin",
@@ -479,6 +543,10 @@
     "utility": 4,
     "optional": [
       {
+        "size": 7,
+        "name": "Slot00_Size7"
+      },
+      {
         "size": 6,
         "name": "Slot01_Size6"
       },
@@ -523,7 +591,21 @@
         "restriction": "planetaryApproachSuite",
         "name": "PlanetaryApproachSuite"
       }
-    ]
+    ],
+    "hullMass": 300,
+    "baseShieldStrength": 156,
+    "heatCapacity": 232,
+    "optionalSlotAliases": "physical",
+    "flightReference": {
+      "pitchRate": 22.0,
+      "yawRate": 22.0,
+      "rollRate": 60.0,
+      "forwardAcceleration": 20.11,
+      "reverseAcceleration": 15.02,
+      "lateralAcceleration": 15.13
+    },
+    "referenceDataDate": "2026-10-20",
+    "referenceDataSource": "https://edsy.org/eddb.js"
   },
   {
     "symbol": "Asp",
@@ -673,7 +755,7 @@
       "lifeSupport": 5,
       "powerDistributor": 6,
       "sensors": 5,
-      "fuelTank": 4
+      "fuelTank": 5
     },
     "hardpoints": [
       {
@@ -692,44 +774,75 @@
     "utility": 4,
     "optional": [
       {
-        "size": 7
+        "size": 7,
+        "name": "Slot00_Size7"
       },
       {
-        "size": 6
+        "size": 7,
+        "name": "Slot01_Size7"
       },
       {
-        "size": 4
+        "size": 6,
+        "name": "Slot02_Size6"
       },
       {
-        "size": 4
+        "size": 4,
+        "name": "Slot03_Size4"
       },
       {
-        "size": 3
+        "size": 4,
+        "name": "Slot04_Size4"
       },
       {
-        "size": 3
+        "size": 3,
+        "name": "Slot05_Size3"
       },
       {
-        "size": 2
+        "size": 3,
+        "name": "Slot06_Size3"
       },
       {
-        "size": 2
+        "size": 2,
+        "name": "Slot07_Size2"
       },
       {
-        "size": 1
+        "size": 2,
+        "name": "Slot08_Size2"
       },
       {
         "size": 1,
-        "restriction": "planetaryApproachSuite"
+        "name": "Slot09_Size1"
+      },
+      {
+        "size": 1,
+        "restriction": "planetaryApproachSuite",
+        "name": "PlanetaryApproachSuite",
+        "legacyName": "Slot10_Size1"
       }
-    ]
+    ],
+    "hullMass": 350,
+    "baseShieldStrength": 200,
+    "heatCapacity": 304,
+    "optionalSlotAliases": "physical",
+    "flightReference": {
+      "pitchRate": 40.0,
+      "yawRate": 18.0,
+      "rollRate": 80.0,
+      "forwardAcceleration": 24.74,
+      "reverseAcceleration": 20.05,
+      "lateralAcceleration": 10.1,
+      "minimumHeatDissipation": 2.63,
+      "maximumHeatDissipation": 46.8
+    },
+    "referenceDataDate": "2026-10-20",
+    "referenceDataSource": "https://edsy.org/eddb.js"
   },
   {
     "symbol": "Federation_Dropship",
     "name": "Federal Dropship",
     "manufacturer": "Core Dynamics",
     "size": "medium",
-    "maximumSpeed": 180,
+    "maximumSpeed": 200,
     "boost": 300,
     "core": {
       "powerPlant": 6,
@@ -759,6 +872,10 @@
     ],
     "utility": 4,
     "optional": [
+      {
+        "size": 6,
+        "name": "Slot00_Size6"
+      },
       {
         "size": 6,
         "name": "Slot01_Size6"
@@ -806,7 +923,23 @@
         "restriction": "planetaryApproachSuite",
         "name": "PlanetaryApproachSuite"
       }
-    ]
+    ],
+    "hullMass": 500,
+    "baseShieldStrength": 200,
+    "heatCapacity": 331,
+    "optionalSlotAliases": "physical",
+    "flightReference": {
+      "pitchRate": 30.0,
+      "yawRate": 14.0,
+      "rollRate": 80.0,
+      "forwardAcceleration": 29.99,
+      "reverseAcceleration": 20.34,
+      "lateralAcceleration": 10.19,
+      "minimumHeatDissipation": 2.6,
+      "maximumHeatDissipation": 46.5
+    },
+    "referenceDataDate": "2026-10-20",
+    "referenceDataSource": "https://edsy.org/eddb.js"
   },
   {
     "symbol": "Orca",
@@ -1820,8 +1953,8 @@
     "name": "Viper Mk IV",
     "manufacturer": "Faulcon DeLacy",
     "size": "small",
-    "maximumSpeed": 270,
-    "boost": 340,
+    "maximumSpeed": 280,
+    "boost": 360,
     "core": {
       "powerPlant": 4,
       "thrusters": 4,
@@ -1877,9 +2010,26 @@
       },
       {
         "size": 1,
-        "restriction": "planetaryApproachSuite"
+        "restriction": "planetaryApproachSuite",
+        "legacyName": "Slot10_Size1",
+        "name": "PlanetaryApproachSuite"
       }
-    ]
+    ],
+    "hullMass": 190,
+    "baseShieldStrength": 160,
+    "heatCapacity": 209,
+    "flightReference": {
+      "pitchRate": 33.0,
+      "yawRate": 13.0,
+      "rollRate": 90.0,
+      "forwardAcceleration": 53.84,
+      "reverseAcceleration": 30.14,
+      "lateralAcceleration": 24.97,
+      "minimumHeatDissipation": 1.82,
+      "maximumHeatDissipation": 28.98
+    },
+    "referenceDataDate": "2026-10-20",
+    "referenceDataSource": "https://edsy.org/eddb.js"
   },
   {
     "symbol": "CobraMkIV",
@@ -2024,8 +2174,8 @@
     "name": "Asp Scout",
     "manufacturer": "Lakon Spaceways",
     "size": "medium",
-    "maximumSpeed": 220,
-    "boost": 300,
+    "maximumSpeed": 270,
+    "boost": 360,
     "core": {
       "powerPlant": 4,
       "thrusters": 4,
@@ -2049,7 +2199,7 @@
         "size": 1
       }
     ],
-    "utility": 2,
+    "utility": 3,
     "optional": [
       {
         "size": 5,
@@ -2084,7 +2234,22 @@
         "restriction": "planetaryApproachSuite",
         "name": "PlanetaryApproachSuite"
       }
-    ]
+    ],
+    "hullMass": 140,
+    "baseShieldStrength": 120,
+    "heatCapacity": 210,
+    "flightReference": {
+      "pitchRate": 40.0,
+      "yawRate": 18.0,
+      "rollRate": 110.0,
+      "forwardAcceleration": 40.0,
+      "reverseAcceleration": 30.0,
+      "lateralAcceleration": 20.0,
+      "minimumHeatDissipation": 1.8,
+      "maximumHeatDissipation": 29.65
+    },
+    "referenceDataDate": "2026-10-20",
+    "referenceDataSource": "https://edsy.org/eddb.js"
   },
   {
     "symbol": "Type9_Military",
@@ -2822,9 +2987,25 @@
       },
       {
         "size": 1,
-        "restriction": "planetaryApproachSuite"
+        "restriction": "planetaryApproachSuite",
+        "legacyName": "Slot11_Size1",
+        "name": "PlanetaryApproachSuite"
       }
-    ]
+    ],
+    "hullMass": 190,
+    "baseShieldStrength": 220,
+    "heatCapacity": 245,
+    "referenceJumpRangeLy": 95,
+    "referenceJumpRangeApproximate": true,
+    "flightReference": {
+      "pitchRate": 35.0,
+      "yawRate": 28.0,
+      "rollRate": 96.0,
+      "minimumHeatDissipation": 2.23,
+      "maximumHeatDissipation": 51.0
+    },
+    "referenceDataDate": "2026-10-20",
+    "referenceDataSource": "https://edsy.org/eddb.js"
   },
   {
     "symbol": "CobraMkV",
@@ -3280,9 +3461,25 @@
       },
       {
         "size": 1,
-        "restriction": "planetaryApproachSuite"
+        "restriction": "planetaryApproachSuite",
+        "legacyName": "Slot15_Size1",
+        "name": "PlanetaryApproachSuite"
       }
-    ]
+    ],
+    "hullMass": 825,
+    "baseShieldStrength": 500,
+    "heatCapacity": 341,
+    "referenceJumpRangeLy": 90,
+    "referenceJumpRangeApproximate": true,
+    "flightReference": {
+      "pitchRate": 30.0,
+      "yawRate": 14.0,
+      "rollRate": 75.0,
+      "minimumHeatDissipation": 3.21,
+      "maximumHeatDissipation": 72.1
+    },
+    "referenceDataDate": "2026-10-20",
+    "referenceDataSource": "https://edsy.org/eddb.js"
   },
   {
     "symbol": "SmallCombat01_NX",
@@ -3434,5 +3631,113 @@
         "name": "PlanetaryApproachSuite"
       }
     ]
+  },
+  {
+    "symbol": "AnacondaMkII",
+    "name": "Anaconda Mk II",
+    "manufacturer": "Faulcon DeLacy",
+    "size": "large",
+    "maximumSpeed": 190,
+    "boost": 250,
+    "core": {
+      "powerPlant": 8,
+      "thrusters": 7,
+      "frameShiftDrive": 8,
+      "lifeSupport": 5,
+      "powerDistributor": 8,
+      "sensors": 8,
+      "fuelTank": 6
+    },
+    "hardpoints": [
+      {
+        "size": 4
+      },
+      {
+        "size": 3
+      },
+      {
+        "size": 3
+      },
+      {
+        "size": 3
+      },
+      {
+        "size": 3
+      },
+      {
+        "size": 1
+      },
+      {
+        "size": 1
+      }
+    ],
+    "utility": 8,
+    "optional": [
+      {
+        "size": 8,
+        "name": "Slot01_Size8"
+      },
+      {
+        "size": 7,
+        "name": "Slot02_Size7"
+      },
+      {
+        "size": 7,
+        "name": "Slot03_Size7"
+      },
+      {
+        "size": 6,
+        "name": "Cargo01",
+        "restriction": "cargo"
+      },
+      {
+        "size": 5,
+        "name": "Slot04_Size5"
+      },
+      {
+        "size": 5,
+        "name": "Slot05_Size5"
+      },
+      {
+        "size": 5,
+        "name": "Slot06_Size5"
+      },
+      {
+        "size": 4,
+        "name": "Slot07_Size4"
+      },
+      {
+        "size": 4,
+        "name": "Slot08_Size4"
+      },
+      {
+        "size": 3,
+        "name": "Slot09_Size3"
+      },
+      {
+        "size": 2,
+        "name": "Slot10_Size2"
+      },
+      {
+        "size": 1,
+        "name": "Slot11_Size1"
+      },
+      {
+        "size": 5,
+        "name": "Military01",
+        "restriction": "military"
+      },
+      {
+        "size": 5,
+        "name": "Military02",
+        "restriction": "military"
+      },
+      {
+        "size": 1,
+        "name": "PlanetaryApproachSuite",
+        "restriction": "planetaryApproachSuite"
+      }
+    ],
+    "availability": "ARX_EARLY_ACCESS"
   }
 ]

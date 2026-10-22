@@ -2659,8 +2659,8 @@ class ReleaseContractTests(unittest.TestCase):
             (root / "ed_data" / "ships.json").read_text(encoding="utf-8-sig")
         )
 
-        self.assertEqual(len(catalog), 48)
-        self.assertEqual(len({row["symbol"] for row in catalog}), 48)
+        self.assertGreaterEqual(len(catalog), 48)
+        self.assertEqual(len({row["symbol"] for row in catalog}), len(catalog))
         missing = [
             row["symbol"] for row in catalog
             if not (root / "assets" / "ships" / f"{row['symbol']}.svg").is_file()

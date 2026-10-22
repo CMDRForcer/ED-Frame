@@ -1,5 +1,13 @@
 # Changelog
 
+## 1.0.12 — 2026-10-22
+
+- **Anaconda Mk II:** native ship graphic, full 38-slot layout, ARX early-access status and reviewed Mk II cargo, armour and Mining Volley Repeater compatibility.
+- **October ship balancing:** additional Type-6, Type-7, Imperial Clipper and Federal Dropship internal slots; the Asp Scout's third utility mount; larger Clipper tank; updated masses, speeds, boost and finite reference flight data for all ten affected hulls.
+- **Preserved plans:** existing physical slot names, installed modules and wishlist bindings survive the new slots. Updated fit-reference masses and slots are retained by future catalog exports.
+- **Reference details:** the ship browser distinguishes hull/base-shield and approximate published jump references from operational Journal data. Anaconda/Caspian stock and ablative armour keep separate identities through storage and export.
+- **Catalog visibility:** selecting a ship reveals its card even at the end of the catalog and at increased UI scale. The community server's static references are synchronized while retaining observed prices.
+
 ## 1.0.11 — 2026-10-13
 
 - **Portable app updates:** daily release checks, a discreet sidebar notification and Settings → About controls. Optional background downloads are cancellable; installation requires confirmation.

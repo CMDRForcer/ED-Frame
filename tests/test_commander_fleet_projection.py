@@ -28,6 +28,15 @@ class _CommanderFleetHarness(CommanderMixin):
 
 
 class CommanderFleetProjectionTests(unittest.TestCase):
+    def test_anaconda_mkii_fleet_card_uses_its_own_graphic(self):
+        with tempfile.TemporaryDirectory() as directory:
+            controller = _CommanderFleetHarness(Path(directory))
+            controller._ship_catalog = [{"symbol": "AnacondaMkII", "name": "Anaconda Mk II"}]
+            controller._state["fleet"][0]["type"] = "AnacondaMkII"
+            row = controller._commander_fleet()[0]
+            self.assertEqual(row["type"], "Anaconda Mk II")
+            self.assertEqual(row["schematicSource"], "assets/ships/AnacondaMkII.svg")
+
     def test_projection_is_reused_until_state_or_image_mapping_changes(self):
         with tempfile.TemporaryDirectory() as directory:
             controller = _CommanderFleetHarness(Path(directory))

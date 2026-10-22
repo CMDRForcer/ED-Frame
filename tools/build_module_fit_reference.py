@@ -11,6 +11,20 @@ def fetch(url):
         return json.load(response)
 
 
+def merge_reference_supplement(result, supplement):
+    """Retain reviewed launch facts without dropping newer hull permissions."""
+    for section in ("ships", "modules"):
+        for symbol, fields in supplement[section].items():
+            entry = result[section].setdefault(symbol, {})
+            fields = dict(fields)
+            if "allowedShips" in fields:
+                fields["allowedShips"] = list(dict.fromkeys(
+                    [*entry.get("allowedShips", []), *fields["allowedShips"]]
+                ))
+            entry.update(fields)
+    result["supplementalSources"] = [supplement["source"]]
+
+
 def main():
     commit = fetch("https://api.github.com/repos/EDCD/coriolis-data/commits/master")["sha"]
     tree = fetch(f"https://api.github.com/repos/EDCD/coriolis-data/git/trees/{commit}?recursive=1")
@@ -68,7 +82,12 @@ def main():
             if match:
                 row[field] = match.group(1)
         row["noUndersize"] = bool(re.search(r"noundersize:\s*1", line))
-    target = Path(__file__).resolve().parents[1] / "ed_data" / "module_fit_reference.json"
+    data_dir = Path(__file__).resolve().parents[1] / "ed_data"
+    # Reviewed facts for newly released hulls not yet in the pinned upstream
+    # export. Keep their dated source and checksum when refreshing the base.
+    supplement = json.loads((data_dir / "module_fit_reference_supplement.json").read_text(encoding="utf-8"))
+    merge_reference_supplement(result, supplement)
+    target = data_dir / "module_fit_reference.json"
     target.write_text(json.dumps(result, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     print(f"Pinned {commit}: {len(result['ships'])} ships, {len(result['modules'])} modules")
 

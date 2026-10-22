@@ -1,0 +1,916 @@
+{
+  "source": {
+    "url": "https://edsy.org/eddb.js",
+    "dataDate": "2026-10-20",
+    "version": 424029902,
+    "sha256": "071f3c63bab630b0db33e7d77061c1dcd7c0d06426c507ab52bf87e9a1c99da2",
+    "scope": "Anaconda Mk II launch modules and October 2026 balancing: reviewed finite hull facts; Frontier game-data facts",
+    "officialPatchNotes": "https://steamcommunity.com/app/359320/announcements/",
+    "reviewNotes": [
+      "EDSY top speed/boost are reference values consistent with the existing catalog; Frontier patch-note raw flight parameters are not substituted as stock-loadout speeds.",
+      "Type-7: apply the officially announced single class-7 addition to the previous verified layout. Do not import the extra class-6 slot or inconsistent slotnames in this EDSY snapshot.",
+      "Existing optional-slot identities are retained. Approximate Mandalay/Caspian ranges are reference descriptions, never operational Journal ranges.",
+      "Unknown or NaN flight properties are omitted."
+    ]
+  },
+  "ships": {
+    "anacondamkii": {
+      "name": "Anaconda Mk II",
+      "hullMass": 940
+    },
+    "sidewinder": {
+      "name": "Sidewinder",
+      "hullMass": 25,
+      "slots": {
+        "standard": [
+          2,
+          2,
+          2,
+          1,
+          1,
+          1,
+          1
+        ],
+        "hardpoints": [
+          1,
+          1,
+          0,
+          0
+        ],
+        "internal": [
+          2,
+          2,
+          1,
+          1,
+          1,
+          1,
+          {
+            "class": 1,
+            "name": "PlanetaryApproachSuite",
+            "eligible": {
+              "pas": 1
+            }
+          }
+        ]
+      }
+    },
+    "eagle": {
+      "name": "Eagle",
+      "hullMass": 50,
+      "slots": {
+        "standard": [
+          2,
+          3,
+          3,
+          1,
+          2,
+          2,
+          2
+        ],
+        "hardpoints": [
+          1,
+          1,
+          1,
+          0
+        ],
+        "internal": [
+          3,
+          2,
+          {
+            "class": 2,
+            "name": "Military",
+            "eligible": {
+              "mahr": 1,
+              "hr": 1,
+              "scb": 1,
+              "mrp": 1,
+              "gsrp": 1,
+              "gmrp": 1,
+              "ghrp": 1
+            }
+          },
+          1,
+          1,
+          1,
+          1,
+          {
+            "class": 1,
+            "name": "PlanetaryApproachSuite",
+            "eligible": {
+              "pas": 1
+            }
+          }
+        ]
+      }
+    },
+    "type6": {
+      "name": "Type-6 Transporter",
+      "hullMass": 155,
+      "slots": {
+        "standard": [
+          3,
+          4,
+          4,
+          2,
+          3,
+          2,
+          4
+        ],
+        "hardpoints": [
+          1,
+          1,
+          0,
+          0,
+          0
+        ],
+        "internal": [
+          6,
+          5,
+          5,
+          4,
+          4,
+          3,
+          2,
+          2,
+          1,
+          {
+            "class": 1,
+            "name": "PlanetaryApproachSuite",
+            "eligible": {
+              "pas": 1
+            }
+          }
+        ]
+      }
+    },
+    "type7": {
+      "name": "Type-7 Transporter",
+      "hullMass": 300,
+      "slots": {
+        "standard": [
+          5,
+          5,
+          5,
+          4,
+          4,
+          3,
+          5
+        ],
+        "hardpoints": [
+          1,
+          1,
+          1,
+          1,
+          0,
+          0,
+          0,
+          0
+        ],
+        "internal": [
+          7,
+          6,
+          6,
+          6,
+          5,
+          5,
+          5,
+          3,
+          3,
+          2,
+          1,
+          {
+            "class": 1,
+            "name": "PlanetaryApproachSuite",
+            "eligible": {
+              "pas": 1
+            }
+          }
+        ]
+      }
+    },
+    "empire_trader": {
+      "name": "Imperial Clipper",
+      "hullMass": 350,
+      "slots": {
+        "standard": [
+          6,
+          6,
+          5,
+          5,
+          6,
+          5,
+          5
+        ],
+        "hardpoints": [
+          3,
+          3,
+          2,
+          2,
+          0,
+          0,
+          0,
+          0
+        ],
+        "internal": [
+          7,
+          7,
+          6,
+          4,
+          4,
+          3,
+          3,
+          2,
+          2,
+          1,
+          {
+            "class": 1,
+            "name": "PlanetaryApproachSuite",
+            "eligible": {
+              "pas": 1
+            }
+          }
+        ]
+      }
+    },
+    "federation_dropship": {
+      "name": "Federal Dropship",
+      "hullMass": 500,
+      "slots": {
+        "standard": [
+          6,
+          6,
+          5,
+          5,
+          6,
+          4,
+          4
+        ],
+        "hardpoints": [
+          3,
+          2,
+          2,
+          2,
+          2,
+          0,
+          0,
+          0,
+          0
+        ],
+        "internal": [
+          6,
+          6,
+          5,
+          5,
+          4,
+          {
+            "class": 4,
+            "name": "Military",
+            "eligible": {
+              "mahr": 1,
+              "hr": 1,
+              "scb": 1,
+              "mrp": 1,
+              "gsrp": 1,
+              "gmrp": 1,
+              "ghrp": 1
+            }
+          },
+          {
+            "class": 4,
+            "name": "Military",
+            "eligible": {
+              "mahr": 1,
+              "hr": 1,
+              "scb": 1,
+              "mrp": 1,
+              "gsrp": 1,
+              "gmrp": 1,
+              "ghrp": 1
+            }
+          },
+          3,
+          3,
+          2,
+          1,
+          {
+            "class": 1,
+            "name": "PlanetaryApproachSuite",
+            "eligible": {
+              "pas": 1
+            }
+          }
+        ]
+      }
+    },
+    "viper_mkiv": {
+      "name": "Viper Mk IV",
+      "hullMass": 190,
+      "slots": {
+        "standard": [
+          4,
+          4,
+          4,
+          2,
+          3,
+          3,
+          4
+        ],
+        "hardpoints": [
+          2,
+          2,
+          1,
+          1,
+          0,
+          0
+        ],
+        "internal": [
+          4,
+          4,
+          3,
+          {
+            "class": 3,
+            "name": "Military",
+            "eligible": {
+              "mahr": 1,
+              "hr": 1,
+              "scb": 1,
+              "mrp": 1,
+              "gsrp": 1,
+              "gmrp": 1,
+              "ghrp": 1
+            }
+          },
+          2,
+          2,
+          1,
+          1,
+          1,
+          {
+            "class": 1,
+            "name": "PlanetaryApproachSuite",
+            "eligible": {
+              "pas": 1
+            }
+          }
+        ]
+      }
+    },
+    "asp_scout": {
+      "name": "Asp Scout",
+      "hullMass": 140,
+      "slots": {
+        "standard": [
+          4,
+          4,
+          4,
+          3,
+          4,
+          4,
+          4
+        ],
+        "hardpoints": [
+          2,
+          2,
+          1,
+          1,
+          0,
+          0,
+          0
+        ],
+        "internal": [
+          5,
+          4,
+          3,
+          3,
+          2,
+          2,
+          1,
+          {
+            "class": 1,
+            "name": "PlanetaryApproachSuite",
+            "eligible": {
+              "pas": 1
+            }
+          }
+        ]
+      }
+    },
+    "mandalay": {
+      "name": "Mandalay",
+      "hullMass": 190,
+      "slots": {
+        "standard": [
+          5,
+          5,
+          5,
+          4,
+          5,
+          5,
+          5
+        ],
+        "hardpoints": [
+          2,
+          2,
+          2,
+          2,
+          1,
+          1,
+          0,
+          0,
+          0,
+          0
+        ],
+        "internal": [
+          6,
+          5,
+          4,
+          4,
+          3,
+          3,
+          2,
+          1,
+          1,
+          1,
+          {
+            "class": 1,
+            "name": "PlanetaryApproachSuite",
+            "eligible": {
+              "pas": 1
+            }
+          }
+        ]
+      }
+    },
+    "explorer_nx": {
+      "name": "Caspian Explorer",
+      "hullMass": 825,
+      "slots": {
+        "standard": [
+          8,
+          7,
+          8,
+          5,
+          7,
+          8,
+          7
+        ],
+        "hardpoints": [
+          3,
+          2,
+          2,
+          2,
+          2,
+          2,
+          2,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0
+        ],
+        "internal": [
+          7,
+          6,
+          6,
+          5,
+          5,
+          5,
+          5,
+          4,
+          4,
+          3,
+          2,
+          1,
+          1,
+          1,
+          {
+            "class": 1,
+            "name": "PlanetaryApproachSuite",
+            "eligible": {
+              "pas": 1
+            }
+          }
+        ]
+      }
+    }
+  },
+  "modules": {
+    "anacondamkii_armour_reactive": {
+      "power": 0,
+      "mass": 60,
+      "cost": 907348010,
+      "source": "https://edsy.org/eddb.js"
+    },
+    "anacondamkii_armour_grade3": {
+      "power": 0,
+      "mass": 60,
+      "cost": 346462970,
+      "source": "https://edsy.org/eddb.js"
+    },
+    "anacondamkii_armour_mirrored": {
+      "power": 0,
+      "mass": 60,
+      "cost": 818807470,
+      "source": "https://edsy.org/eddb.js"
+    },
+    "anacondamkii_armour_grade2": {
+      "power": 0,
+      "mass": 30,
+      "cost": 153983540,
+      "source": "https://edsy.org/eddb.js"
+    },
+    "anacondamkii_armour_grade1_default": {
+      "power": 0,
+      "mass": 0,
+      "cost": 0,
+      "source": "https://edsy.org/eddb.js"
+    },
+    "anacondamkii_armour_grade1": {
+      "power": 0,
+      "mass": 15,
+      "cost": 19247940,
+      "source": "https://edsy.org/eddb.js"
+    },
+    "int_largecargorack_size6_class1": {
+      "allowedShips": [
+        "anacondamkii",
+        "panthermkii"
+      ],
+      "cost": 587400,
+      "class": 6,
+      "rating": "D",
+      "power": 0,
+      "source": "https://edsy.org/eddb.js",
+      "cargoCapacity": 96
+    },
+    "int_largecargorack_size7_class1": {
+      "allowedShips": [
+        "panthermkii",
+        "anacondamkii"
+      ],
+      "cargoCapacity": 192
+    },
+    "int_largecargorack_size8_class1": {
+      "allowedShips": [
+        "panthermkii",
+        "anacondamkii"
+      ],
+      "cargoCapacity": 384
+    },
+    "int_largebuggybay_size2_class3": {
+      "allowedShips": [
+        "independant_trader",
+        "typex_2",
+        "federation_gunship",
+        "krait_mkii",
+        "type9",
+        "belugaliner",
+        "type9_military",
+        "anaconda",
+        "federation_corvette",
+        "cutter",
+        "panthermkii",
+        "lakonminer",
+        "explorer_nx",
+        "anacondamkii"
+      ]
+    },
+    "int_mkiilargebuggybay_size2_class3": {
+      "allowedShips": [
+        "panthermkii",
+        "lakonminer",
+        "explorer_nx",
+        "anacondamkii"
+      ]
+    },
+    "int_largebuggybay_size2_class3_free": {
+      "allowedShips": [
+        "anaconda",
+        "typex_2",
+        "krait_mkii",
+        "anacondamkii",
+        "federation_gunship",
+        "type9",
+        "independant_trader",
+        "type9_military",
+        "lakonminer",
+        "explorer_nx",
+        "belugaliner",
+        "federation_corvette",
+        "cutter",
+        "panthermkii"
+      ],
+      "mass": 12,
+      "power": 0.75,
+      "cost": 0,
+      "class": 2,
+      "rating": "F",
+      "source": "https://edsy.org/eddb.js"
+    },
+    "int_mkiilargebuggybay_size2_class3_free": {
+      "allowedShips": [
+        "anacondamkii",
+        "lakonminer",
+        "explorer_nx",
+        "panthermkii"
+      ],
+      "mass": 9,
+      "power": 0.5,
+      "cost": 0,
+      "class": 2,
+      "rating": "F",
+      "source": "https://edsy.org/eddb.js"
+    },
+    "int_largebuggybay_size4_class3": {
+      "allowedShips": [
+        "independant_trader",
+        "typex_2",
+        "federation_gunship",
+        "krait_mkii",
+        "type9",
+        "belugaliner",
+        "type9_military",
+        "anaconda",
+        "federation_corvette",
+        "cutter",
+        "panthermkii",
+        "lakonminer",
+        "explorer_nx",
+        "anacondamkii"
+      ]
+    },
+    "int_mkiilargebuggybay_size4_class3": {
+      "allowedShips": [
+        "panthermkii",
+        "lakonminer",
+        "explorer_nx",
+        "anacondamkii"
+      ]
+    },
+    "int_largebuggybay_size4_class3_free": {
+      "allowedShips": [
+        "anaconda",
+        "typex_2",
+        "krait_mkii",
+        "anacondamkii",
+        "federation_gunship",
+        "type9",
+        "independant_trader",
+        "type9_military",
+        "lakonminer",
+        "explorer_nx",
+        "belugaliner",
+        "federation_corvette",
+        "cutter",
+        "panthermkii"
+      ],
+      "mass": 20,
+      "power": 1.2,
+      "cost": 0,
+      "class": 4,
+      "rating": "F",
+      "source": "https://edsy.org/eddb.js"
+    },
+    "int_mkiilargebuggybay_size4_class3_free": {
+      "allowedShips": [
+        "anacondamkii",
+        "lakonminer",
+        "explorer_nx",
+        "panthermkii"
+      ],
+      "mass": 15,
+      "power": 0.8,
+      "cost": 0,
+      "class": 4,
+      "rating": "F",
+      "source": "https://edsy.org/eddb.js"
+    },
+    "int_largebuggybay_size6_class3": {
+      "allowedShips": [
+        "independant_trader",
+        "typex_2",
+        "federation_gunship",
+        "krait_mkii",
+        "type9",
+        "belugaliner",
+        "type9_military",
+        "anaconda",
+        "federation_corvette",
+        "cutter",
+        "panthermkii",
+        "lakonminer",
+        "explorer_nx",
+        "anacondamkii"
+      ]
+    },
+    "int_mkiilargebuggybay_size6_class3": {
+      "allowedShips": [
+        "panthermkii",
+        "lakonminer",
+        "explorer_nx",
+        "anacondamkii"
+      ]
+    },
+    "int_largebuggybay_size6_class3_free": {
+      "allowedShips": [
+        "anaconda",
+        "typex_2",
+        "krait_mkii",
+        "anacondamkii",
+        "federation_gunship",
+        "type9",
+        "independant_trader",
+        "type9_military",
+        "lakonminer",
+        "explorer_nx",
+        "belugaliner",
+        "federation_corvette",
+        "cutter",
+        "panthermkii"
+      ],
+      "mass": 34,
+      "power": 1.8,
+      "cost": 0,
+      "class": 6,
+      "rating": "F",
+      "source": "https://edsy.org/eddb.js"
+    },
+    "int_mkiilargebuggybay_size6_class3_free": {
+      "allowedShips": [
+        "anacondamkii",
+        "lakonminer",
+        "explorer_nx",
+        "panthermkii"
+      ],
+      "mass": 25.5,
+      "power": 1.2,
+      "cost": 0,
+      "class": 6,
+      "rating": "F",
+      "source": "https://edsy.org/eddb.js"
+    },
+    "int_fighterbay_size5_class1": {
+      "allowedShips": [
+        "independant_trader",
+        "federation_gunship",
+        "type9",
+        "anaconda",
+        "federation_corvette",
+        "cutter",
+        "belugaliner",
+        "type9_military",
+        "typex_2",
+        "krait_mkii",
+        "panthermkii",
+        "lakonminer",
+        "explorer_nx",
+        "anacondamkii"
+      ]
+    },
+    "int_fighterbay_size5_class1_free": {
+      "allowedShips": [
+        "independant_trader",
+        "federation_gunship",
+        "type9",
+        "anaconda",
+        "federation_corvette",
+        "cutter",
+        "belugaliner",
+        "type9_military",
+        "typex_2",
+        "krait_mkii",
+        "panthermkii",
+        "lakonminer",
+        "explorer_nx",
+        "anacondamkii"
+      ]
+    },
+    "int_fighterbaymk2_size5_class1": {
+      "allowedShips": [
+        "panthermkii",
+        "lakonminer",
+        "explorer_nx",
+        "anacondamkii"
+      ]
+    },
+    "int_fighterbaymk2_size5_class1_free": {
+      "allowedShips": [
+        "panthermkii",
+        "lakonminer",
+        "explorer_nx",
+        "anacondamkii"
+      ]
+    },
+    "int_fighterbay_size6_class1": {
+      "allowedShips": [
+        "independant_trader",
+        "federation_gunship",
+        "type9",
+        "anaconda",
+        "federation_corvette",
+        "cutter",
+        "belugaliner",
+        "type9_military",
+        "typex_2",
+        "krait_mkii",
+        "panthermkii",
+        "lakonminer",
+        "explorer_nx",
+        "anacondamkii"
+      ]
+    },
+    "int_fighterbay_size6_class1_free": {
+      "allowedShips": [
+        "independant_trader",
+        "federation_gunship",
+        "type9",
+        "anaconda",
+        "federation_corvette",
+        "cutter",
+        "belugaliner",
+        "type9_military",
+        "typex_2",
+        "krait_mkii",
+        "panthermkii",
+        "lakonminer",
+        "explorer_nx",
+        "anacondamkii"
+      ]
+    },
+    "int_fighterbaymk2_size6_class1": {
+      "allowedShips": [
+        "panthermkii",
+        "lakonminer",
+        "explorer_nx",
+        "anacondamkii"
+      ]
+    },
+    "int_fighterbaymk2_size6_class1_free": {
+      "allowedShips": [
+        "panthermkii",
+        "lakonminer",
+        "explorer_nx",
+        "anacondamkii"
+      ]
+    },
+    "int_fighterbay_size7_class1": {
+      "allowedShips": [
+        "independant_trader",
+        "federation_gunship",
+        "type9",
+        "anaconda",
+        "federation_corvette",
+        "cutter",
+        "belugaliner",
+        "type9_military",
+        "typex_2",
+        "krait_mkii",
+        "panthermkii",
+        "lakonminer",
+        "explorer_nx",
+        "anacondamkii"
+      ]
+    },
+    "int_fighterbay_size7_class1_free": {
+      "allowedShips": [
+        "independant_trader",
+        "federation_gunship",
+        "type9",
+        "anaconda",
+        "federation_corvette",
+        "cutter",
+        "belugaliner",
+        "type9_military",
+        "typex_2",
+        "krait_mkii",
+        "panthermkii",
+        "lakonminer",
+        "explorer_nx",
+        "anacondamkii"
+      ]
+    },
+    "int_fighterbaymk2_size7_class1": {
+      "allowedShips": [
+        "panthermkii",
+        "lakonminer",
+        "explorer_nx",
+        "anacondamkii"
+      ]
+    },
+    "int_fighterbaymk2_size7_class1_free": {
+      "allowedShips": [
+        "panthermkii",
+        "lakonminer",
+        "explorer_nx",
+        "anacondamkii"
+      ]
+    },
+    "hpt_miningtoolv2_fixed_large": {
+      "allowedShips": [
+        "lakonminer",
+        "anacondamkii"
+      ]
+    }
+  }
+}

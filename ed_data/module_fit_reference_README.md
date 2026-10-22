@@ -8,6 +8,22 @@ The JSON includes pinned source commits, not an unversioned live dependency.
 
 Only an exact symbol match provides module evidence. New/unknown modules or
 hulls remain unverified. Refresh this export explicitly when game data changes.
+Reviewed launch data for Anaconda Mk II and the October 2026 ship balancing are retained in
+`module_fit_reference_supplement.json` and merged by the exporter. Its EDSY
+source date, version and SHA-256 identify the snapshot independently of the
+older upstream commits. It includes hull/module facts, not EDSY program code.
+Cargo01 accepts cargo racks and fuel tanks. Mining Volley Repeater hull
+permission is known; a slot-specific mining optimisation is not assumed.
+The October supplement updates hull masses and slot structure for the ten
+affected ships. Added optional slots use Slot00; existing installed slots and
+wishlist bindings keep their physical keys. The Type-7 follows Frontier's
+single class-7 addition to the previous layout; the conflicting extra class-6
+slot in this EDSY snapshot is not imported. EDSY reference speeds retain the
+catalog's existing convention rather than substituting raw flight parameters
+from the patch notes. Approximate published jump ranges are descriptive only;
+operational range continues to come from Journal Loadout.
+Unknown thermal/acceleration values and a theoretical maximum cargo are not
+invented; operational capacity continues to come from Journal Loadout data.
 Power draw is a standard-module reference. Where every participating module has
 known reference draw and no installed engineering, a replacement draw/reactor
 comparison is shown. Cargo hatch, priorities and engineering are not evaluated;

@@ -18,6 +18,10 @@ MODULE_ID_ALIASES = {
         "hpt_heatsinklauncher_turret_tiny",
 }
 
+# These hulls have an ordinary stock alloy and distinct Mk II ablative
+# bulkheads. Keep old standard-armour aliases, but never merge the two types.
+ABLATIVE_ARMOUR_HULLS = frozenset({"anacondamkii", "explorer_nx"})
+
 
 def canonical_module_id(value: object) -> str:
     """Return one stable ID for wrapped, aliased and hull-specific symbols."""
@@ -32,6 +36,9 @@ def canonical_module_id(value: object) -> str:
     )
     if armour:
         variant = armour.group(1)
+        hull = symbol.rsplit("_armour_", 1)[0]
+        if hull in ABLATIVE_ARMOUR_HULLS and variant != "grade1_default":
+            return f"ship_armour_ablative_{variant}"
         if variant == "grade1_default":
             variant = "grade1"
         symbol = f"ship_armour_{variant}"

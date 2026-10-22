@@ -228,7 +228,8 @@ def build_module_catalog(payload: Any, *, include_hull_armour: bool = False) -> 
     modules = payload.get("modules", {}) if isinstance(payload, dict) else {}
     if include_hull_armour:
         modules = dict(modules)
-        names = {"grade1": ("LIGHTWEIGHT ALLOYS", "1C"), "grade2": ("REINFORCED ALLOYS", "1B"),
+        names = {"grade1_default": ("LIGHTWEIGHT ALLOYS", "1C"),
+                 "grade1": ("LIGHTWEIGHT ALLOYS", "1C"), "grade2": ("REINFORCED ALLOYS", "1B"),
                  "grade3": ("MILITARY GRADE COMPOSITE", "1A"), "mirrored": ("MIRRORED SURFACE COMPOSITE", "1A"),
                  "reactive": ("REACTIVE SURFACE COMPOSITE", "1A")}
         for symbol in module_fit_reference().get("modules", {}):
@@ -239,6 +240,9 @@ def build_module_catalog(payload: Any, *, include_hull_armour: bool = False) -> 
         if not isinstance(value, (list, tuple)) or not value:
             continue
         folded_symbol = str(symbol).casefold()
+        # Shared identities label Journal projections, not purchasable hulls.
+        if folded_symbol.startswith("ship_armour_"):
+            continue
         mount = (
             "FIXED" if "_fixed_" in folded_symbol else
             "GIMBALLED" if "_gimbal_" in folded_symbol else
@@ -366,7 +370,7 @@ def module_catalog_with_ship_fit(
     hull_mass = reference.get("ships", {}).get(ship_symbol, {}).get("hullMass")
     ship_stats = ship_stats if isinstance(ship_stats, dict) else {}
     catalog = [{**row, "referencePrice": stats.get(str(row.get("symbol") or "").casefold(), {}).get("cost"),
-                "referencePriceSource": reference.get("rulesSource", "") if "_armour_" in str(row.get("symbol") or "").casefold() else reference.get("source", ""),
+                "referencePriceSource": stats.get(str(row.get("symbol") or "").casefold(), {}).get("source") or (reference.get("rulesSource", "") if "_armour_" in str(row.get("symbol") or "").casefold() else reference.get("source", "")),
                 "powerDrawMW": stats.get(str(row.get("symbol") or "").casefold(), {}).get("power")}
                for row in catalog if isinstance(row, dict)]
     if not slots:
@@ -411,6 +415,10 @@ def module_catalog_with_ship_fit(
                 slot for slot in candidates
                 if str(slot.get("slot") or "") == core_slot
             ]
+            if core_slot == "FuelTank":
+                candidates += [slot for slot in slots
+                               if slot.get("group") == "OPTIONAL INTERNALS"
+                               and str(slot.get("restriction") or "").casefold() == "cargo"]
         try:
             module_size = int(row.get("moduleClass"))
         except (TypeError, ValueError):
@@ -438,7 +446,12 @@ def module_catalog_with_ship_fit(
                     status, reason = "INCOMPATIBLE", "Military slot accepts reinforcement packages and shield cell banks only"
                 elif restriction == "planetaryapproachsuite":
                     status, reason = "INCOMPATIBLE", "Reserved planetary approach suite slot"
-                elif restriction and restriction != "military":
+                elif restriction == "cargo" and not symbol.startswith((
+                    "int_cargorack_", "int_largecargorack_",
+                    "int_corrosionproofcargorack_", "int_fueltank_",
+                )):
+                    status, reason = "INCOMPATIBLE", "Cargo slot accepts cargo racks and fuel tanks only"
+                elif restriction and restriction not in {"military", "cargo"}:
                     status, reason = "UNKNOWN", "Slot restriction has not been verified: " + restriction
                 elif spec.get("noUndersize") and module_size != size:
                     status, reason = "INCOMPATIBLE", "This module requires the exact slot class"
@@ -536,7 +549,7 @@ def build_ship_catalog(
         row = {
             "symbol": symbol.casefold(),
             "assetSymbol": symbol,
-            "schematicSource": f"assets/ships/{symbol}.svg",
+            "schematicSource": f"assets/ships/{symbol}.svg" if source.get("schematicAvailable", True) else "",
             "displayName": name,
             "manufacturer": str(source.get("manufacturer") or "").strip(),
             "size": str(source.get("size") or "").strip().upper(),
@@ -544,6 +557,13 @@ def build_ship_catalog(
             "boost": source.get("boost"),
             "kind": "SHIPS",
         }
+        if source.get("availability"):
+            row["availability"] = source["availability"]
+        for field in ("hullMass", "baseShieldStrength", "heatCapacity",
+                      "referenceJumpRangeLy", "referenceJumpRangeApproximate",
+                      "referenceDataDate"):
+            if field in source:
+                row[field] = source[field]
         if reference_price is not None and reference_price > 0:
             row.update({
                 "referencePrice": reference_price,
@@ -649,6 +669,13 @@ def evaluate_ship_access(
 ) -> dict[str, Any]:
     """Return the known naval-rank purchase gate for one hull."""
     source = item if isinstance(item, dict) else {}
+    if source.get("availability") == "ARX_EARLY_ACCESS":
+        return {
+            "purchaseStatus": "ARX EARLY ACCESS",
+            "purchaseTone": "UNKNOWN",
+            "purchaseReason": "ARX early-access entitlement required; ownership is not verified",
+            "purchaseRank": 2,
+        }
     symbol = str(source.get("symbol") or "").strip().casefold()
     rule = SHIP_RANK_REQUIREMENTS.get(symbol)
     if not rule:

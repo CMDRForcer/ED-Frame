@@ -2873,6 +2873,24 @@
     },
     "ship_armour_reactive": {
       "powerDrawMW": 0.0
+    },
+    "ship_armour_ablative_reactive": {
+      "powerDrawMW": 0.0
+    },
+    "ship_armour_ablative_grade3": {
+      "powerDrawMW": 0.0
+    },
+    "ship_armour_ablative_mirrored": {
+      "powerDrawMW": 0.0
+    },
+    "ship_armour_ablative_grade2": {
+      "powerDrawMW": 0.0
+    },
+    "ship_armour_ablative_grade1": {
+      "powerDrawMW": 0.0
+    },
+    "int_largecargorack_size6_class1": {
+      "powerDrawMW": 0.0
     }
   }
 }

@@ -1,5 +1,5 @@
 {
-  "source": "EDSY eddb.js revision 9cd829062217036184ea9ec79ee30934d235aca8; Elite Dangerous module identity facts (Frontier Developments).",
+  "source": "EDSY eddb.js revision 9cd829062217036184ea9ec79ee30934d235aca8; Elite Dangerous module identity facts (Frontier Developments). Supplement: EDSY eddb.js 2026-10-20; SHA256 071f3c63bab630b0db33e7d77061c1dcd7c0d06426c507ab52bf87e9a1c99da2.",
   "modules": {
     "hpt_beamlaser_fixed_small": [
       "BEAM LASER",
@@ -3844,6 +3844,82 @@
     "int_detailedsurfacescanner_tiny": [
       "DETAILED SURFACE SCANNER",
       "1I"
+    ],
+    "anacondamkii_armour_reactive": [
+      "MK II ABLATIVE REACTIVE SURFACE COMPOSITE",
+      "1A"
+    ],
+    "ship_armour_ablative_reactive": [
+      "MK II ABLATIVE REACTIVE SURFACE COMPOSITE",
+      "1A"
+    ],
+    "anacondamkii_armour_grade3": [
+      "MK II ABLATIVE MILITARY GRADE COMPOSITE",
+      "1A"
+    ],
+    "ship_armour_ablative_grade3": [
+      "MK II ABLATIVE MILITARY GRADE COMPOSITE",
+      "1A"
+    ],
+    "anacondamkii_armour_mirrored": [
+      "MK II ABLATIVE MIRRORED SURFACE COMPOSITE",
+      "1A"
+    ],
+    "ship_armour_ablative_mirrored": [
+      "MK II ABLATIVE MIRRORED SURFACE COMPOSITE",
+      "1A"
+    ],
+    "anacondamkii_armour_grade2": [
+      "MK II ABLATIVE REINFORCED ALLOY",
+      "1B"
+    ],
+    "ship_armour_ablative_grade2": [
+      "MK II ABLATIVE REINFORCED ALLOY",
+      "1B"
+    ],
+    "anacondamkii_armour_grade1_default": [
+      "LIGHTWEIGHT ALLOYS",
+      "1C"
+    ],
+    "ship_armour_grade1": [
+      "LIGHTWEIGHT ALLOYS",
+      "1C"
+    ],
+    "anacondamkii_armour_grade1": [
+      "MK II ABLATIVE LIGHTWEIGHT ALLOY",
+      "1C"
+    ],
+    "ship_armour_ablative_grade1": [
+      "MK II ABLATIVE LIGHTWEIGHT ALLOY",
+      "1C"
+    ],
+    "explorer_nx_armour_grade1_default": [
+      "LIGHTWEIGHT ALLOYS",
+      "1C"
+    ],
+    "explorer_nx_armour_grade1": [
+      "MK II ABLATIVE LIGHTWEIGHT ALLOY",
+      "1C"
+    ],
+    "explorer_nx_armour_grade2": [
+      "MK II ABLATIVE REINFORCED ALLOY",
+      "1B"
+    ],
+    "explorer_nx_armour_grade3": [
+      "MK II ABLATIVE MILITARY GRADE COMPOSITE",
+      "1A"
+    ],
+    "explorer_nx_armour_mirrored": [
+      "MK II ABLATIVE MIRRORED SURFACE COMPOSITE",
+      "1A"
+    ],
+    "explorer_nx_armour_reactive": [
+      "MK II ABLATIVE REACTIVE SURFACE COMPOSITE",
+      "1A"
+    ],
+    "int_largecargorack_size6_class1": [
+      "MK II CARGO RACK",
+      "6D"
     ]
   }
 }
