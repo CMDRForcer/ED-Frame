@@ -447,6 +447,7 @@ class FrontierRequestResilienceTests(unittest.TestCase):
         controller._profile_generation = 1
         controller._frontier_tokens = _FakeTokens()
         controller._frontier_client = Mock()
+        controller._frontier_config = {"consent": True}
         controller._frontier_authorization = None
         controller._frontier_status = ""
         controller._frontier_last_sync = ""
@@ -788,6 +789,8 @@ class FrontierConsentTests(unittest.TestCase):
             Path(directory) / "frontier_config.json"
         )
         controller._frontier_config = controller._load_frontier_config()
+        controller._frontier_request_token = 0
+        controller._frontier_watchdog = Mock()
         controller._frontier_busy = False
         controller._frontier_authorization = None
         controller._frontier_status = ""

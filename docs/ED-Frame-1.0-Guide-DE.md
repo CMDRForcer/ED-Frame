@@ -1,6 +1,6 @@
 # ED-Frame 1.0 — Einstieg und Funktionen
 
-Aktualisiert für App **1.0.11** und Katalogserver **0.9.5**.
+Aktualisiert für App **1.0.13** und Katalogserver **0.9.5**.
 
 Beim ersten Start hilft ein überspringbarer Einrichtungsassistent mit Rundgang durch alle Bereiche. Fertig eingerichtete Profile bleiben erhalten; erneut öffnen über Settings → OPEN ONBOARDING. Release-Builds mit aktivem Katalog senden automatisch höchstens einmal pro UTC-Tag eine zufällige Installations-ID und die App-Version. Die ID bleibt über Tage wiedererkennbar, ist für alle Commander-Profile gemeinsam und unter Settings → About sichtbar. Einträge werden 90 Tage gespeichert; die Datenbank enthält keine IP-Adressen oder Commander-/Journal-Daten. Ein deaktivierter Katalog oder EDFRAME_NO_USAGE_PING=1 verhindert Pings; Development-Builds senden keine.
 
@@ -26,7 +26,7 @@ Die GitHub-Updateprüfung läuft unabhängig von der Katalogverbindung und sende
 
 ## Die Funktionen einzeln
 
-- **Operations:** der nächste Sammel-, Handels-, Freischalt-, Reise- oder Crafting-Schritt für deinen verfolgten Bauplan.
+- **Operations:** der nächste Sammel-, Handels-, Freischalt-, Reise- oder Crafting-Schritt für deinen verfolgten Bauplan. Die Materialtauschliste gilt für den gesamten ausgewählten Build: alle Kategorien, konkrete Abgabe- und Empfangsmengen sowie unvermeidliche Überschüsse. Im Spiel zuerst das gewünschte Material und dann das Tauschmaterial auswählen; bestätigte Journal-Tausche aktualisieren den Plan.
 - **Engineering:** Grades und experimentelle Effekte für die tatsächlichen Modulplätze deiner Schiffe planen. Eingebaute Ausrüstung und Plan vergleichen, einschließlich geschätztem Strombedarf.
 - **Wishlist:** mehrere Flotten-Baupläne, Materialbereitschaft und vom Journal bestätigten Crafting-Fortschritt verfolgen.
 - **Ingenieure:** Fähigkeiten suchen, Freischaltvoraussetzungen verfolgen und passende Ziele finden.
@@ -67,8 +67,8 @@ Bereits gespeicherte Beobachtungen bleiben bei Ausfall oder Abschaltung eines Di
 ## Verbindungen und Datenschutz
 
 - **ED-Frame-Community-Verbindung:** bei neuen Profilen standardmäßig aktiv. Der Schalter in Connections steuert Katalogzugriff und unterstützte anonyme Beiträge gemeinsam. Abschalten erhält den lokalen Bestand.
-- **EDDN:** öffentliche Upload-/Listener-Funktionen sind bei neuen Profilen standardmäßig aktiv und haben einen eigenen Schalter. Unterstützte Meldungen werden gegen ihre Schemas geprüft; private und nicht unterstützte Felder werden ausgeschlossen.
-- **Frontier CAPI:** benötigt gesonderte Zustimmung und Frontier-Anmeldung. Ergänzt unterstützte Credits- und Aktivschiffdaten; neuere Journalbelege behalten Vorrang.
+- **EDDN:** öffentliche Upload-/Listener-Funktionen sind bei neuen Profilen standardmäßig aktiv und haben einen eigenen Schalter. Der serielle Sender arbeitet unabhängig von Such- und Katalogaufgaben; Stationsmärkte werden vor Signalmeldungen übertragen. Empfangsbelege werden sofort lokal gesichert, Anzeige und Archivierung gebündelt aktualisiert. Die EDDN-Seite zeigt Warte-, Profilprüfungs-, Netzwerk- und Belegzeiten. Sendepausen und Server-Wartezeiten bleiben erhalten. Unterstützte Meldungen werden gegen ihre Schemas geprüft; private und nicht unterstützte Felder werden ausgeschlossen.
+- **Frontier CAPI:** benötigt gesonderte Zustimmung und Frontier-Anmeldung. „Profil + Markt aktualisieren“ ergänzt Profil, Schiff und den Markt der angedockten Station. Öffentliche Marktdaten werden nur bei aktiviertem EDDN-Upload übertragen; Account, Station und Aktualität werden vorher geprüft. Es gibt keinen zusätzlichen Markt-Dauertimer. Die Statusanzeige unterscheidet eingelesene, vorgemerkte und von EDDN angenommene Daten. Eine EDDN-Bestätigung bestätigt keine Übernahme durch Inara oder einen Bot. Neuere Journalbelege behalten Vorrang.
 - **INARA:** benötigt deine Einrichtung und deinen API-Schlüssel. Kann bei Aktivierung unterstützte Commander-Ereignisse an INARA senden.
 - **Spansh und EDSM:** liefern öffentliche Katalogdaten über ihre jeweiligen Verbindungs- und Aktualisierungsoptionen.
 

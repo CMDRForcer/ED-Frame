@@ -1,5 +1,13 @@
 # Changelog
 
+## 1.0.13 — 2026-11-01
+
+- **Full-build material trades:** restore the collapsed Operations trade card, show all material categories by default, and display explicit give/receive quantities with wrapped names and unavoidable surplus. The selected build's reserved stock remains protected.
+- **Frontier station markets:** refresh the docked station market with the Commander profile and shipyard. Validate identity, station, freshness and complete inventories before queuing supported public EDDN market observations; show delivery state and offer counts without an extra polling timer.
+- **Faster EDDN delivery:** a dedicated serial upload lane prevents general background work from blocking uploads. Fresh station inventories take priority while retaining FIFO within each queue class, existing send intervals, consent checks and rate-limit cooldowns.
+- **Durable queue recovery:** persist acknowledgements and retry state before UI callbacks, reconcile accepted messages after restart, and batch UI/JSON updates. Archival runs off the UI thread with acknowledgement-specific cleanup; local technical details expose sender timings.
+- **Server operations:** include the reviewed capacity-aware online index-maintenance source, service, timer and tests used after the October outage. Existing catalog API 0.9.5 remains compatible; this app release requires no further server deployment.
+
 ## 1.0.12 — 2026-10-22
 
 - **Anaconda Mk II:** native ship graphic, full 38-slot layout, ARX early-access status and reviewed Mk II cargo, armour and Mining Volley Repeater compatibility.

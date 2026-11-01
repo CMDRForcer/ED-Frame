@@ -1,6 +1,6 @@
 # ED-Frame 1.0 — getting started and features
 
-Updated for app **1.0.11** and catalog server **0.9.5**.
+Updated for app **1.0.13** and catalog server **0.9.5**.
 
 First launch offers a skippable setup wizard and a tour of every area. Completed profiles keep their setup; reopen it from Settings → OPEN ONBOARDING. Release builds with the catalog enabled automatically send a random installation ID and app version at most once per UTC day. The ID is recognizable across days, shared across Commander profiles and available in Settings → About. Records are kept for 90 days; the database stores no IP addresses or Commander/Journal data. Disable the catalog or set EDFRAME_NO_USAGE_PING=1 to prevent pings; development builds do not ping.
 
@@ -26,7 +26,7 @@ GitHub update checks are independent of the catalog connection and send no insta
 
 ## Features, one at a time
 
-- **Operations:** follow the next collection, trade, unlock, travel or crafting action for a tracked build.
+- **Operations:** follow the next collection, trade, unlock, travel or crafting action for a tracked build. The material-trade list covers the entire selected build, with all categories, explicit give/receive quantities and unavoidable surplus. In the game select the wanted material first, then the material to give; confirmed Journal trades update the plan.
 - **Engineering:** plan grades and experimental effects on the actual physical slots of each known ship. Compare installed equipment with your plan, including power draw estimates.
 - **Wishlist:** track several fleet builds, material readiness and Journal-confirmed craft progress.
 - **Engineers:** search capabilities, follow unlock prerequisites and find suitable destinations.
@@ -67,8 +67,8 @@ Retained observations remain available locally when a service is unavailable or 
 ## Connections and privacy
 
 - **ED-Frame community connection:** enabled by default for new profiles. The switch in Connections controls catalog access and supported anonymous contributions together. Disabling it preserves retained local data.
-- **EDDN:** public upload/listener functionality is enabled by default for new profiles and has its own Connections switch. Supported messages are schema-checked and exclude private/unsupported fields.
-- **Frontier CAPI:** separate consent and Frontier login are required. It supplements supported credits and active-ship information; newer Journal evidence remains authoritative.
+- **EDDN:** public upload/listener functionality is enabled by default for new profiles and has its own Connections switch. The serial sender runs independently of searches and catalog tasks; station markets take priority over signal reports. Gateway receipts are secured locally immediately, while display and archival updates are batched. The EDDN page shows worker wait, profile check, network and receipt times. Send intervals and server cooldowns remain enforced. Supported messages are schema-checked and exclude private/unsupported fields.
+- **Frontier CAPI:** separate consent and Frontier login are required. “Refresh profile + market” supplements your profile, ship and the docked station market. Public market data is uploaded only when EDDN uploads are enabled, after checking account, station and freshness. There is no additional market polling timer. The status distinguishes read, queued and EDDN-accepted data. An EDDN receipt does not confirm ingestion by Inara or a bot. Newer Journal evidence remains authoritative.
 - **INARA:** requires your own setup and API key. It can transmit supported Commander events to INARA when enabled.
 - **Spansh and EDSM:** supply public catalog data through their respective connection/refresh controls.
 

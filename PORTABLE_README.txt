@@ -1,4 +1,4 @@
-ED-Frame 1.0.11 - Portable Windows Edition
+ED-Frame 1.0.13 - Portable Windows Edition
 ===================================================================
 
 1. Extract the complete ZIP archive.
@@ -6,6 +6,11 @@ ED-Frame 1.0.11 - Portable Windows Edition
 3. Keep the _internal folder next to ED-Frame.exe.
 
 Python and the INSTALL_REQUIREMENTS step are not required for this portable build.
+
+This release restores full-build material trades in Operations with explicit
+give/receive quantities. Frontier refresh can read the docked station market;
+EDDN uploads use an independent serial lane, station-inventory priority and
+durable receipts, while UI updates are batched. Consent and rate limits apply.
 
 This release works with catalog server 0.9.5. NAV includes A-B-A trading loops,
 Carrier commodity offers, a manual starting system and unlimited commodity radius.

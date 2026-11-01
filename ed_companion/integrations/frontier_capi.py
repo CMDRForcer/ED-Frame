@@ -315,6 +315,7 @@ class FrontierCapiClient:
         self._sleeper = sleeper
         self._utcnow = utcnow or (lambda: datetime.now(timezone.utc))
         self._last_request_at = None
+        self._retry_not_before = 0.0
         self._lock = threading.Lock()
 
     def query(self, endpoint, *, timeout=CAPI_TIMEOUT_SECONDS):
@@ -325,10 +326,11 @@ class FrontierCapiClient:
 
     def query_many(
         self, endpoints, *, timeout=CAPI_TIMEOUT_SECONDS,
-        spacing=CAPI_BUNDLE_SPACING_SECONDS,
+        spacing=CAPI_BUNDLE_SPACING_SECONDS, optional_endpoints=(),
     ):
         """Read one user-triggered CAPI bundle without a 60 s intra-bundle wait."""
         normalized = [self._validated_endpoint(value) for value in endpoints]
+        optional = {self._validated_endpoint(value) for value in optional_endpoints}
         if not normalized:
             return {}
         with self._lock:
@@ -337,9 +339,25 @@ class FrontierCapiClient:
             for index, endpoint in enumerate(normalized):
                 if index:
                     self._sleeper(max(0.0, float(spacing)))
-                results[endpoint] = self._query_unlocked(
-                    endpoint, timeout=timeout,
-                )
+                try:
+                    results[endpoint] = self._query_unlocked(
+                        endpoint, timeout=timeout,
+                    )
+                except FrontierCapiError as exc:
+                    if endpoint not in optional:
+                        raise
+                    results[endpoint] = {"endpoint": endpoint, "error": str(exc)}
+                    if exc.status_code == 429 or exc.retry_after:
+                        # A rate-limited optional document must not trigger
+                        # another immediate request from the same bundle.
+                        for remaining in normalized[index + 1:]:
+                            if remaining not in optional:
+                                raise
+                            results[remaining] = {
+                                "endpoint": remaining,
+                                "error": "Frontier requests paused after a rate limit or server cooldown.",
+                            }
+                        break
             return results
 
     @staticmethod
@@ -351,10 +369,17 @@ class FrontierCapiClient:
 
     def _wait_for_request_window(self):
         now = self._clock()
+        if self._retry_not_before > now:
+            remaining = max(1, int(self._retry_not_before - now + 0.999))
+            raise FrontierCapiError(
+                f"Frontier requests paused; retry in {remaining} s.",
+                status_code=429, retryable=True, retry_after=remaining,
+            )
+        earliest = 0.0
         if self._last_request_at is not None:
-            delay = self._min_interval - (now - self._last_request_at)
-            if delay > 0:
-                self._sleeper(delay)
+            earliest = max(earliest, self._last_request_at + self._min_interval)
+        if earliest > now:
+            self._sleeper(earliest - now)
 
     def _query_unlocked(self, endpoint, *, timeout):
         self._last_request_at = self._clock()
@@ -372,7 +397,14 @@ class FrontierCapiClient:
             raise FrontierCapiError(
                 "Frontier CAPI could not be reached.", retryable=True
             ) from exc
-        payload = _read_json_response(response, "CAPI request")
+        try:
+            payload = _read_json_response(response, "CAPI request")
+        except FrontierCapiError as exc:
+            if exc.retry_after is not None:
+                self._retry_not_before = max(
+                    self._retry_not_before, self._clock() + exc.retry_after,
+                )
+            raise
         if endpoint == "/profile" and not isinstance(
             payload.get("commander"), Mapping
         ):

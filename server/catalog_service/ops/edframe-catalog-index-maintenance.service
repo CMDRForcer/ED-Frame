@@ -1,0 +1,16 @@
+[Unit]
+Description=Prevent ED-Frame catalog index bloat without deleting catalog facts
+Requires=docker.service
+After=docker.service
+RequiresMountsFor=/var/backups/edframe-catalog
+
+[Service]
+Type=oneshot
+EnvironmentFile=/etc/edframe-catalog-index-maintenance.env
+ExecStart=/usr/bin/python3 /opt/edframe-catalog/server/catalog_service/ops/catalog-index-maintenance.py --run
+ExecStartPre=/usr/bin/mountpoint -q /var/backups/edframe-catalog
+Nice=15
+IOSchedulingClass=best-effort
+IOSchedulingPriority=7
+TimeoutStartSec=45min
+UMask=0077

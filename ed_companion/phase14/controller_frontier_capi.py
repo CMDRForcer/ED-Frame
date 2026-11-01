@@ -66,6 +66,10 @@ from ed_companion.integrations.frontier_credentials import (
     FrontierCredentialError,
     FrontierCredentialStore,
 )
+from ed_companion.integrations.frontier_market import (
+    CAPI_MARKET_CONTEXT, CAPI_MARKET_MAX_AGE_SECONDS, FrontierMarketError,
+    market_content_key, market_summary, market_timestamp, prepare_capi_market,
+)
 from ed_companion.build_import import (
     BuildImportError, JOURNAL_BLUEPRINT_NAMES, empty_build_import_preview,
     preview_build,
@@ -221,7 +225,7 @@ LOGGER = logging.getLogger(__name__)
 INARA_ACTIVE_RECEIPT_LIMIT = 100
 from .controller_core import CoreControllerMixin
 EDDN_ACTIVE_RECEIPT_LIMIT = 100
-FRONTIER_REQUEST_WATCHDOG_MS = 120_000
+FRONTIER_REQUEST_WATCHDOG_MS = 180_000
 
 
 class FrontierCapiMixin:
@@ -274,6 +278,37 @@ class FrontierCapiMixin:
         notify=CoreControllerMixin.connectionChanged,
     )
 
+    def _frontier_market_view(self):
+        state = dict(getattr(self, "_frontier_market_state", {}) or {})
+        config = getattr(self, "_eddn_config", {})
+        if not state:
+            state = dict(config.get("frontier_market_receipt") or {})
+        if not state:
+            restored = next((row for row in reversed(getattr(self, "_eddn_queue", []))
+                if row.get("status") == "sent" and (row.get("event") or {}).get("schema") == "commodity/3"
+                and (row.get("context") or {}).get("gameversion") == "CAPI-Live-market"), None)
+            if restored:
+                state = {**market_summary(restored["event"]), "stage": "ACCEPTED",
+                         "detail": str(restored.get("last_result") or "Gateway accepted HTTP 200")}
+        if not state:
+            return {"stage": "NOT_CHECKED", "detail": "Refresh profile and market while docked."}
+        job_id = state.get("jobId")
+        job = next((row for row in getattr(self, "_eddn_queue", [])
+                    if row.get("id") == job_id), None) if job_id else None
+        if job:
+            stage = {"sent": "ACCEPTED", "queued": "QUEUED", "sending": "SENDING",
+                     "retry": "RETRY", "failed": "FAILED"}.get(job.get("status"), "READ")
+            state.update(stage=stage, detail=str(job.get("last_error") or "")
+                         if stage in {"RETRY", "FAILED"} else str(job.get("last_result") or ""))
+        if state.get("stage") in {"QUEUED", "SENDING", "RETRY"} and not eddn_upload_allowed(config):
+            state.update(stage="LOCAL_ONLY", detail="EDDN upload is disabled; delivery is paused.")
+        return state
+
+    frontierMarketSummary = Property(
+        "QVariantMap", _frontier_market_view,
+        notify=CoreControllerMixin.connectionChanged,
+    )
+
 
     frontierConsent = Property(
         bool, lambda self: bool(self._frontier_config.get("consent")),
@@ -290,10 +325,13 @@ class FrontierCapiMixin:
         self._save_frontier_config()
         if not consent:
             self._frontier_authorization = None
-            if not self._frontier_busy:
-                self._frontier_status = (
-                    "CONSENT WITHDRAWN · Existing local tokens are unaffected."
-                )
+            self._frontier_request_token += 1
+            self._frontier_busy = False
+            self._frontier_watchdog.stop()
+            self._frontier_market_state = {"stage": "UNAVAILABLE", "detail": "Frontier access is disabled."}
+            self._frontier_status = (
+                "CONSENT WITHDRAWN · Existing local tokens are unaffected."
+            )
         self.connectionChanged.emit()
 
 
@@ -375,6 +413,7 @@ class FrontierCapiMixin:
         self._frontier_client = None
         self._frontier_authorization = None
         self._frontier_last_sync = ""
+        self._frontier_market_state = {}
         self._frontier_status = "NOT CONNECTED · Local Frontier tokens removed."
         self.connectionChanged.emit()
 
@@ -384,11 +423,18 @@ class FrontierCapiMixin:
     ):
         if self._frontier_busy:
             return
+        if not getattr(self, "_frontier_config", {}).get("consent"):
+            self._frontier_status = "CONSENT REQUIRED · Enable Frontier access first."
+            self.connectionChanged.emit()
+            return
         self._frontier_busy = True
         self._frontier_request_token += 1
         request_token = self._frontier_request_token
         profile_generation = self._profile_generation
         existing_client = self._frontier_client
+        commander = str(getattr(self, "_state", {}).get("commander") or "").strip()
+        journal_context = deepcopy(getattr(self, "_eddn_context", {}))
+        self._frontier_market_state = {"stage": "CHECKING", "detail": "Contacting Frontier…"}
         self._frontier_status = "CONTACTING FRONTIER…"
         self.connectionChanged.emit()
 
@@ -412,8 +458,25 @@ class FrontierCapiMixin:
                         active_tokens.access_token,
                         token_type=active_tokens.token_type,
                     )
-                snapshots = client.query_many(("/profile", "/shipyard"))
+                snapshots = client.query_many(
+                    ("/profile", "/shipyard", "/market"), optional_endpoints=("/shipyard", "/market"),
+                )
                 profile_snapshot = snapshots["/profile"]
+                market_snapshot = snapshots["/market"]
+                market, market_error = None, ""
+                try:
+                    if market_snapshot.get("error"):
+                        raise FrontierMarketError(redact_secrets(
+                            market_snapshot["error"], extra_secrets=(
+                                active_tokens.access_token, active_tokens.refresh_token,
+                            ),
+                        ))
+                    market = prepare_capi_market(
+                        profile_snapshot, market_snapshot,
+                        commander=commander, context=journal_context,
+                    )
+                except FrontierMarketError as exc:
+                    market_error = str(exc)
                 self.frontierFinished.emit({
                     "requestToken": request_token,
                     "profileGeneration": profile_generation,
@@ -423,6 +486,7 @@ class FrontierCapiMixin:
                     "stationOffers": project_shipyard_station_observations(
                         profile_snapshot, snapshots["/shipyard"],
                     ),
+                    "market": market, "marketError": market_error,
                     "error": "",
                 })
             except FrontierCapiError as exc:
@@ -495,6 +559,13 @@ class FrontierCapiMixin:
             except FrontierCredentialError as exc:
                 storage_error = str(exc)
         error = str(result.get("error") or "")
+        market = result.get("market")
+        if error or result.get("marketError"):
+            self._frontier_market_state = {
+                "stage": "UNAVAILABLE", "detail": str(result.get("marketError") or error),
+            }
+        elif isinstance(market, dict):
+            self._accept_frontier_market(market)
         profile = result.get("profile")
         if isinstance(profile, dict) and profile:
             self._apply_frontier_profile(profile)
@@ -555,11 +626,50 @@ class FrontierCapiMixin:
             return
         LOGGER.warning("Frontier CAPI request exceeded the watchdog interval")
         self._frontier_busy = False
+        self._frontier_request_token += 1  # Late worker results must not revive this request.
+        self._frontier_market_state = {"stage": "UNAVAILABLE", "detail": "Frontier request timed out."}
         self._frontier_authorization = None
         self._frontier_status = (
             "FRONTIER REQUEST TIMED OUT · Check your connection and try again."
         )
         self.connectionChanged.emit()
+
+    def _accept_frontier_market(self, prepared):
+        state = {**market_summary(prepared), "stage": "READ", "detail": "Market read from Frontier."}
+        self._frontier_market_state = state
+        message = prepared.get("message") or {}
+        current = getattr(self, "_eddn_context", {})
+        if (current.get("MarketID") != message.get("marketId")
+                or str(current.get("StarSystem") or "").casefold() != str(message.get("systemName") or "").casefold()):
+            state.update(stage="UNAVAILABLE", detail="Station changed during the request; refresh again.")
+            return
+        if not eddn_upload_allowed(getattr(self, "_eddn_config", {})):
+            state.update(stage="LOCAL_ONLY", detail="Market read; EDDN upload is disabled.")
+            return
+        observed = market_timestamp(message.get("timestamp"))
+        key = market_content_key(prepared)
+        for job in reversed(self._eddn_queue):
+            event = job.get("event") or {}
+            other = event.get("message") or {}
+            if (event.get("schema") != "commodity/3" or other.get("marketId") != message.get("marketId")
+                    or job.get("profile_key") not in {None, "", self._eddn_profile_key}
+                    or job.get("status") not in {"queued", "sending", "retry", "sent"}):
+                continue
+            other_at = market_timestamp(other.get("timestamp"))
+            if observed and other_at and other_at > observed:
+                state.update(stage="UNCHANGED", detail="A newer market observation is already queued or accepted.")
+                return
+            if (observed and other_at and 0 <= (observed - other_at).total_seconds() < CAPI_MARKET_MAX_AGE_SECONDS
+                    and market_content_key(event) == key):
+                state.update(jobId=job["id"], stage="ACCEPTED" if job.get("status") == "sent" else "QUEUED",
+                             detail="Same market contents already queued or accepted.")
+                return
+        if self._enqueue_eddn(prepared, context=CAPI_MARKET_CONTEXT) is False:
+            state.update(stage="FAILED", detail=self._eddn_status)
+            return
+        job = next((row for row in reversed(self._eddn_queue) if row.get("event") == prepared), None)
+        if job:
+            state["jobId"] = job["id"]
 
 
     def _apply_frontier_profile(self, profile):
@@ -604,6 +714,7 @@ class FrontierCapiMixin:
         self._frontier_request_token = 0
         self._frontier_last_sync = ""
         self._frontier_profile = {}
+        self._frontier_market_state = {}
         self._frontier_config = self._load_frontier_config()
         self._frontier_watchdog = QTimer(self)
         self._frontier_watchdog.setSingleShot(True)

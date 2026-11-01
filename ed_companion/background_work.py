@@ -5,7 +5,7 @@ import time
 
 
 class BackgroundWork:
-    LIMITS = {"journal": 1, "interactive": 2, "background": 1}
+    LIMITS = {"upload": 1, "journal": 1, "interactive": 2, "background": 1}
 
     def __init__(self, on_thread=None, resources=None):
         self._lock = threading.RLock()
@@ -25,6 +25,8 @@ class BackgroundWork:
 
     @staticmethod
     def lane(name):
+        if name == "eddn-upload":
+            return "upload"
         if name.startswith(("journal-", "initial-journal", "surface-nav", "commander-")):
             return "journal"
         if name.startswith(("mining-route-", "mining-rows-", "commodity-", "trade-routes", "station-service",
@@ -46,14 +48,18 @@ class BackgroundWork:
             # Let a requested search finish before starting another import.
             if lane == "background" and (self._active["interactive"] or self._pending["interactive"]):
                 continue
-            while self._pending[lane] and self._active[lane] < limit and sum(self._active.values()) < self._limit:
+            # One serial network sender is independent of the CPU-sensitive
+            # general pool. It never runs two uploads concurrently.
+            while (self._pending[lane] and self._active[lane] < limit
+                   and (lane == "upload" or sum(value for key, value in self._active.items()
+                                                if key != "upload") < self._limit)):
                 target, name, queued = self._pending[lane].popleft()
                 self._active[lane] += 1
 
                 def run(target=target, lane=lane, name=name, queued=queued):
                     started, cpu = time.monotonic(), time.thread_time()
                     try:
-                        if self._resources:
+                        if self._resources and lane != "upload":
                             sample = self._resources.sample()
                             with self._lock:
                                 constrained = (sample.get("availableMemoryMiB") is None
@@ -89,6 +95,7 @@ class BackgroundWork:
             return {"active": sum(self._active.values()),
                     "queued": sum(map(len, self._pending.values())),
                     "backgroundActive": self._active["background"],
+                    "uploadActive": self._active["upload"], "uploadWorkerLimit": 1,
                     "completed": self._completed, "submitted": self._submitted,
                     "threadWorkerLimit": self._limit,
                     "threadJobs": [{key: round(value, 3) if isinstance(value, float) else value

@@ -687,6 +687,8 @@ class CockpitController(
         self._eddn_profile_key = self.profile_context.key
         self._eddn_journal_root = self.profile_context.journal_root
         self._eddn_config = self._load_eddn_config()
+        self._eddn_async_delivery = True
+        self._eddn_receipt_error = ""
         self._eddn_queue = self._load_eddn_queue()
         self._hge_sightings = self._read_local_json(self.hge_cache_file, [])
         if not isinstance(self._hge_sightings, list):
@@ -875,6 +877,15 @@ class CockpitController(
             "signalsMerged": 0, "expiredRemoved": 0,
         }
         self.eddnFinished.connect(self._finish_eddn)
+        self.eddnHistoryArchived.connect(self._finish_eddn_history_checkpoint)
+        self._eddn_delivery_timer = QTimer(self)
+        self._eddn_delivery_timer.setSingleShot(True)
+        self._eddn_delivery_timer.setInterval(1000)
+        self._eddn_delivery_timer.timeout.connect(self._flush_eddn_delivery_update)
+        self._eddn_send_timer = QTimer(self)
+        self._eddn_send_timer.setSingleShot(True)
+        self._eddn_send_timer.timeout.connect(self._process_eddn_queue)
+        self._queue_eddn_history_checkpoint()
         self.eddnRelay.connect(self._accept_eddn_relay)
         self.traderSyncFinished.connect(self._finish_trader_catalog_sync)
         self.techBrokerSyncFinished.connect(self._finish_tech_broker_catalog_sync)
@@ -1317,6 +1328,8 @@ class CockpitController(
 
     @Slot()
     def _publish_background_activity(self):
+        if getattr(self, "_eddn_async_delivery", False):
+            self._queue_eddn_history_checkpoint()
         compute = getattr(self, "_compute_work", None)
         if compute:
             compute.trim_idle()
@@ -2840,6 +2853,21 @@ class CockpitController(
         self._last_bgs_batch_monotonic = time.monotonic()
         self._last_mining_batch_monotonic = time.monotonic()
         self._profile_generation += 1
+        self._eddn_delivery_store = None
+        self._eddn_receipt_error = ""
+        self._eddn_archived_sent = None
+        self._active_eddn_history_checkpoint = None
+        self._eddn_prune_ready = {}
+        self._eddn_receipt_prune_pending = {}
+        self._eddn_sender_metrics = {}
+        self._eddn_history_counts = {}
+        self._eddn_delivery_dirty = False
+        self._eddn_next_upload_at = 0
+        self._eddn_last_accept_at = None
+        if getattr(self, "_eddn_delivery_timer", None) is not None:
+            self._eddn_delivery_timer.stop()
+        if getattr(self, "_eddn_send_timer", None) is not None:
+            self._eddn_send_timer.stop()
         self._mining_region_cache = None
         self._mining_geometry_cache = None
         self._profile_sync_signature = None
@@ -2854,6 +2882,7 @@ class CockpitController(
         self._frontier_busy = False
         self._frontier_authorization = None
         self._frontier_profile = {}
+        self._frontier_market_state = {}
         if getattr(self, "_frontier_watchdog", None) is not None:
             self._frontier_watchdog.stop()
         self._bind_profile_paths(context)
@@ -3167,6 +3196,8 @@ class CockpitController(
             "miningMarketAutoRefreshTimer", "edFrameCatalogStatusTimer",
             "_mining_market_retry_timer",
             "_frontier_watchdog",
+            "_eddn_delivery_timer",
+            "_eddn_send_timer",
             "catalogSyncTimer", "uiHeartbeatTimer", "backgroundPublishTimer",
             "usagePingTimer", "updateTimer",
         ):

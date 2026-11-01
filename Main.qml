@@ -471,7 +471,7 @@ ApplicationWindow {
         feedbackVisible = true
         feedbackTimer.restart()
     }
-    property string materialTradeFilter: "AUTO"
+    property string materialTradeFilter: "ALL"
     function automaticTradeCategory() {
         if ((cockpit.traderRoute || []).length > 0)
             return String(cockpit.traderRoute[0].category || "").toUpperCase()
@@ -479,8 +479,8 @@ ApplicationWindow {
     }
     function visibleMaterialTrades(rows) {
         const automatic = automaticTradeCategory()
-        const selected = materialTradeFilter === "AUTO"
-                       ? automatic : materialTradeFilter
+        const selected = materialTradeFilter === "ALL" ? ""
+                       : materialTradeFilter === "AUTO" ? automatic : materialTradeFilter
         const routeOrder = ({})
         ;(cockpit.traderRoute || []).forEach(function(stop, index) {
             routeOrder[String(stop.category || "").toUpperCase()] = index
@@ -1907,32 +1907,41 @@ ApplicationWindow {
             columnSpacing: 16
             rowSpacing: 16
             ShadowCard {
+                objectName: "qa-card-material-trades"
                 Layout.fillWidth: true
                 Layout.fillHeight: true
+                Layout.preferredWidth: 680
+                Layout.preferredHeight: 520
                 Layout.minimumWidth: 0
-                Layout.minimumHeight: 320
+                Layout.minimumHeight: 420
                 ColumnLayout {
                     anchors.fill: parent; anchors.margins: 20; spacing: 10
                     RowLayout {
                         Layout.fillWidth: true
                         Label {
                             text: cockpit.trades.length > 0
-                                  ? "MATERIAL TRADES" : "MATERIALS TO COLLECT"
+                                  ? window.t("operations.material_trades", "MATERIAL TRADES")
+                                  : window.t("operations.materials_to_collect", "MATERIALS TO COLLECT")
                             color: textPrimary; font.pixelSize: 17; font.bold: true
                         }
                         Item { Layout.fillWidth: true }
                         Label {
                             text: cockpit.trades.length > 0
-                                  ? cockpit.trades.length + " PLANNED"
+                                  ? window.tf("operations.trades_planned", "%1 PLANNED", [cockpit.trades.length])
                                   : window.countLabel(cockpit.missingMaterials.length, "MISSING TYPE", "MISSING TYPES")
                             color: cockpit.trades.length > 0 ? cyan : orange
                             font.pixelSize: 12; font.bold: true
                         }
                     }
                     Label {
+                        text: window.tf("operations.material_trade_scope", "FULL BUILD · %1", [cockpit.ship])
+                        color: cyan; font.pixelSize: UiMetrics.caption; font.bold: true
+                        Layout.fillWidth: true; wrapMode: Text.WordWrap
+                    }
+                    Label {
                         text: cockpit.trades.length > 0
-                              ? "In Elite select WANTED first, then GIVE. Journal checks completed trades automatically."
-                              : "Collect these exact amounts. Open MATERIAL DETAILS for verified sources and safe trade options."
+                              ? window.t("operations.material_trade_help", "In Elite select the material you want, then what you give. Confirmed Journal trades update this full-build plan.")
+                              : window.t("operations.material_collect_help", "Collect these exact amounts. Open MATERIAL DETAILS for verified sources and safe trade options.")
                         Layout.fillWidth: true
                         wrapMode: Text.WordWrap
                         color: muted; font.pixelSize: 12
@@ -1942,12 +1951,13 @@ ApplicationWindow {
                         Layout.fillWidth: true
                         spacing: 6
                         Repeater {
-                            model: ["AUTO", "RAW", "MANUFACTURED", "ENCODED"]
+                            model: ["ALL", "AUTO", "RAW", "MANUFACTURED", "ENCODED"]
                             CockpitButton {
                                 required property string modelData
                                 Layout.fillWidth: true
                                 implicitHeight: 34
-                                text: modelData === "AUTO"
+                                text: modelData === "ALL" ? window.t("common.all", "ALL")
+                                      : modelData === "AUTO"
                                       ? "AUTO" + (window.automaticTradeCategory()
                                                    ? " · " + window.automaticTradeCategory() : "")
                                       : modelData
@@ -1958,6 +1968,7 @@ ApplicationWindow {
                     }
                     ListView {
                         id: tradeList
+                        objectName: "qa-full-build-trades"
                         property real retainedContentY: 0
                         property string activeTradeCategory: model.length
                                                              ? String(model[0].category || "") : ""
@@ -2001,8 +2012,8 @@ ApplicationWindow {
                                 anchors.leftMargin: 10
                                 anchors.verticalCenter: parent.verticalCenter
                                 text: section.toUpperCase()
-                                color: section === "Raw" ? accentSecondary
-                                      : (section === "Encoded" ? cyan : orange)
+                                color: section.toUpperCase() === "RAW" ? accentSecondary
+                                      : (section.toUpperCase() === "ENCODED" ? cyan : orange)
                                 font.pixelSize: UiMetrics.caption
                                 font.bold: true
                             }
@@ -2018,7 +2029,7 @@ ApplicationWindow {
                             readonly property bool isNextTrade: modelData.nextInCategory
                                                                  && modelData.category === tradeList.activeTradeCategory
                             width: tradeList.width - 12
-                            height: modelData.traderWarning ? 104 : 86
+                            height: Math.max(118, tradeRow.implicitHeight + 20)
                             radius: 10
                             color: isNextTrade ? active
                                                : (tradeMouse.containsMouse ? hover : panelRaised)
@@ -2027,6 +2038,7 @@ ApplicationWindow {
                             Behavior on color { enabled: !window.reducedMotion; ColorAnimation { duration: 140 } }
                             MouseArea { id: tradeMouse; anchors.fill: parent; hoverEnabled: true }
                             RowLayout {
+                                id: tradeRow
                                 anchors.fill: parent; anchors.margins: 10; spacing: 10
                                 Rectangle {
                                     width: 28; height: 28; radius: 14
@@ -2037,9 +2049,24 @@ ApplicationWindow {
                                 ColumnLayout {
                                     Layout.fillWidth: true
                                     Label {
-                                        text: modelData.instruction
-                                        color: textPrimary; font.pixelSize: 13; font.bold: true
-                                        elide: Text.ElideRight; Layout.fillWidth: true
+                                        objectName: "trade-give-" + modelData.id
+                                        text: window.tf("operations.trade_give", "GIVE · %1 × %2", [modelData.giveAmount, modelData.giveName])
+                                        color: orange; font.pixelSize: 13; font.bold: true
+                                        wrapMode: Text.WordWrap; Layout.fillWidth: true
+                                        Layout.minimumWidth: 0; Layout.preferredWidth: 0
+                                    }
+                                    Label {
+                                        objectName: "trade-receive-" + modelData.id
+                                        text: window.tf("operations.trade_receive", "RECEIVE · %1 × %2", [modelData.receiveAmount, modelData.receiveName])
+                                        color: cyan; font.pixelSize: 13; font.bold: true
+                                        wrapMode: Text.WordWrap; Layout.fillWidth: true
+                                        Layout.minimumWidth: 0; Layout.preferredWidth: 0
+                                    }
+                                    Label {
+                                        visible: Number(modelData.surplusAmount || 0) > 0
+                                        text: window.tf("operations.trade_surplus", "%1 needed for this build · %2 extra", [modelData.usefulAmount, modelData.surplusAmount])
+                                        color: muted; font.pixelSize: UiMetrics.caption
+                                        wrapMode: Text.WordWrap; Layout.fillWidth: true
                                     }
                                     Label {
                                         visible: !!modelData.traderWarning
@@ -2082,6 +2109,11 @@ ApplicationWindow {
                                 }
                             }
                         }
+                    }
+                    Label {
+                        visible: cockpit.trades.length > 0 && tradeList.count === 0
+                        text: window.t("operations.trade_filter_empty", "No planned trades in this category. Choose ALL to see the full build.")
+                        color: muted; wrapMode: Text.WordWrap; Layout.fillWidth: true
                     }
                     ListView {
                         id: missingMaterialList
@@ -7489,7 +7521,7 @@ ApplicationWindow {
                         color: cyan; font.pixelSize: 15; font.bold: true
                     }
                     Label {
-                        text: window.t("connections.frontier_help", "Adds an authenticated Frontier profile snapshot to local Journal data. Newer Journal values always remain authoritative.")
+                        text: window.t("connections.frontier_help", "Refresh your Frontier profile and the docked station market together. Newer Journal values remain authoritative.")
                         color: textSecondary; wrapMode: Text.WordWrap
                         Layout.fillWidth: true
                     }
@@ -7501,6 +7533,7 @@ ApplicationWindow {
                         border.color: cockpit.frontierConnected ? green : borderTone
                         ColumnLayout {
                             id: capiStatusColumn
+                            property var market: cockpit.frontierMarketSummary || ({})
                             anchors.fill: parent; anchors.margins: 14; spacing: 6
                             RowLayout {
                                 Layout.fillWidth: true
@@ -7527,11 +7560,40 @@ ApplicationWindow {
                                 text: window.t("connections.frontier_last_sync", "LAST PROFILE SYNC") + " · " + cockpit.frontierLastSync
                                 color: cyan; font.pixelSize: UiMetrics.caption; font.bold: true
                             }
+                            Label {
+                                text: window.t("connections.frontier_market_title", "STATION MARKET → EDDN")
+                                color: cyan; font.pixelSize: UiMetrics.caption; font.bold: true
+                                Layout.topMargin: 8
+                            }
+                            Label {
+                                text: window.t("connections.frontier_market_" + String(capiStatusColumn.market.stage || "NOT_CHECKED").toLowerCase(), String(capiStatusColumn.market.stage || ""))
+                                color: capiStatusColumn.market.stage === "ACCEPTED" ? green
+                                       : capiStatusColumn.market.stage === "FAILED" ? error : textSecondary
+                                wrapMode: Text.WordWrap; Layout.fillWidth: true
+                            }
+                            Label {
+                                visible: Boolean(capiStatusColumn.market.station)
+                                objectName: "frontier-market-counts"
+                                text: window.tf("connections.frontier_market_counts", "%1 · %2 goods · %3 sell offers · %4 buy orders", [
+                                    capiStatusColumn.market.station || "",
+                                    capiStatusColumn.market.commodities || 0,
+                                    capiStatusColumn.market.stockOrders || 0,
+                                    capiStatusColumn.market.demandOrders || 0
+                                ]) + " · " + (capiStatusColumn.market.observedAt || "")
+                                color: muted; font.pixelSize: UiMetrics.caption
+                                wrapMode: Text.WordWrap; Layout.fillWidth: true
+                            }
+                            Label {
+                                visible: Boolean(capiStatusColumn.market.detail)
+                                text: capiStatusColumn.market.detail || ""
+                                color: muted; font.pixelSize: UiMetrics.caption
+                                wrapMode: Text.WordWrap; Layout.fillWidth: true
+                            }
                         }
                     }
                     CheckBox {
                         id: frontierConsentBox
-                        text: window.t("connections.frontier_consent", "I consent to ED-Frame using Frontier's Companion API to read my Commander credits and active ship for this account.")
+                        text: window.t("connections.frontier_consent", "I consent to ED-Frame reading my Commander profile, ship and station market through Frontier's Companion API.")
                         checked: cockpit.frontierConsent
                         Layout.fillWidth: true
                         onToggled: cockpit.setFrontierConsent(checked)
@@ -7547,8 +7609,8 @@ ApplicationWindow {
                             onClicked: cockpit.connectFrontier()
                         }
                         CockpitButton {
-                            text: window.t("connections.frontier_refresh", "REFRESH PROFILE"); Layout.fillWidth: true
-                            enabled: cockpit.frontierConnected && !cockpit.frontierBusy
+                            text: window.t("connections.frontier_refresh", "REFRESH PROFILE + MARKET"); Layout.fillWidth: true
+                            enabled: cockpit.frontierConsent && cockpit.frontierConnected && !cockpit.frontierBusy
                             onClicked: cockpit.refreshFrontierProfile()
                         }
                         CockpitButton {
@@ -7563,7 +7625,7 @@ ApplicationWindow {
                         font.pixelSize: UiMetrics.caption
                     }
                     Label {
-                        text: window.t("connections.frontier_scope", "The first integration imports credits and the currently active ship. It never deletes fleet entries or engineering plans.")
+                        text: window.t("connections.frontier_scope", "Market checks run on refresh, without an extra polling timer. EDDN acceptance confirms delivery to the gateway; Inara and bots update independently.")
                         color: muted; wrapMode: Text.WordWrap; Layout.fillWidth: true
                         font.pixelSize: UiMetrics.caption
                     }
@@ -7644,6 +7706,17 @@ ApplicationWindow {
                                 color: muted; font.pixelSize: UiMetrics.caption; wrapMode: Text.WordWrap; Layout.fillWidth: true
                             }
                             Label { text: cockpit.eddnDeliverySummary.historyFile; color: muted; font.pixelSize: UiMetrics.caption; elide: Text.ElideMiddle; Layout.fillWidth: true }
+                            Label {
+                                objectName: "eddn-sender-metrics"
+                                property var sender: cockpit.eddnDeliverySummary.sender || ({})
+                                visible: sender.httpMs !== undefined
+                                text: window.tf("connections.eddn_sender_timings", "SENDER · worker wait %1 ms · profile %2 ms · network %3 ms · receipt %4 ms · UI wait %5 ms", [
+                                    sender.workerWaitMs || 0, sender.profileCheckMs || 0, sender.httpMs || 0,
+                                    sender.receiptWriteMs || 0, sender.callbackWaitMs || 0
+                                ])
+                                color: muted; wrapMode: Text.WordWrap; Layout.fillWidth: true
+                                Layout.minimumWidth: 0; Layout.preferredWidth: 0; font.pixelSize: UiMetrics.caption
+                            }
                             Rectangle { Layout.fillWidth: true; height: 1; color: borderTone }
                             Label {
                                 text: window.t("connections.data_archive", "DIAGNOSTIC DATA")
@@ -7729,6 +7802,11 @@ ApplicationWindow {
                         visible: cockpit.eddnBusy || cockpit.eddnDeliverySummary.waiting > 0
                         text: cockpit.eddnBusy ? window.t("status.sending", "SENDING…") : cockpit.eddnStatus
                         color: cyan; wrapMode: Text.WordWrap; Layout.fillWidth: true; font.pixelSize: UiMetrics.caption
+                    }
+                    Label {
+                        visible: Boolean((cockpit.eddnDeliverySummary.sender || {}).storageError)
+                        text: (cockpit.eddnDeliverySummary.sender || {}).storageError || ""
+                        color: error; wrapMode: Text.WordWrap; Layout.fillWidth: true; font.pixelSize: UiMetrics.caption
                     }
                     Rectangle {
                         visible: Boolean(cockpit.eddnDeliverySummary.lastError)

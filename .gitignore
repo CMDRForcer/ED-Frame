@@ -41,6 +41,7 @@ frontier_credentials.dat
 
 eddn_config.json
 eddn_journal_cursor.json
+eddn_delivery_receipts.sqlite3*
 community_upload_queue.json
 hge_live_sightings.json
 

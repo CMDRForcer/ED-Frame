@@ -12,7 +12,7 @@ A free, open-source Windows companion for **Elite Dangerous**, bringing your loc
 
 [**Download for Windows**](https://github.com/CMDRForcer/ED-Frame/releases/latest) · [English guide](docs/ED-Frame-1.0-Guide-EN.md) · [Deutsche Anleitung](docs/ED-Frame-1.0-Guide-DE.md)
 
-**App 1.0.12** · **Own community server** · **EN / DE / ES / FR** · **Six themes**
+**App 1.0.13** · **Own community server** · **EN / DE / ES / FR** · **Six themes**
 
 </div>
 
@@ -164,20 +164,16 @@ Your Commander profile, ships, plans, wishlists, Journal files and service crede
 [Connection and privacy guide](docs/ED-Frame-1.0-Guide-EN.md#connections-and-privacy) · [Deutsche Anleitung](docs/ED-Frame-1.0-Guide-DE.md)
 
 <details>
-<summary><strong>Latest improvements — app 1.0.12 and server 0.9.5</strong></summary>
+<summary><strong>Latest improvements — app 1.0.13 and server 0.9.5</strong></summary>
 
+- Whole-build material trades restored in Operations, with all categories and clear **Give → Receive** quantities.
+- Frontier profile refresh now includes the docked station market, with validated public EDDN uploads and visible delivery status.
+- An independent serial upload lane, station-inventory priority and durable receipts keep the EDDN queue moving during other background work. UI updates are batched; sender timings are available in technical details.
 - Anaconda Mk II with its own graphic, complete slot layout and Mk II module compatibility; October ship balancing with existing plans and slot bindings preserved.
-- Updated hull and shield references plus approximate published jump ranges, clearly separated from live Journal values.
 - Daily update notices, optional background downloads and confirmed installation with profile backups and startup rollback.
-- A skippable setup wizard with a tour of every sidebar area, in all four languages.
-- Automatic active-installation counts: random ID + version, once per UTC day; private statistics and 90-day retention.
-- Faster server statistics and market synchronization, resilient collector transactions and fewer redundant outfitting writes.
-- A → B → A trading loops and correct combined-margin ranking.
-- Carrier commodity offers, more goods, manual origin and unlimited radius.
-- A consistent cockpit, asynchronous startup and preserved NAV filters.
-- Existing grouped Mining/Powerplay lookups and bounded background processes remain available. Shared server statistics refresh in the background approximately every five minutes.
+- A → B → A trading loops, Carrier offers, manual origin and unlimited commodity radius, alongside grouped Mining/Powerplay lookups and shared server statistics.
 
-[Release notes](docs/releases/1.0.12.md) · [Changelog](CHANGELOG.md) · [Server documentation](server/catalog_service/README.md) · [Application audit](reports/app_audit_2026-10-11.md)
+[Release notes](docs/releases/1.0.13.md) · [Changelog](CHANGELOG.md) · [Server documentation](server/catalog_service/README.md) · [Application audit](reports/app_audit_2026-10-11.md)
 
 </details>
 

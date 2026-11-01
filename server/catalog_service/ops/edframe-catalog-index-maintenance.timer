@@ -1,0 +1,11 @@
+[Unit]
+Description=Check ED-Frame catalog index capacity every six hours
+
+[Timer]
+OnCalendar=*-*-* 05,11,17,23:45:00 UTC
+RandomizedDelaySec=10min
+Persistent=true
+Unit=edframe-catalog-index-maintenance.service
+
+[Install]
+WantedBy=timers.target

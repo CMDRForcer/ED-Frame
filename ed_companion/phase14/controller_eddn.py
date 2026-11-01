@@ -31,6 +31,9 @@ from ed_companion.i18n import (
 )
 from ed_companion.persistence import atomic_write, load_json_file
 from ed_companion.history_archive import HistoryArchive
+from ed_companion.integrations.eddn_delivery import (
+    DeliveryReceipts, failure_state, journal_upload_identity,
+)
 from ed_companion.integrations.inara import (
     INARA_BATCH_WINDOW_SECONDS,
     INARA_MAX_REQUESTS_PER_MINUTE,
@@ -260,6 +263,7 @@ class EddnMixin:
     """
 
     eddnFinished = Signal(str, bool, str)
+    eddnHistoryArchived = Signal(object)
 
 
     eddnRelay = Signal(object)
@@ -271,7 +275,7 @@ class EddnMixin:
             "listener_enabled": True, "retry_failed": True,
             "uploader_id": uuid.uuid4().hex,
             "hge_classifier_version": 0,
-            "last_success": {}, "station_receipts": {},
+            "last_success": {}, "station_receipts": {}, "frontier_market_receipt": {},
             "last_not_shareable": "", "last_not_shareable_at": "",
         }
         loaded = self._read_local_json(self.eddn_config_file, {})
@@ -311,18 +315,35 @@ class EddnMixin:
 
 
     def _save_eddn(self):
+        started = time.monotonic()
         active, historical = partition_upload_queue(
             self._eddn_queue, EDDN_ACTIVE_RECEIPT_LIMIT
         )
-        if self._archive_history("eddn_sent", historical, key_field="id"):
+        asynchronous = getattr(self, "_eddn_async_delivery", False)
+        if not asynchronous and self._archive_history("eddn_sent", historical, key_field="id"):
             self._eddn_queue = active
-        config_saved = atomic_write(
-            self.eddn_config_file, json.dumps(self._eddn_config, indent=2)
-        )
-        queue_saved = atomic_write(
-            self.eddn_queue_file, json.dumps(self._eddn_queue, indent=2)
-        )
+        try:
+            config_saved = atomic_write(
+                self.eddn_config_file, json.dumps(self._eddn_config, indent=2)
+            )
+        except OSError:
+            config_saved = False
+        try:
+            queue_saved = atomic_write(
+                self.eddn_queue_file, json.dumps(self._eddn_queue, indent=2)
+            )
+        except OSError:
+            queue_saved = False
         self._eddn_queue_persist_pending = not queue_saved
+        if asynchronous:
+            self._eddn_snapshot_ms = (time.monotonic() - started) * 1000
+            if queue_saved:
+                self._eddn_delivery_dirty = False
+                self._eddn_prune_ready = {**getattr(self, "_eddn_prune_ready", {}),
+                                          **getattr(self, "_eddn_receipt_prune_pending", {})}
+                self._eddn_receipt_prune_pending = {}
+            if getattr(self, "_eddn_delivery_timer", None) is not None:
+                self._queue_eddn_history_checkpoint()
         if not config_saved:
             LOGGER.error("EDDN config could not be persisted")
         if not queue_saved:
@@ -339,6 +360,13 @@ class EddnMixin:
     def _load_eddn_queue(self):
         """Repair safe legacy jobs and isolate only irrecoverable records."""
         stored = self._read_local_json(self.eddn_queue_file, [])
+        if getattr(self, "_eddn_async_delivery", False) and isinstance(stored, list):
+            try:
+                pause_until = self._eddn_receipts().restore([row for row in stored if isinstance(row, dict)])
+                self._eddn_gateway_pause_until = max(getattr(self, "_eddn_gateway_pause_until", 0), pause_until)
+            except (OSError, sqlite3.Error, ValueError) as exc:
+                self._eddn_receipt_error = f"Receipt recovery paused: {type(exc).__name__}"
+                LOGGER.error(self._eddn_receipt_error)
         interrupted_count = sum(
             1 for job in stored
             if isinstance(job, dict) and job.get("status") == "sending"
@@ -431,6 +459,105 @@ class EddnMixin:
             )
         return valid
 
+    def _eddn_receipts(self):
+        path = self.eddn_queue_file.with_name("eddn_delivery_receipts.sqlite3")
+        store = getattr(self, "_eddn_delivery_store", None)
+        if store is None or store.path != path:
+            store = DeliveryReceipts(path)
+            self._eddn_delivery_store = store
+        return store
+
+    def _queue_eddn_delivery_update(self, *, persist=False):
+        self._eddn_delivery_dirty = getattr(self, "_eddn_delivery_dirty", False) or persist
+        timer = getattr(self, "_eddn_delivery_timer", None)
+        if timer is not None and not timer.isActive():
+            timer.start()
+
+    def _schedule_eddn_upload(self, delay_ms):
+        timer = getattr(self, "_eddn_send_timer", None)
+        delay_ms = max(1, int(delay_ms))
+        if timer is None:
+            QTimer.singleShot(delay_ms, self._process_eddn_queue)
+        elif not timer.isActive() or timer.remainingTime() > delay_ms:
+            timer.start(delay_ms)
+
+    @Slot()
+    def _flush_eddn_delivery_update(self):
+        if getattr(self, "_eddn_delivery_dirty", False):
+            self._save_eddn()
+        self._publish_eddn_delivery_change()
+        self.connectionChanged.emit()
+
+    def _queue_eddn_history_checkpoint(self):
+        if (getattr(self, "_shutdown_complete", False)
+                or getattr(self, "_eddn_receipt_error", "")
+                or getattr(self, "_active_eddn_history_checkpoint", None)):
+            return
+        _active, historical = partition_upload_queue(self._eddn_queue, EDDN_ACTIVE_RECEIPT_LIMIT)
+        prune = dict(getattr(self, "_eddn_prune_ready", {}))
+        if (not historical and not prune and getattr(self, "_eddn_archived_sent", None) is not None
+                and time.monotonic() - getattr(self, "_eddn_history_counts_at", 0) < 30):
+            return
+        rows = deepcopy(historical)
+        token = uuid.uuid4().hex
+        self._active_eddn_history_checkpoint = token
+        generation, profile_key = self._profile_generation, self._eddn_profile_key
+        path = self.history_archive_file
+        store = self._eddn_receipts()
+        archive = getattr(self, "_history_archive", None)
+
+        def worker():
+            result = {"token": token, "generation": generation, "profileKey": profile_key}
+            try:
+                target = archive if archive is not None and archive.path == path else HistoryArchive(path)
+                if rows:
+                    target.archive("eddn_sent", rows, key_field="id")
+                if prune:
+                    store.forget_archived(prune)
+                counts = {category: target.count(category) for category in (
+                    "eddn_sent", "hge_observations", "inara_receipts", "mining_observations",
+                    "mining_catalog", "commander_credit_snapshots",
+                )}
+                result.update(ids=[row["id"] for row in rows], counts=counts, pruned=prune,
+                              archivedReceipts={row["id"]: (row.get("receipt") or {}).get("deliveryNonce") for row in rows})
+            except (OSError, sqlite3.Error, ValueError) as exc:
+                result["error"] = type(exc).__name__
+            self.eddnHistoryArchived.emit(result)
+
+        if not self._start_network_worker(worker, "eddn-history-checkpoint"):
+            self._active_eddn_history_checkpoint = None
+
+    @Slot(object)
+    def _finish_eddn_history_checkpoint(self, result):
+        if result.get("token") != getattr(self, "_active_eddn_history_checkpoint", None):
+            return
+        self._active_eddn_history_checkpoint = None
+        if (result.get("generation") != self._profile_generation
+                or result.get("profileKey") != self._eddn_profile_key):
+            return
+        if result.get("error"):
+            LOGGER.warning("EDDN history checkpoint retained active records: %s", result["error"])
+            return
+        self._eddn_history_counts = result["counts"]
+        self._eddn_history_counts_at = time.monotonic()
+        self._eddn_archived_sent = result["counts"]["eddn_sent"]
+        ready = dict(getattr(self, "_eddn_prune_ready", {}))
+        for job_id, nonce in result.get("pruned", {}).items():
+            if job_id in ready and ready[job_id] == nonce:
+                ready.pop(job_id)
+        self._eddn_prune_ready = ready
+        ids = set(result.get("ids", []))
+        archived = result.get("archivedReceipts", {})
+        removed = {row["id"] for row in self._eddn_queue
+                   if row.get("id") in ids and row.get("status") == "sent"
+                   and (row.get("receipt") or {}).get("deliveryNonce") == archived.get(row["id"])}
+        if removed:
+            acknowledgements = {row["id"]: (row.get("receipt") or {}).get("deliveryNonce")
+                                for row in self._eddn_queue if row.get("id") in removed}
+            self._eddn_queue = [row for row in self._eddn_queue if row.get("id") not in removed]
+            self._eddn_receipt_prune_pending = {**getattr(self, "_eddn_receipt_prune_pending", {}), **acknowledgements}
+        self._queue_eddn_delivery_update(persist=bool(removed))
+
 
     def _publish_eddn_delivery_change(self):
         self._eddn_revision += 1
@@ -492,7 +619,8 @@ class EddnMixin:
 
     def _eddn_delivery_summary(self):
         counts = {key: 0 for key in ("queued", "retry", "sending", "sent", "failed")}
-        history_counts = self._history_counts()
+        history_counts = (dict(getattr(self, "_eddn_history_counts", {}))
+                          if getattr(self, "_eddn_async_delivery", False) else self._history_counts())
         archived_sent = int(history_counts.get("eddn_sent", 0) or 0)
         schema_counts = {}
         error_groups = {}
@@ -615,6 +743,9 @@ class EddnMixin:
                 + int(history_counts.get("mining_catalog", 0) or 0)
             ),
             "profileConsistent": profile_consistent,
+            "sender": {**getattr(self, "_eddn_sender_metrics", {}),
+                       "snapshotWriteMs": round(getattr(self, "_eddn_snapshot_ms", 0), 2),
+                       "storageError": getattr(self, "_eddn_receipt_error", "")},
         }
 
 
@@ -969,7 +1100,7 @@ class EddnMixin:
         return True
 
 
-    def _enqueue_eddn(self, prepared):
+    def _enqueue_eddn(self, prepared, *, context=None):
         try:
             validate_eddn_prepared(prepared)
         except EddnError as exc:
@@ -1009,7 +1140,7 @@ class EddnMixin:
             return False
         self._eddn_queue.append({
             "id": job_id, "target": "EDDN", "event": prepared,
-            "context": dict(self._eddn_context), "attempts": 0,
+            "context": dict(self._eddn_context if context is None else context), "attempts": 0,
             "profile_key": self._eddn_profile_key,
             "status": "queued",
             "created": datetime.now(timezone.utc).isoformat(timespec="seconds"),
@@ -1417,16 +1548,41 @@ class EddnMixin:
 
 
     def _process_eddn_queue(self):
-        if not self._sync_eddn_profile():
+        asynchronous = getattr(self, "_eddn_async_delivery", False)
+        if asynchronous:
+            if (getattr(self, "_shutdown_complete", False)
+                    or getattr(self, "_eddn_receipt_error", "")
+                    or getattr(self, "_eddn_queue_persist_pending", False)
+                    or time.time() < getattr(self, "_eddn_gateway_pause_until", 0)):
+                return
+            remaining = getattr(self, "_eddn_next_upload_at", 0) - time.monotonic()
+            if remaining > 0:
+                # A timer can fire just before the floor; rearm the remainder
+                # rather than waiting for the unrelated 1.2 s Journal poll.
+                self._schedule_eddn_upload(int(remaining * 1000) + 1)
+                return
+            # Queued messages already have their own profile and context.
+            # The sender verifies active session identity on its I/O worker,
+            # independently of the full Journal projection/location cache.
+            if (not self._eddn_profile_identity
+                    or self.profile_context.key != self._eddn_profile_key
+                    or self.profile_context.identity != self._eddn_profile_identity):
+                return
+        elif not self._sync_eddn_profile():
             return
         if self._eddn_busy or not eddn_upload_allowed(self._eddn_config):
             return
         now = time.time()
-        job = next((
+        # Time-sensitive station inventories must not wait behind a backlog
+        # of exploration/signal events. min() retains FIFO order within each
+        # class, including an older Journal market followed by newer CAPI data.
+        job = min((
             row for row in self._eddn_queue
             if row.get("status") in {"queued", "retry"}
             and float(row.get("next_retry_at", 0) or 0) <= now
-        ), None)
+        ), key=lambda row: 0 if (row.get("event") or {}).get("schema") in {
+            "commodity/3", "outfitting/2", "outfitting/3", "shipyard/2",
+        } else 1, default=None)
         if not job:
             return
         if job.get("profile_key") not in {None, "", self._eddn_profile_key}:
@@ -1445,37 +1601,119 @@ class EddnMixin:
         job["status"] = "sending"
         job["attempts"] = int(job.get("attempts", 0) or 0) + 1
         self._eddn_busy = True
-        self._save_eddn()
-        self._publish_eddn_delivery_change()
-        self.connectionChanged.emit()
+        if asynchronous:
+            self._queue_eddn_delivery_update()
+        else:
+            self._save_eddn()
+            self._publish_eddn_delivery_change()
+            self.connectionChanged.emit()
         job_id = str(job["id"])
         prepared = deepcopy(job["event"])
         context = deepcopy(job.get("context") or {})
         uploader_id = str(self._eddn_config["uploader_id"])
+        dispatch_at = time.monotonic()
+        if asynchronous:
+            scope = (self._profile_generation, self._eddn_profile_key,
+                     self._eddn_profile_identity, self._eddn_journal_root)
+            try:
+                store = self._eddn_receipts()
+            except (OSError, sqlite3.Error, ValueError) as exc:
+                self._eddn_busy = False
+                job.update(status="queued", attempts=max(0, job["attempts"] - 1))
+                self._eddn_receipt_error = f"Upload storage unavailable: {type(exc).__name__}"
+                self._queue_eddn_delivery_update()
+                return
+        attempts = job["attempts"]
+        retry_enabled = bool(self._eddn_config.get("retry_failed", True))
 
         def worker():
+            started = time.monotonic()
+            timings = {"workerWaitMs": round((started - dispatch_at) * 1000, 2)}
+            def publish(success, result):
+                if asynchronous:
+                    result.update(profileGeneration=scope[0], profileKey=scope[1])
+                self.eddnFinished.emit(job_id, success, json.dumps(result))
+            if asynchronous:
+                try:
+                    current = (self._profile_generation, self._eddn_profile_key,
+                               self._eddn_profile_identity, self._eddn_journal_root)
+                    profile_at = time.monotonic()
+                    identity = journal_upload_identity(scope[3])
+                    timings["profileCheckMs"] = round((time.monotonic() - profile_at) * 1000, 2)
+                    requested = str(os.environ.get("ED_FRAME_PROFILE_FID") or "").strip()
+                    if (current != scope or identity != scope[2]
+                            or str(journal_dir().resolve()) != str(Path(scope[3]).resolve())
+                            or (requested and requested != scope[2])
+                            or getattr(self, "_shutdown_complete", False)
+                            or not eddn_upload_allowed(self._eddn_config)):
+                        publish(False, {
+                            "deferred": True, "message": "Waiting for matching active Journal profile and upload consent.",
+                            "timings": timings, "workerFinishedAt": time.monotonic(),
+                        })
+                        return
+                except (OSError, ValueError):
+                    publish(False, {
+                        "deferred": True, "message": "Waiting for a readable active Journal session.",
+                        "timings": timings, "workerFinishedAt": time.monotonic(),
+                    })
+                    return
+                try:
+                    store.record(job_id, "sending", attempts)
+                except (OSError, sqlite3.Error, ValueError) as exc:
+                    publish(False, {
+                        "deferred": True, "storageError": True,
+                        "message": f"Upload paused before transmission: {type(exc).__name__}",
+                        "timings": timings, "workerFinishedAt": time.monotonic(),
+                    })
+                    return
             try:
                 receipt = send_eddn_event(
                     prepared, context, uploader_id
                 )
-                self.eddnFinished.emit(job_id, True, json.dumps(receipt))
+                success, result = True, receipt
             except EddnError as exc:
-                self.eddnFinished.emit(job_id, False, json.dumps({
+                success, result = False, {
                     "message": str(exc), "terminal": exc.terminal,
                     "statusCode": exc.status_code,
                     "retryAfter": exc.retry_after,
-                }))
+                }
             except Exception as exc:
-                self.eddnFinished.emit(job_id, False, json.dumps({
+                success, result = False, {
                     "message": f"Local EDDN error: {type(exc).__name__}",
                     "terminal": False,
-                }))
+                }
+            if asynchronous:
+                write_at = time.monotonic()
+                try:
+                    if success:
+                        result["deliveryNonce"] = uuid.uuid4().hex
+                        result["sentAt"] = store.record(job_id, "sent", attempts, result)
+                    else:
+                        state = failure_state(result, attempts, retry_enabled)
+                        store.record(job_id, state["status"], attempts, state)
+                        result["persistedState"] = state
+                    result["durable"] = True
+                except (OSError, sqlite3.Error, ValueError):
+                    # Qt must fall back to the existing durable JSON snapshot
+                    # before it publishes acceptance, and pause further sends.
+                    result["storageError"] = True
+                timings["receiptWriteMs"] = round((time.monotonic() - write_at) * 1000, 2)
+                timings["httpMs"] = result.get("elapsedMs", 0)
+                result.update(timings=timings, workerFinishedAt=time.monotonic())
+            publish(success, result)
 
-        self._start_network_worker(worker, "eddn-upload")
+        if not self._start_network_worker(worker, "eddn-upload"):
+            self._eddn_busy = False
+            job.update(status="queued", attempts=max(0, attempts - 1))
 
 
     @Slot(str, bool, str)
     def _finish_eddn(self, job_id, success, message):
+        result = json.loads(message)
+        if (getattr(self, "_eddn_async_delivery", False) and "profileGeneration" in result
+                and (result["profileGeneration"] != self._profile_generation
+                     or result.get("profileKey") != self._eddn_profile_key)):
+            return  # The original profile's receipt is durable; never apply it to another queue.
         self._eddn_busy = False
         job = next(
             (row for row in self._eddn_queue if row.get("id") == job_id),
@@ -1483,9 +1721,28 @@ class EddnMixin:
         )
         if not job:
             return
-        result = json.loads(message)
+        asynchronous = getattr(self, "_eddn_async_delivery", False)
+        if asynchronous:
+            self._eddn_next_upload_at = time.monotonic() + EDDN_REPLAY_DELAY_MS / 1000
+            timings = dict(result.get("timings") or {})
+            timings["callbackWaitMs"] = round(max(0, time.monotonic() - result.get("workerFinishedAt", time.monotonic())) * 1000, 2)
+            self._eddn_sender_metrics = timings
+            if success:
+                accepted_at = time.monotonic()
+                previous_at = getattr(self, "_eddn_last_accept_at", None)
+                if previous_at is not None:
+                    timings["gapMs"] = round((accepted_at - previous_at) * 1000, 2)
+                self._eddn_last_accept_at = accepted_at
+            if result.get("storageError"):
+                self._eddn_receipt_error = "Upload receipt storage needs attention; further uploads are paused."
+            if result.get("deferred"):
+                job.update(status="queued", attempts=max(0, int(job.get("attempts", 0)) - 1))
+                self._eddn_next_upload_at = time.monotonic() + 1.2
+                self._eddn_status = str(result.get("message") or "Upload deferred")
+                self._queue_eddn_delivery_update()
+                return
         if success:
-            sent_at = datetime.now(timezone.utc).isoformat(timespec="seconds")
+            sent_at = result.get("sentAt") or datetime.now(timezone.utc).isoformat(timespec="seconds")
             job.update({
                 "status": "sent", "receipt": result,
                 "sent_at": sent_at,
@@ -1495,7 +1752,8 @@ class EddnMixin:
             })
             # Persist the gateway acceptance before status/proof/UI work. A
             # process exit after this checkpoint will not replay the job.
-            self._save_eddn()
+            if not asynchronous:
+                self._save_eddn()
             self._eddn_status = (
                 f"{result.get('event')} accepted · HTTP "
                 f"{result.get('httpStatus')} · {result.get('elapsedMs')} ms"
@@ -1510,7 +1768,17 @@ class EddnMixin:
                 "timestamp": str(public_message.get("timestamp") or ""),
                 "result": job["last_result"],
             }
+            market_state = getattr(self, "_frontier_market_state", {})
+            if isinstance(market_state, dict) and market_state.get("jobId") == job_id:
+                market_state.update(stage="ACCEPTED", detail=job["last_result"], sentAt=sent_at)
             self._eddn_config["last_success"] = proof
+            if (prepared.get("schema") == "commodity/3"
+                    and (job.get("context") or {}).get("gameversion") == "CAPI-Live-market"):
+                from ed_companion.integrations.frontier_market import market_summary
+                self._eddn_config["frontier_market_receipt"] = {
+                    **market_summary(prepared), "stage": "ACCEPTED",
+                    "detail": job["last_result"], "sentAt": sent_at,
+                }
             self._eddn_config["last_not_shareable"] = ""
             self._eddn_config["last_not_shareable_at"] = ""
             if proof["schema"] in {
@@ -1560,23 +1828,39 @@ class EddnMixin:
                 f"{last_success or 'no gateway receipt recorded'}"
             )
             LOGGER.warning("EDDN upload failed for %s: %s", job_id, job["last_error"])
-        self._save_eddn()
-        self._publish_eddn_delivery_change()
-        self.connectionChanged.emit()
-        if success or job.get("status") == "failed":
+            if asynchronous and result.get("persistedState"):
+                job.update(result["persistedState"])
+        if asynchronous:
+            if result.get("statusCode") == 429:
+                self._eddn_gateway_pause_until = float(job.get("next_retry_at") or time.time() + 60)
+            if result.get("storageError"):
+                self._save_eddn()  # Last-resort durable receipt; never blindly resend an accepted upload.
+                self._eddn_status = self._eddn_receipt_error
+            self._queue_eddn_delivery_update(persist=True)
+        else:
+            self._save_eddn()
+            self._publish_eddn_delivery_change()
+            self.connectionChanged.emit()
+        if asynchronous:
+            self._schedule_eddn_upload(EDDN_REPLAY_DELAY_MS)
+        elif success or job.get("status") == "failed":
             QTimer.singleShot(EDDN_REPLAY_DELAY_MS, self._process_eddn_queue)
 
 
     @Slot()
     def retryEddnFailed(self):
         retried = 0
+        retried_ids = []
         for job in self._eddn_queue:
             if self._eddn_job_retryable(job):
                 job.update({"status": "retry", "attempts": 0})
                 job.pop("next_retry_at", None)
                 job.pop("next_retry_seconds", None)
                 retried += 1
-        self._save_eddn()
+                retried_ids.append(job["id"])
+        saved = self._save_eddn()
+        if saved and retried_ids and getattr(self, "_eddn_async_delivery", False):
+            self._eddn_receipts().forget(retried_ids)
         self._publish_eddn_delivery_change()
         self._eddn_status = (
             f"{retried} valid EDDN job(s) queued for retry."
@@ -1598,7 +1882,9 @@ class EddnMixin:
         job.update({"status": "retry", "attempts": 0})
         job.pop("next_retry_at", None)
         job.pop("next_retry_seconds", None)
-        self._save_eddn()
+        saved = self._save_eddn()
+        if saved and getattr(self, "_eddn_async_delivery", False):
+            self._eddn_receipts().forget([job["id"]])
         self._publish_eddn_delivery_change()
         self._eddn_status = "Validated EDDN job queued for retry."
         self.connectionChanged.emit()
